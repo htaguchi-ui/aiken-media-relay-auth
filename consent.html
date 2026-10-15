@@ -1,0 +1,192 @@
+<!doctype html>
+<html lang="ja">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<meta name="robots" content="noindex">
+<title>A.I.KEN メディア生成 ログイン</title>
+<style>
+  :root {
+    --bg: #f5f6f8; --card: #ffffff; --text: #1a1a1c; --muted: #5f6368;
+    --primary: #0b57d0; --primary-text: #ffffff; --border: #dadce0; --danger: #b3261e;
+  }
+  @media (prefers-color-scheme: dark) {
+    :root {
+      --bg: #131314; --card: #1e1f20; --text: #e3e3e3; --muted: #a8abaf;
+      --primary: #a8c7fa; --primary-text: #062e6f; --border: #444746; --danger: #f2b8b5;
+    }
+  }
+  * { box-sizing: border-box; }
+  body {
+    margin: 0; min-height: 100vh; display: grid; place-items: center; padding: 16px;
+    background: var(--bg); color: var(--text);
+    font-family: "Hiragino Sans", "Noto Sans JP", "Yu Gothic UI", system-ui, sans-serif;
+    line-height: 1.6;
+  }
+  main {
+    width: 100%; max-width: 420px; background: var(--card); border: 1px solid var(--border);
+    border-radius: 16px; padding: 28px 24px;
+  }
+  h1 { font-size: 1.15rem; margin: 0 0 12px; }
+  p { margin: 0 0 12px; }
+  .muted { color: var(--muted); font-size: 0.9rem; }
+  .error { color: var(--danger); }
+  .who { padding: 12px; border: 1px solid var(--border); border-radius: 10px; margin: 12px 0 20px; word-break: break-all; }
+  .actions { display: flex; gap: 12px; flex-wrap: wrap; }
+  button {
+    font: inherit; font-weight: 600; border-radius: 999px; padding: 10px 20px; cursor: pointer;
+    border: 1px solid var(--border); background: transparent; color: var(--text);
+  }
+  button.primary { background: var(--primary); color: var(--primary-text); border-color: var(--primary); }
+  button:disabled { opacity: 0.5; cursor: default; }
+  .link { background: none; border: none; padding: 0; color: var(--primary); font-weight: 400; text-decoration: underline; }
+  [hidden] { display: none !important; }
+</style>
+</head>
+<body>
+<main>
+  <h1>A.I.KEN メディア生成</h1>
+  <div id="status"><p class="muted">読み込み中…</p></div>
+
+  <section id="login" hidden>
+    <p>会社から配布された Google アカウントでログインしてください。</p>
+    <div class="actions"><button class="primary" id="login-btn">Google でログイン</button></div>
+  </section>
+
+  <section id="consent" hidden>
+    <p><strong id="client-name">ChatGPT</strong> から、動画・画像・音声の生成を使えるようにします。</p>
+    <div class="who">
+      <div class="muted">ログイン中のアカウント</div>
+      <div id="user-email"></div>
+    </div>
+    <div class="actions">
+      <button class="primary" id="approve-btn">許可する</button>
+      <button id="deny-btn">やめる</button>
+    </div>
+    <p class="muted" style="margin-top:16px">アカウントが違う場合は <button class="link" id="switch-btn">別のアカウントでログイン</button></p>
+  </section>
+
+  <section id="blocked" hidden>
+    <p class="error">このアカウント（<span id="blocked-email"></span>）では使えません。</p>
+    <p class="muted">会社から配布されたアカウントでログインし直してください。</p>
+    <div class="actions"><button class="primary" id="relogin-btn">別のアカウントでログイン</button></div>
+  </section>
+</main>
+
+<script type="module">
+  import { createClient } from "https://cdn.jsdelivr.net/npm/@supabase/supabase-js@2.117.2/+esm";
+
+  const SUPABASE_URL = "https://tnzwhwitgnzoehbjrmoy.supabase.co";
+  // 公開用のキー（ブラウザに置く前提のもの）。秘密鍵ではない。
+  const SUPABASE_PUBLISHABLE_KEY = "sb_publishable_KRY7iSTi9d_z9EwW0KuDwg_ooUqGvDN";
+  // 受講者は a-i-ken.jp、管理者は a-i-ken.com。サーバー側でも同じ判定をする。
+  const ALLOWED_DOMAINS = ["a-i-ken.jp", "a-i-ken.com"];
+
+  const supabase = createClient(SUPABASE_URL, SUPABASE_PUBLISHABLE_KEY, {
+    auth: { flowType: "pkce", detectSessionInUrl: true, persistSession: true },
+  });
+
+  const $ = (id) => document.getElementById(id);
+  const show = (id) => {
+    for (const s of ["login", "consent", "blocked"]) $(s).hidden = s !== id;
+    $("status").hidden = true;
+  };
+  const fail = (message) => {
+    for (const s of ["login", "consent", "blocked"]) $(s).hidden = true;
+    $("status").hidden = false;
+    $("status").innerHTML = "";
+    const p = document.createElement("p");
+    p.className = "error";
+    p.textContent = message;
+    $("status").appendChild(p);
+  };
+
+  const params = new URLSearchParams(location.search);
+  const authorizationId = params.get("authorization_id");
+
+  // ログイン後に戻ってくる先。authorization_id だけを残し、code など一時的な値は落とす。
+  const returnUrl = () => {
+    const u = new URL(location.origin + location.pathname);
+    u.searchParams.set("authorization_id", authorizationId);
+    return u.toString();
+  };
+
+  const signIn = async () => {
+    await supabase.auth.signInWithOAuth({
+      provider: "google",
+      options: { redirectTo: returnUrl(), queryParams: { prompt: "select_account" } },
+    });
+  };
+
+  const switchAccount = async () => {
+    await supabase.auth.signOut();
+    await signIn();
+  };
+
+  const isAllowed = (email) => {
+    const domain = (email || "").split("@").pop().toLowerCase();
+    return ALLOWED_DOMAINS.includes(domain);
+  };
+
+  async function main() {
+    if (!authorizationId) {
+      fail("このページは ChatGPT の接続ボタンから開いてください。");
+      return;
+    }
+
+    // PKCE のコード交換（Google から戻ってきた直後）が終わるまで待つ
+    const { data: { session }, error: sessionError } = await supabase.auth.getSession();
+    if (sessionError) {
+      fail("ログイン状態を確認できませんでした。ページを開き直してください。");
+      return;
+    }
+    if (!session) {
+      show("login");
+      return;
+    }
+
+    const email = session.user.email;
+    if (!isAllowed(email)) {
+      $("blocked-email").textContent = email;
+      show("blocked");
+      return;
+    }
+
+    const { data, error } = await supabase.auth.oauth.getAuthorizationDetails(authorizationId);
+    if (error) {
+      fail("接続の情報を取得できませんでした。ChatGPT からもう一度接続してください。（" + error.message + "）");
+      return;
+    }
+    if ("redirect_url" in data && !("authorization_id" in data)) {
+      // 以前に許可済み → そのまま ChatGPT に戻す
+      location.href = data.redirect_url;
+      return;
+    }
+
+    $("client-name").textContent = data.client?.name || "ChatGPT";
+    $("user-email").textContent = email;
+    show("consent");
+  }
+
+  $("login-btn").addEventListener("click", signIn);
+  $("switch-btn").addEventListener("click", switchAccount);
+  $("relogin-btn").addEventListener("click", switchAccount);
+
+  $("approve-btn").addEventListener("click", async () => {
+    $("approve-btn").disabled = true;
+    $("deny-btn").disabled = true;
+    const { error } = await supabase.auth.oauth.approveAuthorization(authorizationId);
+    if (error) fail("許可に失敗しました。ChatGPT からもう一度接続してください。（" + error.message + "）");
+  });
+
+  $("deny-btn").addEventListener("click", async () => {
+    $("approve-btn").disabled = true;
+    $("deny-btn").disabled = true;
+    const { error } = await supabase.auth.oauth.denyAuthorization(authorizationId);
+    if (error) fail("処理に失敗しました。このタブを閉じてください。（" + error.message + "）");
+  });
+
+  main().catch((e) => fail("エラーが発生しました：" + (e?.message || e)));
+</script>
+</body>
+</html>
