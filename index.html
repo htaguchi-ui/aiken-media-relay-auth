@@ -3,14 +3,30 @@
 <head>
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
-<meta name="robots" content="noindex">
 <title>A.I.KEN メディア生成</title>
 <style>
-  :root { --bg: #f5f6f8; --text: #1a1a1c; }
-  @media (prefers-color-scheme: dark) { :root { --bg: #131314; --text: #e3e3e3; } }
+  :root { --bg: #f5f6f8; --card: #ffffff; --text: #1a1a1c; --muted: #5f6368; --border: #dadce0; --link: #0b57d0; }
+  @media (prefers-color-scheme: dark) {
+    :root { --bg: #131314; --card: #1e1f20; --text: #e3e3e3; --muted: #a8abaf; --border: #444746; --link: #a8c7fa; }
+  }
+  * { box-sizing: border-box; }
   body { margin: 0; min-height: 100vh; display: grid; place-items: center; padding: 16px;
-    background: var(--bg); color: var(--text); font-family: "Hiragino Sans", "Noto Sans JP", system-ui, sans-serif; }
+    background: var(--bg); color: var(--text);
+    font-family: "Hiragino Sans", "Noto Sans JP", "Yu Gothic UI", system-ui, sans-serif; line-height: 1.8; }
+  main { width: 100%; max-width: 560px; background: var(--card); border: 1px solid var(--border); border-radius: 16px; padding: 28px 24px; }
+  h1 { font-size: 1.3rem; margin: 0 0 12px; }
+  p { margin: 0 0 12px; }
+  a { color: var(--link); }
+  .muted { color: var(--muted); font-size: 0.9rem; }
 </style>
 </head>
-<body><p>このページは ChatGPT から接続するときに使います。直接開く必要はありません。</p></body>
+<body>
+<main>
+  <h1>A.I.KEN メディア生成</h1>
+  <p>A.I.KEN の研修で使う、動画・画像・音声の生成サービスです。受講者は ChatGPT から本サービスに接続し、会話しながら生成を依頼します。</p>
+  <p>利用できるのは、研修の受講者と関係者（当社が発行した Google アカウント）だけです。ログインは ChatGPT の接続ボタンから行います。このページを直接開く必要はありません。</p>
+  <p class="muted">運営：A.I.KEN（株式会社ORENDA WORLD）<br>
+    <a href="./privacy.html">プライバシーポリシー</a> ・ <a href="./terms.html">利用規約</a></p>
+</main>
+</body>
 </html>
