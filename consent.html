@@ -134,6 +134,23 @@
       return;
     }
 
+    // ログインが拒否されて戻ってきた場合（許可外のアカウントなど）は、その理由を表示する。
+    // URL の文言は誰でも書き換えられるので、登録時の確認処理が返す既知の文言だけをそのまま出し、それ以外は固定の文言にする
+    const hash = new URLSearchParams(location.hash.replace(/^#/, ""));
+    const loginError = params.get("error_description") || hash.get("error_description");
+    if (loginError) {
+      const KNOWN_ERRORS = [
+        "A.I.KEN の社内 Google アカウント（@a-i-ken.jp / @a-i-ken.com）でログインしてください。",
+        "A.I.KEN の Google Workspace で管理されているアカウントでログインしてください（個人の Google アカウントは使えません）。",
+      ];
+      $("blocked-email").textContent = "選択した Google アカウント";
+      $("blocked").querySelector(".muted").textContent = KNOWN_ERRORS.includes(loginError)
+        ? loginError
+        : "ログインできませんでした。会社から配布されたアカウントでログインし直してください。";
+      show("blocked");
+      return;
+    }
+
     // PKCE のコード交換（Google から戻ってきた直後）が終わるまで待つ
     const { data: { session }, error: sessionError } = await supabase.auth.getSession();
     if (sessionError) {
