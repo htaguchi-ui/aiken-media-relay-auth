@@ -5,7 +5,7 @@
 <meta name="viewport" content="width=device-width, initial-scale=1">
 <meta name="robots" content="noindex">
 <meta http-equiv="Content-Security-Policy" content="default-src 'self'; script-src 'self' https://cdn.jsdelivr.net; connect-src https://tnzwhwitgnzoehbjrmoy.supabase.co; style-src 'self' 'unsafe-inline'; img-src 'self' data:; object-src 'none'; base-uri 'self'; form-action 'self'">
-<title>A.I.KEN メディア生成 管理コンソール</title>
+<title>A.I.KEN 動画生成 管理コンソール</title>
 <style>
   :root {
     --bg: #f5f6f8; --card: #ffffff; --text: #1a1a1c; --muted: #5f6368;
@@ -66,6 +66,11 @@
   td.note { white-space: normal; min-width: 120px; color: var(--muted); }
   .badge { display: inline-block; padding: 0 8px; border-radius: 999px; border: 1px solid var(--border); font-size: 0.8rem; }
   .badge.disabled { color: var(--danger); border-color: var(--danger); }
+  .badge.warn { color: var(--danger); border-color: var(--danger); font-weight: 700; }
+  .credit-fields { display: grid; grid-template-columns: repeat(auto-fit, minmax(150px, 1fr)); gap: 8px; margin-bottom: 8px; }
+  .credit-fields label { display: flex; flex-direction: column; gap: 2px; font-size: 0.85rem; color: var(--muted); }
+  .credit-fields input { width: 100%; }
+  tr.editor td { background: var(--card); white-space: normal; }
   #message:empty { display: none; }
   #message { margin-bottom: 16px; }
   ul.problems { margin: 8px 0 0; padding-left: 20px; }
@@ -77,13 +82,13 @@
   <div id="status" class="card narrow"><p class="muted">読み込み中…</p></div>
 
   <section id="login" class="card narrow" hidden>
-    <h1>A.I.KEN メディア生成 管理コンソール</h1>
+    <h1>A.I.KEN 動画生成 管理コンソール</h1>
     <p style="margin-top:12px">管理者の Google アカウントでログインしてください。</p>
     <div class="actions"><button class="primary" id="login-btn">Google でログイン</button></div>
   </section>
 
   <section id="denied" class="card narrow" hidden>
-    <h1>A.I.KEN メディア生成 管理コンソール</h1>
+    <h1>A.I.KEN 動画生成 管理コンソール</h1>
     <p class="error" style="margin-top:12px">管理者の権限がありません。</p>
     <p class="muted">ログイン中のアカウント：<span id="denied-email"></span></p>
     <div class="actions"><button id="denied-logout-btn">ログアウト</button></div>
@@ -92,7 +97,7 @@
   <div id="app" hidden>
     <header class="card bar">
       <div>
-        <h1>A.I.KEN メディア生成 管理コンソール</h1>
+        <h1>A.I.KEN 動画生成 管理コンソール</h1>
         <div class="muted">ログイン中：<span id="me-email"></span></div>
       </div>
       <div class="right">
@@ -120,8 +125,9 @@
           </div>
           <div class="form-row">
             <input id="add-name" type="text" placeholder="氏名（任意）" autocomplete="off">
-            <select id="add-role" aria-label="役割">
+            <select id="add-role" aria-label="区分">
               <option value="student">受講者</option>
+              <option value="member">AIKENメンバー</option>
               <option value="admin">管理者</option>
             </select>
           </div>
@@ -131,15 +137,32 @@
           <div class="muted" style="margin-bottom:8px">まとめて（1 行 1 件。「メールアドレス」または「メールアドレス, 氏名」）</div>
           <textarea id="bulk-text" placeholder="taro.yamada@a-i-ken.jp, 山田 太郎&#10;hanako.sato@a-i-ken.jp"></textarea>
           <div class="actions" style="margin-top:8px">
-            <select id="bulk-role" aria-label="まとめて追加する人の役割">
+            <select id="bulk-role" aria-label="まとめて追加する人の区分">
               <option value="student">受講者として追加</option>
+              <option value="member">AIKENメンバーとして追加</option>
               <option value="admin">管理者として追加</option>
             </select>
             <button class="primary" id="bulk-btn">まとめて追加</button>
           </div>
         </div>
       </div>
+      <div style="margin-top:16px">
+        <div class="muted" style="margin-bottom:8px">受講者として追加するときの期間とクレジット（任意。空欄は未設定のまま。1 件ずつ・まとめての両方に使います）</div>
+        <div class="credit-fields" id="add-credit-fields"></div>
+        <div class="muted" style="margin:8px 0">AIKENメンバーとして追加するときの月額クレジット（初期値 3,300。空欄にすると未設定＝生成できません）</div>
+        <div class="credit-fields" id="add-monthly-fields"></div>
+      </div>
       <div id="add-result" style="margin-top:12px"></div>
+    </section>
+
+    <section class="card">
+      <h2>期間・月額をまとめて設定</h2>
+      <p class="muted">一覧で受講者・AIKENメンバーにチェックを入れ、同じ値をまとめて設定します。受講者には期間とクレジット、AIKENメンバーには月額だけが入ります。<strong>空欄の項目は変更しません。</strong>1 クレジット＝$0.01（円の目安は 1 ドル＝150 円で換算）。期間・月は日本時間で判定し、繰り越しはありません。一時的な追加は各行の「クレジット追加」から行います。</p>
+      <div class="credit-fields" id="bulk-credit-fields"></div>
+      <div class="actions">
+        <button class="primary" id="bulk-credit-btn">選択した人に適用</button>
+        <span class="muted" id="selected-count">0 人を選択中</span>
+      </div>
     </section>
 
     <section class="card">
@@ -151,14 +174,19 @@
         <table>
           <thead>
             <tr>
+              <th><input type="checkbox" id="select-all" aria-label="受講者・AIKENメンバーをすべて選択"></th>
               <th>メールアドレス</th>
               <th>氏名</th>
-              <th>役割</th>
+              <th>区分</th>
               <th>状態</th>
+              <th>Day1 / Day2</th>
+              <th>今の枠（使用 / 上限）</th>
               <th>今日</th>
               <th>24 時間</th>
               <th>累計</th>
-              <th>最終利用</th>
+              <th>最終生成</th>
+              <th>最終アクセス</th>
+              <th>接続元</th>
               <th>メモ</th>
               <th>操作</th>
             </tr>
