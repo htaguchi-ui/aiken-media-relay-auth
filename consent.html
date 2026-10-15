@@ -142,6 +142,7 @@
       const KNOWN_ERRORS = [
         "A.I.KEN の社内 Google アカウント（@a-i-ken.jp / @a-i-ken.com）でログインしてください。",
         "A.I.KEN の Google Workspace で管理されているアカウントでログインしてください（個人の Google アカウントは使えません）。",
+        "このアカウントはまだ利用登録されていません。管理者に登録を依頼してください。",
       ];
       $("blocked-email").textContent = "選択した Google アカウント";
       $("blocked").querySelector(".muted").textContent = KNOWN_ERRORS.includes(loginError)
@@ -165,6 +166,21 @@
     const email = session.user.email;
     if (!isAllowed(email)) {
       $("blocked-email").textContent = email;
+      show("blocked");
+      return;
+    }
+
+    // 名簿（管理者が登録した利用者）に載っていて、停止されていないことを確かめる
+    const { data: membership, error: membershipError } = await supabase.rpc("my_membership");
+    if (membershipError) {
+      fail("利用登録の状態を確認できませんでした。少し待ってからページを開き直してください。");
+      return;
+    }
+    if (!membership?.registered || membership.status !== "active") {
+      $("blocked-email").textContent = email;
+      $("blocked").querySelector(".muted").textContent = membership?.registered
+        ? "利用が停止されています。管理者にお問い合わせください。"
+        : "この機能を使うには、管理者による利用登録が必要です。管理者に登録を依頼してください。";
       show("blocked");
       return;
     }

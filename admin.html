@@ -1,0 +1,174 @@
+<!doctype html>
+<html lang="ja">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<meta name="robots" content="noindex">
+<meta http-equiv="Content-Security-Policy" content="default-src 'self'; script-src 'self' https://cdn.jsdelivr.net; connect-src https://tnzwhwitgnzoehbjrmoy.supabase.co; style-src 'self' 'unsafe-inline'; img-src 'self' data:; object-src 'none'; base-uri 'self'; form-action 'self'">
+<title>A.I.KEN メディア生成 管理コンソール</title>
+<style>
+  :root {
+    --bg: #f5f6f8; --card: #ffffff; --text: #1a1a1c; --muted: #5f6368;
+    --primary: #0b57d0; --primary-text: #ffffff; --border: #dadce0; --danger: #b3261e;
+    --ok: #146c2e; --row: #f8f9fa;
+  }
+  @media (prefers-color-scheme: dark) {
+    :root {
+      --bg: #131314; --card: #1e1f20; --text: #e3e3e3; --muted: #a8abaf;
+      --primary: #a8c7fa; --primary-text: #062e6f; --border: #444746; --danger: #f2b8b5;
+      --ok: #6dd58c; --row: #262729;
+    }
+  }
+  * { box-sizing: border-box; }
+  body {
+    margin: 0; min-height: 100vh; padding: 16px;
+    background: var(--bg); color: var(--text);
+    font-family: "Hiragino Sans", "Noto Sans JP", "Yu Gothic UI", system-ui, sans-serif;
+    line-height: 1.6;
+  }
+  main { width: 100%; max-width: 1200px; margin: 0 auto; }
+  .card {
+    background: var(--card); border: 1px solid var(--border); border-radius: 16px;
+    padding: 20px 24px; margin-bottom: 16px;
+  }
+  .narrow { max-width: 420px; margin: 10vh auto 0; }
+  h1 { font-size: 1.15rem; margin: 0; }
+  h2 { font-size: 1rem; margin: 0 0 12px; }
+  p { margin: 0 0 12px; }
+  .muted { color: var(--muted); font-size: 0.9rem; }
+  .error { color: var(--danger); }
+  .ok { color: var(--ok); }
+  .bar { display: flex; gap: 12px; align-items: center; flex-wrap: wrap; justify-content: space-between; }
+  .bar .right { display: flex; gap: 12px; align-items: center; flex-wrap: wrap; }
+  .actions { display: flex; gap: 8px; flex-wrap: wrap; align-items: center; }
+  button, select, input, textarea {
+    font: inherit; color: var(--text); background: transparent;
+    border: 1px solid var(--border); border-radius: 8px; padding: 6px 10px;
+  }
+  button { border-radius: 999px; padding: 6px 16px; font-weight: 600; cursor: pointer; }
+  button.primary { background: var(--primary); color: var(--primary-text); border-color: var(--primary); }
+  button.danger { color: var(--danger); border-color: var(--danger); }
+  button:disabled { opacity: 0.5; cursor: default; }
+  select option { background: var(--card); color: var(--text); }
+  textarea { width: 100%; min-height: 120px; resize: vertical; }
+  .grid { display: grid; grid-template-columns: repeat(auto-fit, minmax(280px, 1fr)); gap: 16px; }
+  .form-row { display: flex; gap: 8px; flex-wrap: wrap; margin-bottom: 8px; }
+  .form-row input { flex: 1 1 180px; min-width: 0; }
+  .totals { display: grid; grid-template-columns: repeat(auto-fit, minmax(160px, 1fr)); gap: 12px; }
+  .total { border: 1px solid var(--border); border-radius: 12px; padding: 12px; }
+  .total .value { font-size: 1.2rem; font-weight: 700; }
+  .table-wrap { overflow-x: auto; }
+  table { width: 100%; border-collapse: collapse; font-size: 0.9rem; }
+  th, td { text-align: left; padding: 8px; border-bottom: 1px solid var(--border); vertical-align: middle; white-space: nowrap; }
+  th { color: var(--muted); font-weight: 600; }
+  tbody tr:nth-child(even) { background: var(--row); }
+  td.num { text-align: right; font-variant-numeric: tabular-nums; }
+  td.note { white-space: normal; min-width: 120px; color: var(--muted); }
+  .badge { display: inline-block; padding: 0 8px; border-radius: 999px; border: 1px solid var(--border); font-size: 0.8rem; }
+  .badge.disabled { color: var(--danger); border-color: var(--danger); }
+  #message:empty { display: none; }
+  #message { margin-bottom: 16px; }
+  ul.problems { margin: 8px 0 0; padding-left: 20px; }
+  [hidden] { display: none !important; }
+</style>
+</head>
+<body>
+<main>
+  <div id="status" class="card narrow"><p class="muted">読み込み中…</p></div>
+
+  <section id="login" class="card narrow" hidden>
+    <h1>A.I.KEN メディア生成 管理コンソール</h1>
+    <p style="margin-top:12px">管理者の Google アカウントでログインしてください。</p>
+    <div class="actions"><button class="primary" id="login-btn">Google でログイン</button></div>
+  </section>
+
+  <section id="denied" class="card narrow" hidden>
+    <h1>A.I.KEN メディア生成 管理コンソール</h1>
+    <p class="error" style="margin-top:12px">管理者の権限がありません。</p>
+    <p class="muted">ログイン中のアカウント：<span id="denied-email"></span></p>
+    <div class="actions"><button id="denied-logout-btn">ログアウト</button></div>
+  </section>
+
+  <div id="app" hidden>
+    <header class="card bar">
+      <div>
+        <h1>A.I.KEN メディア生成 管理コンソール</h1>
+        <div class="muted">ログイン中：<span id="me-email"></span></div>
+      </div>
+      <div class="right">
+        <span class="muted">最終更新：<span id="updated-at">—</span></span>
+        <button id="reload-btn">再読み込み</button>
+        <button id="logout-btn">ログアウト</button>
+      </div>
+    </header>
+
+    <div id="message" class="card" role="status" aria-live="polite"></div>
+
+    <section class="card">
+      <h2>合計</h2>
+      <div class="totals" id="totals"></div>
+      <p class="muted" style="margin:8px 0 0">金額は目安（見積額）です。「今日」は日本時間の 0 時から、「24 時間」は直近 24 時間です。</p>
+    </section>
+
+    <section class="card">
+      <h2>利用者を追加</h2>
+      <div class="grid">
+        <div>
+          <div class="muted" style="margin-bottom:8px">1 件ずつ</div>
+          <div class="form-row">
+            <input id="add-email" type="email" placeholder="メールアドレス（@a-i-ken.jp / @a-i-ken.com）" autocomplete="off">
+          </div>
+          <div class="form-row">
+            <input id="add-name" type="text" placeholder="氏名（任意）" autocomplete="off">
+            <select id="add-role" aria-label="役割">
+              <option value="student">受講者</option>
+              <option value="admin">管理者</option>
+            </select>
+          </div>
+          <div class="actions"><button class="primary" id="add-btn">追加</button></div>
+        </div>
+        <div>
+          <div class="muted" style="margin-bottom:8px">まとめて（1 行 1 件。「メールアドレス」または「メールアドレス, 氏名」）</div>
+          <textarea id="bulk-text" placeholder="taro.yamada@a-i-ken.jp, 山田 太郎&#10;hanako.sato@a-i-ken.jp"></textarea>
+          <div class="actions" style="margin-top:8px">
+            <select id="bulk-role" aria-label="まとめて追加する人の役割">
+              <option value="student">受講者として追加</option>
+              <option value="admin">管理者として追加</option>
+            </select>
+            <button class="primary" id="bulk-btn">まとめて追加</button>
+          </div>
+        </div>
+      </div>
+      <div id="add-result" style="margin-top:12px"></div>
+    </section>
+
+    <section class="card">
+      <div class="bar" style="margin-bottom:12px">
+        <h2 style="margin:0">名簿と使用量</h2>
+        <span class="muted" id="count"></span>
+      </div>
+      <div class="table-wrap">
+        <table>
+          <thead>
+            <tr>
+              <th>メールアドレス</th>
+              <th>氏名</th>
+              <th>役割</th>
+              <th>状態</th>
+              <th>今日</th>
+              <th>24 時間</th>
+              <th>累計</th>
+              <th>最終利用</th>
+              <th>メモ</th>
+              <th>操作</th>
+            </tr>
+          </thead>
+          <tbody id="rows"></tbody>
+        </table>
+      </div>
+    </section>
+  </div>
+</main>
+<script type="module" src="./admin.js"></script>
+</body>
+</html>
