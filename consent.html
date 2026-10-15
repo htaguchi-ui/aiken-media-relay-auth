@@ -54,11 +54,14 @@
   </section>
 
   <section id="consent" hidden>
-    <p><strong id="client-name">ChatGPT</strong> から、動画・画像・音声の生成を使えるようにします。</p>
+    <p><strong><bdi id="client-name">ChatGPT</bdi></strong> から、動画・画像・音声の生成を使えるようにします。</p>
     <div class="who">
       <div class="muted">ログイン中のアカウント</div>
       <div id="user-email"></div>
+      <div class="muted" style="margin-top:8px">接続先</div>
+      <div id="redirect-desc"></div>
     </div>
+    <p class="error" id="loopback-warning" hidden>この PC で Codex から接続したときだけ許可してください。このあとブラウザに表示される URL を、他の人やサイトに貼り付けないでください。</p>
     <div class="actions">
       <button class="primary" id="approve-btn">許可する</button>
       <button id="deny-btn">やめる</button>
@@ -75,6 +78,7 @@
 
 <script type="module">
   import { createClient } from "https://cdn.jsdelivr.net/npm/@supabase/supabase-js@2.117.2/+esm";
+  import { decideConsent, isAllowedRedirect } from "./redirect-check.js";
 
   const SUPABASE_URL = "https://tnzwhwitgnzoehbjrmoy.supabase.co";
   // 公開用のキー（ブラウザに置く前提のもの）。秘密鍵ではない。
@@ -190,16 +194,39 @@
       fail("接続の情報を取得できませんでした。ChatGPT からもう一度接続してください。（" + error.message + "）");
       return;
     }
-    if ("redirect_url" in data && !("authorization_id" in data)) {
-      // 以前に許可済み → そのまま ChatGPT に戻す
-      location.href = data.redirect_url;
+    // 接続アプリは誰でも自動登録できるので、戻り先が ChatGPT か PC 内のアプリ（Codex など）でなければ先へ進ませない。
+    // 許可済みで戻り先 URL（認可コード付き）が直接返ってきた場合も同じ判定をしてから戻す
+    const decision = decideConsent(data);
+    if (decision.action === "block") {
+      fail("この接続元（" + decision.host + "）からは利用できません。ChatGPT または Codex から接続してください。");
+      return;
+    }
+    if (decision.action === "redirect") {
+      location.assign(decision.url);
+      return;
+    }
+    if (decision.action !== "consent") {
+      fail("接続の情報を読み取れませんでした。ChatGPT からもう一度接続してください。");
       return;
     }
 
-    $("client-name").textContent = data.client?.name || "ChatGPT";
+    $("client-name").textContent = decision.clientName;
+    $("redirect-desc").textContent = decision.kind === "loopback"
+      ? "この PC 上のアプリ（" + decision.host + "）"
+      : "ChatGPT（" + decision.host + "）";
+    $("loopback-warning").hidden = decision.kind !== "loopback";
     $("user-email").textContent = email;
     show("consent");
   }
+
+  // 許可・拒否のあとの戻り先も、自動で遷移させずに同じ判定をしてから戻す
+  const goBack = (url) => {
+    if (!isAllowedRedirect(url)) {
+      fail("戻り先が正しくないため中止しました。ChatGPT または Codex からもう一度接続してください。");
+      return;
+    }
+    location.assign(url);
+  };
 
   $("login-btn").addEventListener("click", signIn);
   $("switch-btn").addEventListener("click", switchAccount);
@@ -208,15 +235,35 @@
   $("approve-btn").addEventListener("click", async () => {
     $("approve-btn").disabled = true;
     $("deny-btn").disabled = true;
-    const { error } = await supabase.auth.oauth.approveAuthorization(authorizationId);
-    if (error) fail("許可に失敗しました。ChatGPT からもう一度接続してください。（" + error.message + "）");
+    try {
+      const { data, error } = await supabase.auth.oauth.approveAuthorization(authorizationId, {
+        skipBrowserRedirect: true,
+      });
+      if (error) {
+        fail("許可に失敗しました。ChatGPT からもう一度接続してください。（" + error.message + "）");
+        return;
+      }
+      goBack(data?.redirect_url);
+    } catch (e) {
+      fail("許可に失敗しました。ChatGPT からもう一度接続してください。（" + (e?.message || e) + "）");
+    }
   });
 
   $("deny-btn").addEventListener("click", async () => {
     $("approve-btn").disabled = true;
     $("deny-btn").disabled = true;
-    const { error } = await supabase.auth.oauth.denyAuthorization(authorizationId);
-    if (error) fail("処理に失敗しました。このタブを閉じてください。（" + error.message + "）");
+    try {
+      const { data, error } = await supabase.auth.oauth.denyAuthorization(authorizationId, {
+        skipBrowserRedirect: true,
+      });
+      if (error) {
+        fail("処理に失敗しました。このタブを閉じてください。（" + error.message + "）");
+        return;
+      }
+      goBack(data?.redirect_url);
+    } catch (e) {
+      fail("処理に失敗しました。このタブを閉じてください。（" + (e?.message || e) + "）");
+    }
   });
 
   main().catch((e) => fail("エラーが発生しました：" + (e?.message || e)));
