@@ -3,82 +3,18 @@
 <head>
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
+<meta http-equiv="refresh" content="0; url=https://a-i-ken.com/privacy/">
+<link rel="canonical" href="https://a-i-ken.com/privacy/">
 <title>プライバシーポリシー｜A.I.KEN メディア生成</title>
 <style>
-  :root { --bg: #f5f6f8; --card: #ffffff; --text: #1a1a1c; --muted: #5f6368; --border: #dadce0; --link: #0b57d0; }
-  @media (prefers-color-scheme: dark) {
-    :root { --bg: #131314; --card: #1e1f20; --text: #e3e3e3; --muted: #a8abaf; --border: #444746; --link: #a8c7fa; }
-  }
-  * { box-sizing: border-box; }
-  body { margin: 0; padding: 16px; background: var(--bg); color: var(--text);
-    font-family: "Hiragino Sans", "Noto Sans JP", "Yu Gothic UI", system-ui, sans-serif; line-height: 1.8; }
-  main { max-width: 760px; margin: 0 auto; background: var(--card); border: 1px solid var(--border); border-radius: 16px; padding: 28px 24px; }
-  h1 { font-size: 1.4rem; margin: 0 0 4px; }
-  h2 { font-size: 1.05rem; margin: 28px 0 8px; }
-  p, li { margin: 0 0 8px; }
-  ul { padding-left: 1.4em; }
+  :root { --bg: #f5f6f8; --text: #1a1a1c; --link: #0b57d0; }
+  @media (prefers-color-scheme: dark) { :root { --bg: #131314; --text: #e3e3e3; --link: #a8c7fa; } }
+  body { margin: 0; min-height: 100vh; display: grid; place-items: center; padding: 16px;
+    background: var(--bg); color: var(--text); font-family: "Hiragino Sans", "Noto Sans JP", system-ui, sans-serif; }
   a { color: var(--link); }
-  .muted { color: var(--muted); font-size: 0.9rem; }
-  footer { margin-top: 32px; font-size: 0.9rem; }
 </style>
 </head>
 <body>
-<main>
-  <h1>プライバシーポリシー</h1>
-  <p class="muted">A.I.KEN メディア生成（以下「本サービス」）／最終更新日：2026年10月15日</p>
-
-  <p>A.I.KEN（運営：株式会社ORENDA WORLD。以下「当社」）は、本サービスで取り扱う個人情報を、個人情報の保護に関する法律その他の関係法令に従い、以下のとおり取り扱います。</p>
-
-  <h2>1. 本サービスについて</h2>
-  <p>本サービスは、当社が実施する研修の受講者と関係者が、ChatGPT から動画・画像・音声の生成機能を使うための社内向けサービスです。当社が発行した Google アカウントでのみ利用できます。</p>
-
-  <h2>2. 取得する情報</h2>
-  <ul>
-    <li><strong>Google アカウントの情報</strong>：メールアドレス、氏名、プロフィール画像（Google ログイン時に Google から受け取るもの）</li>
-    <li><strong>生成のために入力された内容</strong>：指示文（プロンプト）、読み上げ用の文章、添付された画像</li>
-    <li><strong>生成物</strong>：生成された動画・画像・音声</li>
-    <li><strong>利用記録</strong>：利用日時、使用したモデル、生成の見積額、処理の結果、アクセスログ</li>
-  </ul>
-
-  <h2>3. 利用目的</h2>
-  <ul>
-    <li>本サービスの提供（生成の依頼、生成物の保存と表示）</li>
-    <li>利用者の本人確認と、利用できる範囲・上限の管理</li>
-    <li>不正利用の防止、障害の調査と対応</li>
-    <li>研修の運営と改善（利用状況の集計など）</li>
-  </ul>
-
-  <h2>4. Google から受け取る情報の取り扱い</h2>
-  <p>Google から受け取る情報は、本人確認と利用範囲の管理のためだけに使います。広告や、上記の目的以外には使いません。本サービスによる Google API から受け取った情報の利用と他システムへの転送は、<a href="https://developers.google.com/terms/api-services-user-data-policy" target="_blank" rel="noopener">Google API サービスのユーザーデータに関するポリシー</a>（限定的使用の要件を含む）に従います。</p>
-
-  <h2>5. 外部への委託と、外国にある事業者への提供</h2>
-  <p>本サービスの提供のため、次の事業者に情報の取り扱いを委託します。いずれも米国の事業者で、データの一部は日本国外で処理されます。</p>
-  <ul>
-    <li><strong>fal.ai</strong>（生成処理）：入力された内容を、生成のために送信します。</li>
-    <li><strong>Supabase</strong>（認証・データベース・ファイル保存）：データは東京リージョンに保存します。</li>
-    <li><strong>Google</strong>（ログイン）</li>
-    <li><strong>OpenAI</strong>（ChatGPT）：利用者が ChatGPT 上で入力した内容は、OpenAI の規約に従って取り扱われます。</li>
-  </ul>
-  <p>米国の個人情報保護制度については、<a href="https://www.ppc.go.jp/personalinfo/legal/kaiseihogohou/#gaikoku" target="_blank" rel="noopener">個人情報保護委員会の資料</a>をご確認ください。当社は、委託先の取り扱いが適切であるかを確認したうえで利用します。法令に基づく場合を除き、本人の同意なく第三者に提供することはありません。</p>
-
-  <h2>6. 保存期間</h2>
-  <p>生成物・入力された内容・利用記録は、研修の終了から30日後に削除します。ChatGPT 上での会話の記録は、OpenAI の規約と各利用者の設定に従って取り扱われます。</p>
-
-  <h2>7. 安全管理</h2>
-  <p>アクセス権限の管理、通信の暗号化、生成物の非公開保存（期限付きの URL でのみ表示）など、情報の漏えい・滅失を防ぐための措置を講じます。</p>
-
-  <h2>8. 開示・訂正・削除などのご請求</h2>
-  <p>ご自身の情報の開示・訂正・利用停止・削除をご希望の場合は、下記の窓口までご連絡ください。ご本人であることを確認したうえで、法令に従って対応します。</p>
-
-  <h2>9. お問い合わせ窓口</h2>
-  <p>A.I.KEN サポート窓口：<a href="mailto:support@a-i-ken.com">support@a-i-ken.com</a></p>
-
-  <h2>10. 改定</h2>
-  <p>本ポリシーは必要に応じて改定します。改定後の内容は、本ページに掲載した時点から適用します。</p>
-
-  <footer>
-    <a href="./">ホーム</a> ・ <a href="./terms.html">利用規約</a>
-  </footer>
-</main>
+  <p>本サービスの個人情報の取り扱いは、<a href="https://a-i-ken.com/privacy/">株式会社ORENDA WORLD のプライバシーポリシー</a>に従います。</p>
 </body>
 </html>
