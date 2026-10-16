@@ -967,6 +967,65 @@ export function modeStatus(model, mode, on) {
 }
 
 /**
+ * お知らせ（トースト）があふれたとき、消すものの位置（古い順の kinds に対する添字の昇順）。
+ * まず成功・お知らせ（"ok"）を古い順に消し、エラー・警告は残す。"ok" が無くなってもあふれるときだけ、古いエラー・警告を消す
+ * @param {string[]} kinds 古い順の種類（"ok"・"error"・"warn"）
+ * @param {number} max 残す最大の件数
+ * @returns {number[]}
+ */
+export function toastOverflow(kinds, max) {
+  const drop = [];
+  let over = kinds.length - max;
+  for (let i = 0; i < kinds.length && over > 0; i++) {
+    if (kinds[i] === "ok") {
+      drop.push(i);
+      over--;
+    }
+  }
+  for (let i = 0; i < kinds.length && over > 0; i++) {
+    if (kinds[i] !== "ok") {
+      drop.push(i);
+      over--;
+    }
+  }
+  return drop.sort((a, b) => a - b);
+}
+
+/**
+ * モデルの一括スイッチの状態。lockedFn(mode) が true のモード（サーバー側で無効）は数えない。
+ * 切り替えられるモードがすべてオン→"on"、すべてオフ→"off"、一部だけ→"mixed"、切り替えられるモードが無い→"locked"
+ * @param {any[] | undefined} modes
+ * @param {Set<string>} draft
+ * @param {(mode: any) => boolean} [lockedFn]
+ */
+export function masterState(modes, draft, lockedFn = () => false) {
+  const free = (modes ?? []).filter((mode) => !lockedFn(mode));
+  if (free.length === 0) return "locked";
+  const onCount = free.filter((mode) => draft.has(mode.model_id)).length;
+  if (onCount === free.length) return "on";
+  return onCount === 0 ? "off" : "mixed";
+}
+
+/**
+ * 一括スイッチを押したあとの draft（新しい Set。元の draft は変えない）。
+ * "on" なら切り替えられるモードをすべてオフ、"off"・"mixed" ならすべてオン。locked のモードと切り替えられるモードが無いときは変えない
+ * @param {any[]} modes
+ * @param {Set<string>} draft
+ * @param {(mode: any) => boolean} [lockedFn]
+ */
+export function applyMaster(modes, draft, lockedFn = () => false) {
+  const next = new Set(draft);
+  const state = masterState(modes, draft, lockedFn);
+  if (state === "locked") return next;
+  for (const mode of modes) {
+    if (lockedFn(mode)) continue;
+    if (state === "on") next.delete(mode.model_id);
+    else next.add(mode.model_id);
+  }
+  return next;
+}
+
+/**
  * 保存する enabled_models。カタログのすべての model_id がオンなら null（制限なし＝環境変数の範囲すべて）、
  * それ以外はオンの model_id の配列（カタログ順）。カタログに無い ID（古い ID）は含めない。
  * 環境変数の外のモードは押せないので、selected には読み込んだ時点のコンソールの値が残る

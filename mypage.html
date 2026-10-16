@@ -17,9 +17,9 @@
   :root {
     --accent: #26396E; --accent-hover: #1B2B55; --on-accent: #FFFFFF;
     --accent-soft: #EEF1F6; --accent-soft-line: #C8D0DE; --accent-soft-text: #22325E;
-    --bg: #F4F5F8; --surface: #FFFFFF; --surface-2: #F6F7F9; --seg: #E7E9EE;
-    --text: #16181D; --text-2: #4A505B; --text-3: #2B2F36; --muted: #5B6270; --faint: #8C93A0;
-    --line: #E3E6EB; --line-2: #DDE1E7; --line-soft: #EEF0F3; --input-line: #C9CED6; --dot: #C4C9D2;
+    --bg: #F4F5F8; --surface: #FFFFFF;
+    --text: #16181D; --text-2: #4A505B; --muted: #5B6270;
+    --line: #E3E6EB; --line-2: #DDE1E7; --line-soft: #EEF0F3; --input-line: #C9CED6;
     --track: #E9ECF1;
     --student-bg: #E6EAF2; --student-fg: #22325E;
     --member-bg: #E5ECEA; --member-fg: #355A54;
@@ -27,7 +27,7 @@
     --ok-bg: #E7EDE8; --ok-fg: #3D5B45;
     --warn-fg: #74512C;
     --low: #A0573A; --low-text: #8A4B33;
-    --danger: #96413A; --danger-line: #E2CDC9;
+    --danger: #96413A;
     --font: "IBM Plex Sans JP", "Hiragino Sans", "Hiragino Kaku Gothic ProN", "Noto Sans JP", "Yu Gothic UI", Meiryo, system-ui, sans-serif;
   }
   /* ダーク表示：紺基調のまま明度を反転（管理コンソールと同じ） */
@@ -35,9 +35,9 @@
     :root {
       --accent: #A9B9E9; --accent-hover: #C3CFF2; --on-accent: #0E1322;
       --accent-soft: #1E2741; --accent-soft-line: #34406A; --accent-soft-text: #C7D2F2;
-      --bg: #0E1220; --surface: #161B2B; --surface-2: #1C2234; --seg: #222A3E;
-      --text: #E8EAF0; --text-2: #C2C7D2; --text-3: #D5D9E2; --muted: #A0A7B6; --faint: #7A8294;
-      --line: #283048; --line-2: #323B54; --line-soft: #222A3E; --input-line: #3C4661; --dot: #4A5370;
+      --bg: #0E1220; --surface: #161B2B;
+      --text: #E8EAF0; --text-2: #C2C7D2; --muted: #A0A7B6;
+      --line: #283048; --line-2: #323B54; --line-soft: #222A3E; --input-line: #3C4661;
       --track: #262E44;
       --student-bg: #243052; --student-fg: #C7D2F2;
       --member-bg: #1E3532; --member-fg: #A9D0C6;
@@ -45,14 +45,14 @@
       --ok-bg: #1F3527; --ok-fg: #A9D4B4;
       --warn-fg: #EBC79C;
       --low: #D8916F; --low-text: #EBA887;
-      --danger: #EE968C; --danger-line: #5C3631;
+      --danger: #EE968C;
     }
   }
   * { box-sizing: border-box; }
   html { -webkit-text-size-adjust: 100%; }
   body {
     margin: 0; min-height: 100vh; background: var(--bg); color: var(--text);
-    font-family: var(--font); font-size: 14px; line-height: 1.6;
+    font-family: var(--font); font-size: 15px; line-height: 1.7;
   }
   [hidden] { display: none !important; }
   .tabular { font-variant-numeric: tabular-nums; }
@@ -76,99 +76,89 @@
   .btn.primary { background: var(--accent); border-color: var(--accent); color: var(--on-accent); }
   .btn.primary:hover:not(:disabled) { background: var(--accent-hover); border-color: var(--accent-hover); }
   .btn.big { min-height: 52px; border-radius: 14px; font-size: 16px; }
-  .btn.compact { min-height: 40px; padding: 0 14px; }
+  .btn.compact { min-height: 36px; padding: 0 12px; font-size: 13px; border-radius: 10px; }
   .btn:disabled { opacity: 0.55; }
 
   /* ---- バッジ ---- */
-  .badge { flex: none; display: inline-flex; align-items: center; font-size: 12px; font-weight: 600; padding: 2px 10px; border-radius: 999px; white-space: nowrap; line-height: 1.5; }
+  .badge { flex: none; display: inline-flex; align-items: center; font-size: 12px; font-weight: 600; padding: 1px 10px; border-radius: 999px; white-space: nowrap; line-height: 1.6; }
   .badge.student { background: var(--student-bg); color: var(--student-fg); }
   .badge.member { background: var(--member-bg); color: var(--member-fg); }
   .badge.admin { background: var(--admin-bg); color: var(--admin-fg); }
-  .badge.default { background: var(--ok-bg); color: var(--ok-fg); margin-left: 8px; font-size: 11px; padding: 1px 8px; }
+  .tag { display: inline-block; margin-left: 8px; font-size: 11px; font-weight: 600; padding: 0 8px; border-radius: 999px; white-space: nowrap; line-height: 1.6; vertical-align: 1px; }
+  .tag.default { background: var(--ok-bg); color: var(--ok-fg); }
+  .tag.image-only { background: var(--accent-soft); color: var(--accent-soft-text); border: 1px solid var(--accent-soft-line); }
 
   /* ---- 読み込み・ログイン・エラー ---- */
-  .center-card { max-width: 440px; margin: 12vh auto 0; background: var(--surface); border: 1px solid var(--line); border-radius: 16px; padding: 24px; display: flex; flex-direction: column; gap: 12px; }
-  .center-card .brand-sub { font-size: 12px; color: var(--muted); letter-spacing: 0.04em; }
+  .center-card { max-width: 440px; margin: 14vh auto 0; background: var(--surface); border: 1px solid var(--line); border-radius: 16px; padding: 32px 28px; display: flex; flex-direction: column; gap: 16px; }
   .center-card h1 { font-size: 22px; }
   .center-card .row { display: flex; flex-wrap: wrap; gap: 8px; }
-  @media (max-width: 480px) { .center-card { margin: 10vh 16px 0; } }
+  @media (max-width: 480px) { .center-card { margin: 10vh 16px 0; padding: 28px 22px; } }
 
   /* ---- 上部の帯 ---- */
   .topbar { background: var(--surface); border-bottom: 1px solid var(--line); }
-  .topbar-inner { max-width: 960px; margin: 0 auto; display: flex; flex-wrap: wrap; align-items: center; justify-content: space-between; gap: 8px 16px; padding: 12px 20px; }
-  .brand { display: flex; flex-direction: column; min-width: 0; }
-  .brand-sub { font-size: 12px; color: var(--muted); letter-spacing: 0.04em; }
-  .brand h1 { font-size: 18px; font-weight: 700; letter-spacing: 0.01em; }
-  .account { display: flex; flex-wrap: wrap; align-items: center; justify-content: flex-end; gap: 8px 12px; min-width: 0; }
+  .topbar-inner { max-width: 720px; margin: 0 auto; display: flex; flex-wrap: wrap; align-items: center; justify-content: space-between; gap: 8px 16px; padding: 14px 20px; }
+  .topbar h1 { font-size: 17px; font-weight: 700; letter-spacing: 0.01em; min-width: 0; }
+  .account { display: flex; align-items: center; justify-content: flex-end; gap: 8px 12px; min-width: 0; }
   .account .who { display: flex; align-items: center; gap: 8px; min-width: 0; }
-  #me-email { max-width: 260px; }
+  #me-email { max-width: 260px; font-size: 13px; }
   @media (max-width: 560px) {
     .topbar-inner { padding: 10px 16px; }
-    .account { width: 100%; justify-content: space-between; flex-wrap: nowrap; }
+    .account { width: 100%; justify-content: space-between; }
     .account .who { flex: 1 1 auto; }
     #me-email { max-width: none; }
   }
 
   /* ---- 本体 ---- */
-  .content { max-width: 960px; margin: 0 auto; padding: 20px 20px 80px; display: flex; flex-direction: column; gap: 16px; }
-  @media (max-width: 560px) { .content { padding: 16px 16px 64px; } }
-  .toolbar { display: flex; align-items: center; justify-content: space-between; gap: 12px; flex-wrap: wrap; }
-  .card { background: var(--surface); border: 1px solid var(--line); border-radius: 16px; padding: 20px; display: flex; flex-direction: column; gap: 12px; }
+  .content { max-width: 720px; margin: 0 auto; padding: 28px 20px 96px; display: flex; flex-direction: column; gap: 20px; }
+  @media (max-width: 560px) { .content { padding: 20px 16px 72px; gap: 16px; } }
+  .card { background: var(--surface); border: 1px solid var(--line); border-radius: 16px; padding: 24px; display: flex; flex-direction: column; gap: 16px; }
+  @media (max-width: 560px) { .card { padding: 20px 18px; } }
+  .card-head { display: flex; align-items: center; justify-content: space-between; gap: 12px; }
   .card h2 { font-size: 16px; font-weight: 700; }
-  .slot-label { font-size: 13px; color: var(--muted); font-weight: 600; }
-  .big-number { display: flex; align-items: baseline; gap: 8px; flex-wrap: wrap; }
-  .big-number .value { font-size: 48px; font-weight: 700; line-height: 1.1; letter-spacing: 0.01em; color: var(--accent); }
-  .big-number .value.text { font-size: 24px; }
-  .big-number .unit { font-size: 16px; color: var(--text-2); font-weight: 600; }
+
+  .big-number { display: flex; align-items: baseline; gap: 4px 12px; flex-wrap: wrap; }
+  .big-number .value { font-size: 56px; font-weight: 700; line-height: 1.1; letter-spacing: 0.01em; color: var(--accent); }
+  .big-number .value.text { font-size: 32px; }
+  .big-number .limit { font-size: 15px; color: var(--muted); font-weight: 500; }
   .big-number.low .value { color: var(--low-text); }
+  @media (max-width: 560px) { .big-number .value { font-size: 48px; } .big-number .value.text { font-size: 28px; } }
   .bar { height: 8px; border-radius: 4px; background: var(--track); overflow: hidden; }
   .bar > span { display: block; height: 100%; border-radius: inherit; background: var(--accent); }
   .bar.low > span { background: var(--low); }
-  .explain { display: flex; flex-direction: column; gap: 4px; color: var(--text-2); }
-  .explain p:last-child { color: var(--muted); font-size: 13px; }
+  .slot-line { color: var(--text-2); }
+  .notice { color: var(--text-2); font-size: 16px; }
 
-  /* ---- モデルの表 ---- */
-  .kind-group { display: flex; flex-direction: column; gap: 8px; }
-  .kind-group + .kind-group { margin-top: 8px; }
-  .kind-group h3 { font-size: 14px; font-weight: 700; color: var(--accent-soft-text); background: var(--accent-soft); border: 1px solid var(--accent-soft-line); border-radius: 8px; padding: 4px 12px; align-self: flex-start; }
-  table.models { width: 100%; border-collapse: collapse; }
-  table.models th { text-align: left; font-size: 12px; color: var(--muted); font-weight: 600; padding: 6px 10px; border-bottom: 1px solid var(--line); }
-  table.models td { padding: 10px; border-bottom: 1px solid var(--line-soft); vertical-align: top; overflow-wrap: anywhere; }
-  table.models tr:last-child td { border-bottom: 0; }
-  table.models .name { font-weight: 700; }
-  table.models .desc { display: block; font-size: 12px; color: var(--muted); font-weight: 400; margin-top: 2px; }
-  @media (max-width: 640px) {
-    table.models thead { position: absolute; width: 1px; height: 1px; overflow: hidden; clip: rect(0, 0, 0, 0); }
-    table.models, table.models tbody, table.models tr, table.models td { display: block; width: 100%; }
-    table.models tr { padding: 10px 0; border-bottom: 1px solid var(--line-soft); }
-    table.models tr:last-child { border-bottom: 0; }
-    table.models td { padding: 2px 0; border: 0; }
-    table.models td[data-label]::before { content: attr(data-label) "　"; font-size: 12px; color: var(--muted); font-weight: 600; }
-  }
+  /* ---- モデル ---- */
+  .kind-group { display: flex; flex-direction: column; gap: 4px; }
+  .kind-group + .kind-group { margin-top: 12px; }
+  .kind-group h3 { font-size: 13px; font-weight: 700; color: var(--muted); letter-spacing: 0.04em; padding-bottom: 4px; border-bottom: 1px solid var(--line); }
+  ul.models { list-style: none; margin: 0; padding: 0; }
+  ul.models li { display: grid; grid-template-columns: minmax(0, 1fr) auto; align-items: baseline; gap: 12px; padding: 10px 0; border-bottom: 1px solid var(--line-soft); }
+  ul.models li:last-child { border-bottom: 0; }
+  ul.models .name { font-weight: 600; overflow-wrap: anywhere; }
+  ul.models .price { color: var(--text-2); white-space: nowrap; font-variant-numeric: tabular-nums; }
+  @media (max-width: 400px) { ul.models li { font-size: 14px; gap: 8px; } }
 </style>
 </head>
 <body>
 <div id="status" class="center-card" role="status"><p class="muted">読み込み中…</p></div>
 
 <section id="login" class="center-card" hidden aria-labelledby="login-title">
-  <span class="brand-sub">A.I.KEN Studio</span>
   <h1 id="login-title">マイページ</h1>
   <p class="warn-text" id="login-note" role="status" hidden></p>
-  <p>自分の残りクレジットと、使えるモデルを確認できます。研修・A.I.KEN の Google アカウントでログインしてください。</p>
-  <p class="muted small">このページを離れる・再読み込みする・30 分操作しないと、ログアウトします。最新の値は「最新にする」で確かめてください。</p>
+  <p>研修・A.I.KEN の Google アカウントでログインしてください。</p>
   <button type="button" class="btn primary big" id="login-btn">Google でログイン</button>
+  <p class="muted small">ページを離れると自動でログアウトします。</p>
 </section>
 
 <section id="denied" class="center-card" hidden aria-labelledby="denied-title">
-  <span class="brand-sub">A.I.KEN Studio</span>
   <h1 id="denied-title">マイページ</h1>
   <p class="error-text" id="denied-message">利用登録が確認できません。管理者にお問い合わせください。</p>
-  <p class="muted">ログイン中のアカウント：<span id="denied-email" class="tabular"></span></p>
+  <p class="muted small"><span id="denied-email" class="tabular"></span></p>
   <div class="row"><button type="button" class="btn" id="denied-logout-btn">ログアウト</button></div>
 </section>
 
 <section id="failed" class="center-card" hidden aria-labelledby="failed-title">
-  <span class="brand-sub">A.I.KEN Studio</span>
   <h1 id="failed-title">マイページ</h1>
   <p class="error-text" id="failed-message">読み込めませんでした。</p>
   <div class="row">
@@ -180,9 +170,7 @@
 <div id="app" hidden>
   <header class="topbar">
     <div class="topbar-inner">
-      <div class="brand">
-        <h1>A.I.KEN Studio マイページ</h1>
-      </div>
+      <h1>A.I.KEN Studio マイページ</h1>
       <div class="account">
         <div class="who">
           <span id="me-email" class="ellipsis tabular"></span>
@@ -194,25 +182,25 @@
   </header>
 
   <main class="content">
-    <div class="toolbar">
-      <span class="muted small">最終更新 <span id="updated-at" class="tabular">—</span></span>
-      <button type="button" class="btn compact" id="reload-btn">最新にする</button>
-    </div>
-
     <section class="card" aria-labelledby="credits-title">
-      <h2 id="credits-title">残りクレジット</h2>
-      <p class="slot-label" id="slot-label" hidden></p>
+      <div class="card-head">
+        <h2 id="credits-title">残りクレジット</h2>
+        <button type="button" class="btn compact" id="reload-btn">最新にする</button>
+      </div>
       <div class="big-number" id="big-number">
         <span class="value tabular" id="credits-value">—</span>
-        <span class="unit" id="credits-unit">クレジット</span>
+        <span class="limit tabular" id="credits-limit"></span>
       </div>
       <div class="bar" id="credits-bar" hidden><span id="credits-bar-fill"></span></div>
-      <div class="explain" id="credits-explain"></div>
+      <p class="slot-line" id="slot-line" hidden></p>
+      <p class="notice" id="credits-notice" hidden></p>
     </section>
 
     <section class="card" aria-labelledby="models-title">
-      <h2 id="models-title">使えるモデル</h2>
-      <p class="muted small">目安単価は、生成するときに使うクレジットの目安です。</p>
+      <div class="card-head">
+        <h2 id="models-title">使えるモデル</h2>
+        <span class="muted small">目安はクレジット</span>
+      </div>
       <div id="models"></div>
     </section>
   </main>

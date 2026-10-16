@@ -2,6 +2,11 @@
 // テストは aiken-media-relay/scripts/mypage_lib_test.ts。
 // 画面にドルや換算の割合は出さない（user-api の応答にも含まれない）。クレジットの数字と文言は user-api の応答をそのまま使う。
 
+/** 有限の数か（null・""・NaN・文字列は false） */
+function isNumber(v) {
+  return typeof v === "number" && Number.isFinite(v);
+}
+
 /** 3,000 のような桁区切り（値が無いときは「—」） */
 export function formatCredits(value) {
   if (value === null || value === undefined || value === "") return "—";
@@ -17,51 +22,68 @@ export function roleBadgeClass(role) {
   return role === "student" || role === "member" || role === "admin" ? role : "";
 }
 
+/** 枠の対象外（管理者以外）で、案内の文も無いときの 1 行 */
+export const MSG_NO_WINDOW = "クレジットの枠はありません";
+
 /** 残りがこの割合以下なら、色を変えて知らせる */
 export const LOW_RATIO = 0.2;
 
 /**
  * 「残りクレジット」の見せ方。credits は user-api の応答の credits（画面に出す値だけ）、role は応答の role。
- * slot：今の枠の名前（「ブリッジワーク期間の残り」「今月の残り」。無ければ null）／value：大きく出す文字／
- * unit：単位（数字のときだけ）／ratio：残り÷上限（0〜1。出せないときは null）／low：残りが少ないか／
- * lines：今の枠の説明の行（user-api が get_credits と同じ文言から作ったもの。ここでは文言を解析しない）
+ * mode：number（数字を大きく出す）／unlimited（管理者。「上限なし」）／notice（枠の外・未設定。数字は出さず 1 行の案内）／none
+ * value：大きく出す文字／limitText：数字の横に小さく出す「/ 上限 3,000」／slotLine：枠の説明 1 行（「ブリッジワーク期間・10/22 まで」）／
+ * notice：案内の 1 行（user-api が get_credits と同じ文言から作ったもの。ここでは文言を解析しない）／
+ * ratio：残り÷上限（0〜1。出せないときは null）／low：残りが少ないか
  */
 export function creditsView(credits, role) {
   const c = credits && typeof credits === "object" ? credits : {};
-  const lines = Array.isArray(c.summary) ? c.summary.map(String) : [];
+  const base = { value: "—", limitText: null, slotLine: null, notice: null, ratio: null, low: false };
   if (c.applies !== true) {
-    // 管理者は期間ごとの上限なし。それ以外（枠の対象外）は数字を出さない
-    return {
-      slot: null,
-      value: role === "admin" ? "期間ごとの上限なし" : "—",
-      valueIsText: true,
-      unit: null,
-      ratio: null,
-      low: false,
-      lines,
-    };
+    if (role === "admin") return { ...base, mode: "unlimited", value: "上限なし" };
+    // 管理者以外で枠の対象外：見出しだけの空にならないよう、1 行の案内を出す
+    return { ...base, mode: "notice", notice: typeof c.notice === "string" && c.notice ? c.notice : MSG_NO_WINDOW };
   }
-  const remaining = typeof c.remaining === "number" ? c.remaining : null;
+  if (typeof c.remaining !== "number") {
+    return { ...base, mode: "notice", notice: typeof c.notice === "string" ? c.notice : null };
+  }
   const limit = typeof c.limit === "number" ? c.limit : null;
-  const ratio = remaining !== null && limit !== null && limit > 0 ? Math.min(1, Math.max(0, remaining / limit)) : null;
+  const ratio = limit !== null && limit > 0 ? Math.min(1, Math.max(0, c.remaining / limit)) : null;
+  const slot = typeof c.slot === "string" && c.slot ? c.slot : null;
+  const until = typeof c.until === "string" && c.until ? c.until : null;
   return {
-    slot: typeof c.slot_label === "string" && c.slot_label ? c.slot_label : null,
-    value: formatCredits(remaining),
-    valueIsText: remaining === null,
-    unit: remaining === null ? null : "クレジット",
+    mode: "number",
+    value: formatCredits(c.remaining),
+    limitText: limit === null ? null : `/ 上限 ${formatCredits(limit)}`,
+    slotLine: slot ? (until ? `${slot}・${until} まで` : slot) : null,
+    notice: null,
     ratio,
     low: ratio !== null && ratio <= LOW_RATIO,
-    lines,
   };
 }
 
-/** モデルを種類ごとにまとめる（KIND_ORDER の順。知らない種類は最後に、出てきた順） */
+/** 「使えるモデル」の小見出し（user-api の kind_label ではなく、この画面の呼び方） */
+export const KIND_HEADINGS = { video: "動画", image: "画像", speech: "読み上げ", music: "音楽" };
+
+/**
+ * モデルを種類ごとにまとめる（KIND_ORDER の順。知らない種類は最後に、出てきた順）。
+ * 種類の中は、既定を先頭に、あとは目安の安い順（同じ額は元の順）
+ */
 export function groupModels(models) {
   const list = Array.isArray(models) ? models : [];
   const groups = new Map();
   for (const m of list) {
-    if (!groups.has(m.kind)) groups.set(m.kind, { kind: m.kind, label: m.kind_label || m.kind, models: [] });
+    if (!groups.has(m.kind)) {
+      groups.set(m.kind, { kind: m.kind, label: KIND_HEADINGS[m.kind] ?? (m.kind_label || m.kind), models: [] });
+    }
     groups.get(m.kind).models.push(m);
+  }
+  // 数字として表示できない目安（null・文字列・NaN など）は、表示が「—」になる。並べ替えでも末尾
+  const credits = (m) => (isNumber(m.price?.credits) ? m.price.credits : Infinity);
+  for (const g of groups.values()) {
+    g.models = g.models
+      .map((m, i) => ({ m, i }))
+      .sort((a, b) => (b.m.is_default === true) - (a.m.is_default === true) || credits(a.m) - credits(b.m) || a.i - b.i)
+      .map((x) => x.m);
   }
   const rank = (k) => {
     const i = KIND_ORDER.indexOf(k);
@@ -70,10 +92,36 @@ export function groupModels(models) {
   return [...groups.values()].sort((a, b) => rank(a.kind) - rank(b.kind));
 }
 
-/** 使い方の表示（「テキストから動画・画像から動画」。1 つだけなら「のみ」を添える） */
-export function modesText(modes) {
-  const list = Array.isArray(modes) ? modes : [];
-  return list.length ? `${list.join("・")}${list.length === 1 ? "のみ" : ""}` : "—";
+/**
+ * 目安の数字：小数は切り上げた整数（見積りは高い側に倒す。120.95 は 121、12.6 は 13）。
+ * 浮動小数の誤差（63.00000000000001 など）は切り上げないよう、小数 6 桁で丸めてから切り上げる
+ */
+export function formatApprox(n) {
+  return Number.isFinite(n) ? Math.ceil(Math.round(n * 1e6) / 1e6).toLocaleString("en-US") : "—";
+}
+
+/**
+ * 目安の表示（単位つき。「クレジット」は画面の見出しに 1 回だけ書く）。既定の解像度の単価から：
+ * 動画「5 秒 約 63」・画像「1 枚 8」・読み上げ「1,000 文字 10」・音楽「1 分 80」「1 曲 15」
+ */
+export function priceText(model) {
+  // 数字のときだけ出す（null・"" を 0 として「約 0」と出さない）
+  const credits = model?.price?.credits;
+  if (!isNumber(credits)) return "—";
+  switch (model.price.unit) {
+    case "second":
+      return `5 秒 約 ${formatApprox(credits * 5)}`;
+    case "image":
+      return `1 枚 ${formatApprox(credits)}`;
+    case "1000_chars":
+      return `1,000 文字 ${formatApprox(credits)}`;
+    case "minute":
+      return `1 分 ${formatApprox(credits)}`;
+    case "song":
+      return `1 曲 ${formatApprox(credits)}`;
+    default:
+      return formatApprox(credits);
+  }
 }
 
 export const MSG_DENIED = "利用登録が確認できません。管理者にお問い合わせください。";

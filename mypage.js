@@ -17,7 +17,7 @@ import {
   creditsView,
   decideApiOutcome,
   groupModels,
-  modesText,
+  priceText,
   roleBadgeClass,
 } from "./mypage-lib.js";
 
@@ -115,17 +115,18 @@ function hideContent(message = "ログアウトしています…") {
   $("me-email").removeAttribute("title");
   $("me-role").textContent = "";
   $("denied-email").textContent = "";
-  $("slot-label").textContent = "";
-  $("slot-label").hidden = true;
   $("credits-value").textContent = "—";
   $("credits-value").classList.remove("text");
-  $("credits-unit").textContent = "";
+  $("credits-limit").textContent = "";
+  $("big-number").hidden = false;
   $("big-number").classList.remove("low");
   $("credits-bar").hidden = true;
   $("credits-bar").classList.remove("low");
   $("credits-bar-fill").style.width = "0%";
-  $("updated-at").textContent = "—";
-  $("credits-explain").replaceChildren();
+  $("slot-line").textContent = "";
+  $("slot-line").hidden = true;
+  $("credits-notice").textContent = "";
+  $("credits-notice").hidden = true;
   $("models").replaceChildren();
   $("status").replaceChildren(el("p", { className: "muted", text: message }));
   show("status");
@@ -278,23 +279,27 @@ function render(me) {
   role.hidden = !me.role_label;
   renderCredits(me.credits, me.role);
   renderModels(me.models);
-  $("updated-at").textContent = new Date().toLocaleTimeString("ja-JP", { hour: "2-digit", minute: "2-digit" });
+}
+
+/** 文字を入れて、空なら隠す */
+function setLine(id, text) {
+  $(id).textContent = text ?? "";
+  $(id).hidden = !text;
 }
 
 function renderCredits(credits, role) {
   const v = creditsView(credits, role);
-  $("slot-label").textContent = v.slot ?? "";
-  $("slot-label").hidden = !v.slot;
-  const value = $("credits-value");
-  value.textContent = v.value;
-  value.classList.toggle("text", v.valueIsText);
-  $("credits-unit").textContent = v.unit ?? "";
-  $("credits-unit").hidden = !v.unit;
+  const hasNumber = v.mode === "number" || v.mode === "unlimited";
+  $("big-number").hidden = !hasNumber;
+  $("credits-value").textContent = v.value;
+  $("credits-value").classList.toggle("text", v.mode === "unlimited");
+  setLine("credits-limit", v.limitText);
   $("big-number").classList.toggle("low", v.low);
   $("credits-bar").hidden = v.ratio === null;
   $("credits-bar").classList.toggle("low", v.low);
   $("credits-bar-fill").style.width = `${Math.round((v.ratio ?? 0) * 100)}%`;
-  $("credits-explain").replaceChildren(...v.lines.map((line) => el("p", { text: line })));
+  setLine("slot-line", v.slotLine);
+  setLine("credits-notice", v.notice);
 }
 
 function renderModels(models) {
@@ -310,35 +315,21 @@ function renderModels(models) {
         { className: "kind-group" },
         el("h3", { text: g.label }),
         el(
-          "table",
+          "ul",
           { className: "models" },
-          el(
-            "thead",
-            {},
+          ...g.models.map((m) =>
             el(
-              "tr",
+              "li",
               {},
-              ...["モデル名", "使い方", "目安単価"].map((t) => el("th", { text: t, attrs: { scope: "col" } })),
-            ),
-          ),
-          el(
-            "tbody",
-            {},
-            ...g.models.map((m) =>
               el(
-                "tr",
-                {},
-                el(
-                  "td",
-                  { attrs: { "data-label": "モデル名" } },
-                  el("span", { className: "name", text: m.label }),
-                  m.is_default ? el("span", { className: "badge default", text: "既定" }) : null,
-                  m.description ? el("span", { className: "desc", text: m.description }) : null,
-                ),
-                el("td", { text: modesText(m.modes), attrs: { "data-label": "使い方" } }),
-                el("td", { className: "tabular", text: m.price?.text ?? "—", attrs: { "data-label": "目安単価" } }),
-              )
-            ),
+                "span",
+                { className: "name" },
+                el("span", { text: m.label }),
+                m.is_default ? el("span", { className: "tag default", text: "既定" }) : null,
+                m.image_only ? el("span", { className: "tag image-only", text: "画像から" }) : null,
+              ),
+              el("span", { className: "price", text: priceText(m) }),
+            )
           ),
         ),
       )

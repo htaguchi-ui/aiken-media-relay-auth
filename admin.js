@@ -65,8 +65,11 @@ import {
   formatSettingValue,
   formatUsdShort,
   globalUsageView,
+  applyMaster,
   groupModels,
   listText,
+  masterState,
+  toastOverflow,
   modelChanges,
   modelLabeler,
   modeStatus,
@@ -309,45 +312,98 @@ function selectInput(options, value, props = {}) {
   return select;
 }
 
-// ---- お知らせ ----
-// モーダルのシートは最前面（top layer）に出るので、シートが開いている間はシートの中に出す
+// ---- お知らせ（画面の上に浮かぶトースト。本文や上の帯を押し下げない） ----
+// モーダルのシートは最前面（top layer）で、外は操作できなくなる。そのため、シートが開いている間は入れ物ごとシートの中へ移す（position: fixed なので位置は変わらない）
 
-const noticeEl = el("div", { id: "notice", role: "status", "aria-live": "polite", hidden: true });
-let noticeTimer = 0;
+const NOTICE_MS = 5000;
+const NOTICE_MAX = 3;
+// 入れ物は最初から読み上げの領域（aria-live）。成功は中身が足されたことで読まれ、エラー・警告は role="alert" で読まれる
+const noticeEl = el("div", { id: "notice", role: "region", "aria-label": "お知らせ", "aria-live": "polite", "aria-relevant": "additions text" });
+/** 出ているトースト（古い順）。{ node, kind, key, count, timer, hover, focus } */
+const toasts = [];
 
-// PC は上の帯（タブ）を隠さないよう、本文の先頭に置いて画面の上端に張り付かせる（閉じなくても操作できる）
 function placeNotice() {
-  const inSheet = $("sheet").open;
-  const inFlow = !inSheet && isDesktop() && !$("app").hidden;
-  const host = inSheet ? $("sheet") : inFlow ? document.querySelector("main.content") : document.body;
-  if (noticeEl.parentNode !== host) host.prepend(noticeEl);
-  noticeEl.classList.toggle("in-sheet", inSheet);
-  noticeEl.classList.toggle("in-flow", inFlow);
+  const host = $("sheet").open ? $("sheet") : document.body;
+  if (noticeEl.parentNode === host) return;
+  host.prepend(noticeEl);
+  // 付け替えるとフォーカスは外れ、focusout が来ないことがある：「フォーカス中」「マウスを乗せている」の印を消して、消えるまでの数えを再開する
+  for (const t of toasts) {
+    t.focus = false;
+    t.hover = false;
+    scheduleToast(t);
+  }
 }
 
-/** 画面上部のお知らせ。kind は "ok" か "error"。details は箇条書き */
+function dismissToast(t) {
+  clearTimeout(t.timer);
+  const i = toasts.indexOf(t);
+  if (i >= 0) toasts.splice(i, 1);
+  t.node.remove();
+}
+
+/** 成功・お知らせだけ自動で消す。マウスを乗せている間・フォーカスしている間は消さない */
+function scheduleToast(t) {
+  clearTimeout(t.timer);
+  if (t.kind !== "ok" || t.hover || t.focus) return;
+  t.timer = setTimeout(() => dismissToast(t), NOTICE_MS);
+}
+
+/** 画面上部のお知らせ。kind は "ok"（数秒で消える）・"error"・"warn"（閉じるまで残る）。details は箇条書き。直前と同じ文は 1 つにまとめる（×回数） */
 function notify(message, kind = "ok", details = []) {
-  clearTimeout(noticeTimer);
-  noticeEl.className = kind === "error" ? "error" : "ok";
-  noticeEl.replaceChildren(
+  if (kind !== "error" && kind !== "warn") kind = "ok";
+  placeNotice();
+  const key = [kind, message, ...details].join("\n");
+  const last = toasts[toasts.length - 1];
+  if (last && last.key === key) {
+    last.count += 1;
+    last.node.querySelector(".notice-count").textContent = `×${last.count}`;
+    last.node.querySelector(".notice-count").hidden = false;
+    scheduleToast(last);
+    return;
+  }
+  const node = el(
+    "div",
+    { className: `toast ${kind}`, ...(kind === "ok" ? {} : { role: "alert" }) },
     el(
       "div",
       { className: "notice-body" },
-      el("p", { className: "notice-msg", text: message }),
+      el("p", { className: "notice-msg" }, el("span", { text: message }), el("span", { className: "notice-count small num", hidden: true })),
       details.length ? el("ul", {}, ...details.map((d) => el("li", { text: d }))) : null,
     ),
-    el("button", { type: "button", className: "icon-btn bare", "aria-label": "お知らせを閉じる", onclick: clearNotice }, icon("close")),
   );
-  noticeEl.hidden = false;
-  placeNotice();
-  if (kind !== "error") noticeTimer = setTimeout(clearNotice, 8000);
+  const t = { node, kind, key, count: 1, timer: 0, hover: false, focus: false };
+  node.append(el("button", { type: "button", className: "icon-btn bare", "aria-label": "お知らせを閉じる", onclick: () => dismissToast(t) }, icon("close")));
+  node.addEventListener("mouseenter", () => {
+    t.hover = true;
+    scheduleToast(t);
+  });
+  node.addEventListener("mouseleave", () => {
+    t.hover = false;
+    scheduleToast(t);
+  });
+  node.addEventListener("focusin", () => {
+    t.focus = true;
+    scheduleToast(t);
+  });
+  node.addEventListener("focusout", (e) => {
+    if (e.relatedTarget && node.contains(e.relatedTarget)) return;
+    t.focus = false;
+    scheduleToast(t);
+  });
+  toasts.push(t);
+  noticeEl.append(node);
+  // あふれたら、成功・お知らせから古い順に消す（エラー・警告は、それだけで上限を超えるときだけ）
+  for (const i of toastOverflow(toasts.map((x) => x.kind), NOTICE_MAX).reverse()) dismissToast(toasts[i]);
+  scheduleToast(t);
 }
 
+/** 出ているお知らせをすべて消す（操作のはじめに、前のお知らせを片づける） */
 function clearNotice() {
-  clearTimeout(noticeTimer);
-  noticeEl.hidden = true;
-  noticeEl.replaceChildren();
+  for (const t of [...toasts]) dismissToast(t);
 }
+
+// 読み上げの領域は、お知らせが出る前から画面に置いておく
+placeNotice();
 
 function fatal(message) {
   $("status").replaceChildren(el("p", { className: "error-text", text: message }));
@@ -376,7 +432,9 @@ function closeSheet() {
 /** シートの中身を組み立てる。head を渡すときは、その中に id="sheet-title" の見出しを入れる */
 function setSheet({ title = "", head = null, body = [], foot = [] }) {
   const scroll = sheet.scrollTop;
-  sheet.replaceChildren(
+  // お知らせの入れ物は外さない（外して付け直すと、出る動きと読み上げがやり直しになる）。それ以外を入れ替える
+  for (const c of [...sheet.children]) if (c !== noticeEl) c.remove();
+  sheet.append(
     el("div", { className: "sheet-grab", "aria-hidden": "true" }),
     el(
       "div",
@@ -387,16 +445,15 @@ function setSheet({ title = "", head = null, body = [], foot = [] }) {
     el("div", { className: "sheet-body" }, ...body),
     ...(foot.length ? [el("div", { className: "sheet-foot" }, ...foot)] : []),
   );
-  if (!noticeEl.hidden) placeNotice();
+  placeNotice();
   sheet.scrollTop = scroll;
 }
 
 sheet.addEventListener("close", () => {
   sheetKind = null;
   sheetRender = null;
-  if (noticeEl.parentNode === sheet) document.body.prepend(noticeEl);
+  placeNotice(); // 閉じたので入れ物を body へ戻す（シートの中身を消す前に）
   sheet.replaceChildren();
-  placeNotice();
 });
 // 背景（シートの外）を押したら閉じる
 sheet.addEventListener("click", (e) => {
@@ -3076,9 +3133,9 @@ async function updateSettings(changes, doneMessage) {
 /** モデルの面だけを描き直す（オン・オフのたびに。押したスイッチにフォーカスを戻す） */
 function renderModelsBox() {
   const host = $("settings-models");
-  const focused = document.activeElement?.closest?.("#settings-models") ? document.activeElement.dataset?.modelId : null;
+  const focused = document.activeElement?.closest?.("#settings-models") ? document.activeElement.dataset?.focusKey : null;
   host.replaceChildren(modelsBox());
-  if (focused) [...host.querySelectorAll("input[data-model-id]")].find((n) => n.dataset.modelId === focused)?.focus();
+  if (focused) [...host.querySelectorAll("input[data-focus-key]")].find((n) => n.dataset.focusKey === focused)?.focus();
 }
 
 function modelsBox() {
@@ -3153,16 +3210,75 @@ function modelsBox() {
   );
 }
 
+const LOCKED_TITLE = "サーバーの環境変数（ENABLED_PROVIDER_MODELS）で許可されていないため、ここでは変えられません";
+
+/** モデル 1 つ：見出しの行に一括スイッチ、その下に字下げしてモードごとのスイッチ（モードが 1 つだけなら一括スイッチだけ） */
 function modelItem(m) {
-  const sub = [m.provider, m.price?.text].filter(Boolean).join(" · ");
+  const S = state.settings;
+  const modes = m.modes ?? [];
+  const lockedFn = (mode) => modeStatus(m, mode, false).locked;
+  const ms = masterState(modes, S.draft, lockedFn);
+  const free = modes.filter((mode) => !lockedFn(mode));
+  const single = modes.length === 1 ? modes[0] : null;
+  const sub = [single?.label, m.provider, m.price?.text, single?.model_id].filter(Boolean).join(" · ");
+
+  let stateKind;
+  let stateText;
+  if (single) {
+    const st = modeStatus(m, single, S.draft.has(single.model_id));
+    stateKind = st.kind;
+    stateText = st.text;
+  } else if (modes.length === 0) {
+    stateKind = "server_off";
+    stateText = "経路なし";
+  } else if (ms === "locked") {
+    stateKind = "server_off";
+    stateText = "サーバー側で無効";
+  } else if (ms === "mixed") {
+    stateKind = "mixed";
+    stateText = "一部";
+  } else if (ms === "on") {
+    stateKind = m.provider_available ? "on" : "provider_off";
+    stateText = m.provider_available ? "オン" : "オン（提供元が使えない）";
+  } else {
+    stateKind = "off";
+    stateText = "オフ";
+  }
+  const changed = free.some((mode) => S.draft.has(mode.model_id) !== !!mode.console_enabled);
+
+  const input = el("input", {
+    type: "checkbox",
+    role: "switch",
+    checked: ms === "on" || (ms === "locked" && modes.some((mode) => S.draft.has(mode.model_id))),
+    disabled: ms === "locked",
+    "aria-label": single ? `${m.label}：${single.label}` : `${m.label}：まとめて`,
+  });
+  input.indeterminate = ms === "mixed";
+  input.setAttribute("aria-checked", ms === "mixed" ? "mixed" : String(input.checked));
+  input.dataset.focusKey = `master:${m.key ?? m.label}`;
+  input.addEventListener("change", () => {
+    S.draft = applyMaster(modes, S.draft, lockedFn);
+    renderModelsBox();
+  });
+
+  let title = null;
+  if (ms === "locked") title = modes.length ? LOCKED_TITLE : "振り分け先の経路が無いため、切り替えられません";
+  else if (free.length < modes.length) title = "サーバー側で無効のモードは変わりません";
+
+  const head = el(
+    "label",
+    { className: `toggle master ${ms === "locked" ? "locked" : ""}`, title },
+    el("span", { className: "tlabel" }, el("span", { className: "model-name", text: m.label }), sub ? el("span", { className: "small muted ellipsis", text: sub }) : null),
+    el("span", { className: `tstate ${stateKind}` }, stateText, changed ? el("span", { className: "changed", text: "（未保存）" }) : null),
+    input,
+  );
   return el(
     "div",
     { className: "model" },
-    el("div", { className: "model-head" }, el("span", { className: "model-name", text: m.label }), sub ? el("span", { className: "small muted", text: sub }) : null),
+    head,
     m.provider_available ? null : el("p", { className: "small warn-text", text: "提供元が使えません（API キーが未設定など）。オンにしても生成できません。" }),
-    ...(m.modes?.length
-      ? m.modes.map((mode) => modeToggle(m, mode))
-      : [el("p", { className: "small muted", text: "振り分け先の経路が無いため使えません。" })]),
+    modes.length ? null : el("p", { className: "small muted", text: "振り分け先の経路が無いため使えません。" }),
+    modes.length > 1 ? el("div", { className: "modes" }, ...modes.map((mode) => modeToggle(m, mode))) : null,
   );
 }
 
@@ -3177,7 +3293,7 @@ function modeToggle(m, mode) {
     disabled: st.locked,
     "aria-label": `${m.label}：${mode.label}`,
   });
-  input.dataset.modelId = mode.model_id;
+  input.dataset.focusKey = mode.model_id;
   input.addEventListener("change", () => {
     if (input.checked) S.draft.add(mode.model_id);
     else S.draft.delete(mode.model_id);
@@ -3186,12 +3302,12 @@ function modeToggle(m, mode) {
   return el(
     "label",
     {
-      className: `toggle ${st.locked ? "locked" : ""}`,
-      title: st.locked ? "サーバーの環境変数（ENABLED_PROVIDER_MODELS）で許可されていないため、ここでは変えられません" : null,
+      className: `toggle sub ${st.locked ? "locked" : ""}`,
+      title: st.locked ? LOCKED_TITLE : null,
     },
-    input,
-    el("span", { className: "tlabel" }, el("span", { text: mode.label }), el("span", { className: "small muted ellipsis", text: mode.model_id })),
+    el("span", { className: "tlabel" }, el("span", { className: "mode-name", text: mode.label }), el("span", { className: "small muted ellipsis", text: mode.model_id })),
     el("span", { className: `tstate ${st.kind}` }, st.text, on !== !!mode.console_enabled && !st.locked ? el("span", { className: "changed", text: "（未保存）" }) : null),
+    input,
   );
 }
 
