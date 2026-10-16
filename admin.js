@@ -58,7 +58,6 @@ import {
   windowView,
   YEN_PER_USD,
   catalogModes,
-  consoleSelection,
   DEFAULT_SETTING_TEXT,
   enabledModelsPayload,
   explainApiError,
@@ -66,23 +65,38 @@ import {
   formatUsdShort,
   globalUsageView,
   applyMaster,
+  availableLimits,
+  buildModelSave,
+  changedScopes,
+  emptyScopeWarnings,
   groupModels,
   listText,
   masterState,
   toastOverflow,
+  MODEL_SCOPES,
   modelChanges,
   modelLabeler,
-  modeStatus,
+  modeBaseOn,
+  roleListNotice,
+  rolesAvailable,
+  saveConfirmLines,
+  scopeList,
+  scopeModeStatus,
+  scopeSelection,
+  scopeUsable,
+  unknownList,
+  activeScopes,
   parseSettingInput,
   sameIdSet,
   sameSettingValue,
-  SETTING_LIMITS,
   settingRangeText,
   settingsDiff,
   settingSource,
   cohortsSchemaMissing,
   limitChangeCheck,
   rebaseModelDraft,
+  resetCarry,
+  effectiveDrafts,
 } from "./admin-lib.js";
 
 // 他のサイトに埋め込まれて操作させられるのを防ぐ（GitHub Pages では frame-ancestors を指定できないため）
@@ -166,8 +180,14 @@ const state = {
     modelsError: "",
     /** admin-api の GET /models の結果 */
     models: null,
-    /** 画面上のオン・オフ（未保存を含む model_id の集合） */
-    draft: null,
+    /** 画面上のオン・オフ（未保存を含む model_id の集合）。区分ごと：{ all, student, member } */
+    drafts: null,
+    /** 開いているモデル（モードごとのスイッチを出している）の key。ページを開き直すまで、保存・タブの切り替え・描き直しのあいだ覚えておく */
+    openModels: new Set(),
+    /** 「制限なしに戻す」を押した区分（{ student: true }）。保存で null にする。スイッチを押す・元に戻す・読み直しで消える */
+    resetNull: {},
+    /** 開いているタブ（all・student・member） */
+    scope: "all",
   },
 };
 
@@ -2920,22 +2940,40 @@ async function loadModels({ resetDraft = false } = {}) {
     return false;
   }
   const prev = S.models;
-  const pending = !resetDraft && prev && S.draft ? modelChanges(prev.models, consoleSelection(prev.models), S.draft).count : 0;
+  // 保存しないまま読み直した（1 回の上限の保存・「最新にする」など）とき、「制限なしに戻す」の印は、その区分の一覧が変わっていなければ残す。変わっていれば消して、下書きも基準に戻す
+  const carry = resetCarry(prev, body, resetDraft ? {} : S.resetNull);
+  const prevDrafts = S.drafts;
+  // 区分ごとの未保存の変更の数（読み込み前の基準との差）
+  const pendingBy = {};
+  for (const sc of MODEL_SCOPES) {
+    pendingBy[sc.key] = !resetDraft && prev && prevDrafts && !carry.keep.includes(sc.key) && !carry.lost.includes(sc.key) ? modelChanges(prev.models, scopeSelection(prev.models, sc.key), prevDrafts[sc.key]).count : 0;
+  }
   S.models = body;
-  if (!pending) {
-    S.draft = consoleSelection(body.models);
-  } else if (sameIdSet(prev.console_enabled_models ?? null, body.console_enabled_models ?? null)) {
-    // 基準が同じ：未保存の変更をそのまま残す（カタログが変わった分だけ合わせる）
-    S.draft = rebaseModelDraft(prev.models, body.models, S.draft);
-  } else {
-    // ほかの管理者が変えた：基準だけが黙って新しくならないよう、乗せ直すか捨てるかを選ばせる
-    const keep = confirm(
-      `読み込み直したところ、ほかの管理者がモデルの設定を変えていました。\n` +
-        `未保存の変更（${pending} 件）を、新しい設定に乗せ直しますか？\n` +
+  const next = Object.fromEntries(MODEL_SCOPES.map((sc) => [sc.key, scopeSelection(body.models, sc.key)]));
+  // ほかの管理者が変えた区分（基準の一覧が変わった）で、未保存の変更があるもの
+  const conflicts = MODEL_SCOPES.filter((sc) => pendingBy[sc.key] > 0 && !sameIdSet(scopeList(prev, sc.key), scopeList(body, sc.key)));
+  let keep = true;
+  if (conflicts.length) {
+    // 基準だけが黙って新しくならないよう、乗せ直すか捨てるかを選ばせる
+    const n = conflicts.reduce((sum, sc) => sum + pendingBy[sc.key], 0);
+    keep = confirm(
+      `読み込み直したところ、ほかの管理者がモデルの設定（${conflicts.map((sc) => sc.label).join("・")}）を変えていました。\n` +
+        `未保存の変更（${n} 件）を、新しい設定に乗せ直しますか？\n` +
         "・OK：あなたが変えたところだけを、新しい設定に当てる\n" +
         "・キャンセル：未保存の変更を捨てて、新しい設定を表示する",
     );
-    S.draft = keep ? rebaseModelDraft(prev.models, body.models, S.draft) : consoleSelection(body.models);
+  }
+  for (const sc of MODEL_SCOPES) {
+    // 未保存の変更がある区分は乗せ直す（捨てるを選んだときの、ほかの管理者が変えた区分は新しい設定のまま）。基準が同じ区分は、カタログが変わった分だけ合わせて残す
+    if (pendingBy[sc.key] > 0 && (keep || !conflicts.includes(sc))) {
+      next[sc.key] = rebaseModelDraft(prev.models, body.models, prevDrafts[sc.key], sc.key);
+    }
+  }
+  S.drafts = next;
+  S.resetNull = Object.fromEntries(carry.keep.map((key) => [key, true]));
+  if (carry.lost.length) {
+    // 消した区分は、下書きも基準（読み直した値）に戻してある。表示と合わせて、閉じるまで残す警告で知らせる
+    notify(`${carry.lost.map(scopeLabel).join("・")}の一覧がほかで変わったため、「制限なしに戻す」は取り消されました。表示は最新の設定に戻しています。もう一度押してから保存してください。`, "warn");
   }
   S.modelsStatus = "ok";
   S.modelsError = "";
@@ -3041,12 +3079,15 @@ function limitsBox() {
     updated ? el("span", { className: "small muted num", text: `最終変更 ${formatShortDateTime(updated)}` }) : null,
     () => {
       const row = S.info?.settings ?? {};
+      // 015 より前のサーバー（設定の行に新しい列が無い）では、1 回の生成の上限の欄を出さない
+      const limits = availableLimits(row);
       return [
-        el("div", {}, ...SETTING_LIMITS.map((spec) => limitRow(spec, row[spec.key] ?? null))),
+        el("div", {}, ...limits.map((spec) => limitRow(spec, row[spec.key] ?? null))),
         el("p", {
           className: "hint",
           text: "「既定」はサーバーの環境変数の値です（その数値はこのコンソールからは見えません）。" +
-            "「既定に戻す」は DB の値を消して、環境変数の値に戻します。変更は次の生成からすぐに効きます。",
+            "「既定に戻す」は DB の値を消して、環境変数の値に戻します。変更は次の生成からすぐに効きます。" +
+            (limits.some((l) => l.nullText) ? "「1 回の生成の上限」だけは環境変数の既定がなく、空欄は「上限なし」です。" : ""),
         }),
       ];
     },
@@ -3054,12 +3095,12 @@ function limitsBox() {
 }
 
 function limitRow(spec, current) {
-  const src = settingSource(current);
+  const src = settingSource(current, spec.key);
   const input = textInput({
     id: `f-${++fieldSeq}`,
     inputmode: spec.integer ? "numeric" : "decimal",
     className: "input num",
-    placeholder: current === null ? (spec.usd ? `例：${spec.min * 10}` : "例：200") : String(current),
+    placeholder: current === null ? (spec.usd ? `例：${spec.min * 10}` : spec.credits ? "例：1,500" : "例：200") : String(current),
   });
   const save = el("button", {
     type: "button",
@@ -3086,8 +3127,8 @@ function limitRow(spec, current) {
       el("button", {
         type: "button",
         className: "link-btn reset",
-        text: current === null ? "既定のまま" : "既定に戻す",
-        "aria-label": `${spec.label}を既定に戻す`,
+        text: current === null ? (spec.nullText ? `${spec.nullText}のまま` : "既定のまま") : (spec.resetLabel ?? "既定に戻す"),
+        "aria-label": `${spec.label}を${spec.resetLabel ?? "既定に戻す"}`,
         disabled: current === null,
         onclick: () => resetLimit(spec, current),
       }),
@@ -3110,7 +3151,12 @@ async function saveLimit(spec, text, current) {
   // 全体の額（常に）と 1 人の回数（下げるとき）は、生成を止めうるので確認する。すぐに止まる人がいれば警告を添える
   const check = limitChangeCheck(spec.key, current, r.value, state.settings.info);
   if (check.confirm) {
-    const lines = [`${spec.label}を ${formatSettingValue(spec.key, current)} → ${to} にしますか？`, ...check.warnings.map((w) => `注意：${w}`), "（次の生成から、すぐに効きます）"];
+    const lines = [
+      `${spec.label}を ${formatSettingValue(spec.key, current)} → ${to} にしますか？`,
+      ...(check.note ? [check.note] : []),
+      ...check.warnings.map((w) => `注意：${w}`),
+      "（次の生成から、すぐに効きます）",
+    ];
     if (!confirm(lines.join("\n"))) return;
   }
   await updateSettings({ [spec.key]: r.value }, `${spec.label}を ${to} にしました。`);
@@ -3119,6 +3165,12 @@ async function saveLimit(spec, text, current) {
 async function resetLimit(spec, current) {
   clearNotice();
   // 既定の数値はコンソールから見えない（今より下がるかもしれない）ので、どの項目も確認する
+  if (spec.nullText) {
+    // 環境変数の既定が無い項目（null は「上限なし」）
+    if (!confirm(`${spec.label}を「${spec.nullText}」に戻しますか？\n今の値：${formatSettingValue(spec.key, current)}\n（次の生成から、すぐに効きます）`)) return;
+    await updateSettings({ [spec.key]: null }, `${spec.label}を「${spec.nullText}」に戻しました。`);
+    return;
+  }
   if (!confirm(`${spec.label}を既定（サーバーの環境変数の値）に戻しますか？\n今の値：${formatSettingValue(spec.key, current)}\n（既定の数値はこのコンソールからは見えません）`)) return;
   await updateSettings({ [spec.key]: null }, `${spec.label}を既定に戻しました。`);
 }
@@ -3130,53 +3182,158 @@ async function updateSettings(changes, doneMessage) {
   await loadSettingsAll();
 }
 
-/** モデルの面だけを描き直す（オン・オフのたびに。押したスイッチにフォーカスを戻す） */
+/** モデルの面だけを描き直す（オン・オフのたびに。押したスイッチ・タブにフォーカスを戻す） */
 function renderModelsBox() {
   const host = $("settings-models");
   const focused = document.activeElement?.closest?.("#settings-models") ? document.activeElement.dataset?.focusKey : null;
   host.replaceChildren(modelsBox());
-  if (focused) [...host.querySelectorAll("input[data-focus-key]")].find((n) => n.dataset.focusKey === focused)?.focus();
+  if (focused) [...host.querySelectorAll("[data-focus-key]")].find((n) => n.dataset.focusKey === focused)?.focus();
+}
+
+/** 区分のタブを出すか（古い admin-api・古い設定の行のときは出さず、全体だけ） */
+function rolesOn() {
+  const S = state.settings;
+  return rolesAvailable(S.models, S.info?.settings);
+}
+
+/** いま開いているタブ（区分のタブが無いときは全体） */
+function currentScope() {
+  return rolesOn() ? state.settings.scope : "all";
+}
+
+function scopeLabel(key) {
+  return MODEL_SCOPES.find((s) => s.key === key)?.label ?? key;
+}
+
+function modelTabs(plan) {
+  const S = state.settings;
+  const scope = currentScope();
+  const buttons = MODEL_SCOPES.map((sc, i) => {
+    const n = plan.counts[sc.key];
+    return el(
+      "button",
+      {
+        type: "button",
+        role: "tab",
+        id: `model-tab-${sc.key}`,
+        "aria-selected": String(sc.key === scope),
+        "aria-controls": "model-panel",
+        tabindex: sc.key === scope ? "0" : "-1",
+        "data-focus-key": `tab:${sc.key}`,
+        onclick: () => {
+          S.scope = sc.key;
+          renderModelsBox();
+        },
+        onkeydown: (e) => {
+          const to = { ArrowRight: i + 1, ArrowLeft: i - 1, Home: 0, End: MODEL_SCOPES.length - 1 }[e.key];
+          if (to === undefined) return;
+          e.preventDefault();
+          S.scope = MODEL_SCOPES[(to + MODEL_SCOPES.length) % MODEL_SCOPES.length].key;
+          renderModelsBox();
+          $("settings-models").querySelector(`#model-tab-${S.scope}`)?.focus();
+        },
+      },
+      sc.label,
+      n > 0 ? el("span", { className: "tab-count num", text: `${n}`, "aria-label": `（未保存 ${n} 件）` }) : null,
+    );
+  });
+  return el("div", { className: "seg model-tabs", role: "tablist", "aria-label": "モデルの設定の対象" }, ...buttons);
 }
 
 function modelsBox() {
   const S = state.settings;
   const list = S.models?.models ?? [];
   const modes = catalogModes(list);
-  const usable = S.draft ? modes.filter(({ model, mode }) => mode.env_allowed && model.provider_available && S.draft.has(mode.model_id)).length : 0;
+  const roles = rolesOn();
+  const scope = currentScope();
+  const sLabel = scopeLabel(scope);
+  const drafts = S.drafts ? effectiveDrafts(S.models, S.drafts, S.resetNull) : null;
+  const usable = drafts ? scopeUsable(list, scope, drafts) : 0;
   return settingsBox(
     "models-h",
     "モデルのオン・オフ",
     S.modelsStatus,
     S.modelsError,
-    el("span", { className: "small muted num", text: `使える ${usable} / ${modes.length}` }),
+    el("span", { className: "small muted num", text: `${scope === "all" ? "使える" : `${sLabel}が使える`} ${usable} / ${modes.length}` }),
     () => {
-      const before = consoleSelection(list);
-      const changes = modelChanges(list, before, S.draft);
-      const unknown = S.models.unknown_console_models ?? [];
-      const out = [
-        el("p", {
-          className: "hint",
-          text: "サーバーの環境変数で許可されたものだけをオンにできます（「サーバー側で無効」は押せません）。保存するまで反映されません。",
-        }),
-      ];
-      if (S.models.console_enabled_models === null) {
-        out.push(el("p", { className: "note-box", text: "今は制限なしです（サーバーで許可されたモデルがすべてオン）。" }));
+      const plan = buildModelSave(S.models, drafts, roles, S.resetNull);
+      const draft = drafts[scope];
+      const out = [];
+      if (roles) out.push(modelTabs(plan));
+      const panel = [];
+      if (scope === "all") {
+        panel.push(
+          el("p", {
+            className: "hint",
+            text: "サーバーの環境変数で許可されたものだけをオンにできます（「サーバー側で無効」は押せません）。保存するまで反映されません。",
+          }),
+        );
+        if (S.models.console_enabled_models === null) {
+          panel.push(el("p", { className: "note-box", text: "今は制限なしです（サーバーで許可されたモデルがすべてオン）。" }));
+        }
+        const notice = roleListNotice(S.models);
+        if (notice) panel.push(el("p", { className: "note-box", text: notice }));
+      } else {
+        panel.push(
+          el("p", {
+            className: "hint",
+            text: `${sLabel}が使えるモデルを選びます。全体でオフのモデルは、ここでは変えられません。管理者には区分の制限はかかりません（全体の設定に従います）。`,
+          }),
+        );
+        if (scopeList(S.models, scope) === null) {
+          panel.push(el("p", { className: "note-box", text: `今は制限なしです（全体でオンのモデルは、これから足すモデルも含めて、${sLabel}もすべて使えます）。` }));
+        }
+        // 保存されている一覧が明示（null でない）のときは、全部オンに見えても出す（古い ID を外すだけの保存は明示の一覧のまま残るため）。
+        // 一覧が null で未保存のオフがあるだけなら「元に戻す」で足りる
+        if (Array.isArray(scopeList(S.models, scope)) && !S.resetNull[scope]) {
+          panel.push(
+            el("p", { className: "small muted", text: "今は一覧で決めています。新しく足したモデルは自動では使えるようになりません。" }),
+            el("button", {
+              type: "button",
+              className: "btn restore-null",
+              text: "制限なしに戻す",
+              onclick: () => {
+                if (!confirm(`${sLabel}の制限をなくしますか？\n全体でオンのモデルは、これから足すモデルも含めて、${sLabel}もすべて使えるようになります。\n（保存するまで反映されません）`)) return;
+                // 印だけを持つ。この区分の下書きは、表示・件数・確認の文・保存のたびに、今の全体の下書きから作る（effectiveDrafts）
+                S.resetNull[scope] = true;
+                renderModelsBox();
+              },
+            }),
+          );
+        }
       }
-      if (unknown.length) {
-        out.push(warnBox(`今のカタログに無いモデルの ID が ${unknown.length} 件、設定に残っています（効果はありません。次に保存すると外します）：${listText(unknown, 6)}`));
+      // 今のカタログに無いモデルの ID（どの区分の一覧にも）。次に保存すると外す
+      let unknownCount = 0;
+      for (const sc of activeScopes(roles)) {
+        const unknown = unknownList(S.models, sc.key);
+        unknownCount += unknown.length;
+        if (unknown.length) {
+          const where = sc.key === "all" ? "設定" : `${sc.label}の一覧`;
+          panel.push(warnBox(`今のカタログに無いモデルの ID が ${unknown.length} 件、${where}に残っています（効果はありません。次に保存すると外します）：${listText(unknown, 6)}`));
+        }
       }
-      if (!list.length) out.push(el("p", { className: "muted", text: "モデルがありません。" }));
+      if (!list.length) panel.push(el("p", { className: "muted", text: "モデルがありません。" }));
       for (const g of groupModels(list)) {
-        out.push(
+        panel.push(
           el(
             "div",
             { className: "model-group" },
             el("h4", { className: "group-title", text: `${g.label}（${g.models.length}）` }),
-            el("div", { className: "menu" }, ...g.models.map(modelItem)),
+            el("div", { className: "menu" }, ...g.models.map((m) => modelItem(m, scope))),
           ),
         );
       }
-      const dirty = changes.count > 0;
+      out.push(
+        roles
+          ? el("div", { id: "model-panel", className: "model-panel", role: "tabpanel", "aria-labelledby": `model-tab-${scope}` }, ...panel)
+          : el("div", { className: "model-panel" }, ...panel),
+      );
+      const dirty = plan.count > 0;
+      const on = plan.entries.reduce((n, e) => n + e.on.length, 0);
+      const off = plan.entries.reduce((n, e) => n + e.off.length, 0);
+      const detail = roles
+        ? `全体 ${plan.counts.all}・受講者 ${plan.counts.student}・AIKENメンバー ${plan.counts.member}`
+        : `オン ${on}・オフ ${off}`;
       out.push(
         el(
           "div",
@@ -3184,7 +3341,7 @@ function modelsBox() {
           el("span", {
             className: `save-state num ${dirty ? "dirty" : ""}`,
             role: "status",
-            text: dirty ? `未保存の変更 ${changes.count} 件（オン ${changes.on.length}・オフ ${changes.off.length}）` : "未保存の変更はありません",
+            text: dirty ? `未保存の変更 ${plan.count} 件（${detail}）` : "未保存の変更はありません",
           }),
           el("button", {
             type: "button",
@@ -3192,7 +3349,8 @@ function modelsBox() {
             text: "元に戻す",
             disabled: !dirty,
             onclick: () => {
-              S.draft = new Set(before);
+              S.drafts = Object.fromEntries(MODEL_SCOPES.map((sc) => [sc.key, scopeSelection(list, sc.key)]));
+              S.resetNull = {};
               renderModelsBox();
             },
           }),
@@ -3200,7 +3358,7 @@ function modelsBox() {
             type: "button",
             className: "btn primary",
             text: "モデルの設定を保存",
-            disabled: !dirty && !unknown.length,
+            disabled: !dirty && !unknownCount,
             onclick: saveModels,
           }),
         ),
@@ -3212,28 +3370,42 @@ function modelsBox() {
 
 const LOCKED_TITLE = "サーバーの環境変数（ENABLED_PROVIDER_MODELS）で許可されていないため、ここでは変えられません";
 
+/** 押せない理由（title の文）。kind は scopeModeStatus の kind */
+function lockedTitle(kind, scope) {
+  if (kind === "global_off") return `全体でオフのため、${scopeLabel(scope)}のタブでは変えられません。全体のタブでオンにしてください`;
+  if (kind === "server_off") return LOCKED_TITLE;
+  return "サーバー側で無効、または全体でオフのため、ここでは変えられません";
+}
+
+/** 開閉の領域の id を重ねないための連番 */
+let modelPanelSeq = 0;
+
 /** モデル 1 つ：見出しの行に一括スイッチ、その下に字下げしてモードごとのスイッチ（モードが 1 つだけなら一括スイッチだけ） */
-function modelItem(m) {
+function modelItem(m, scope) {
   const S = state.settings;
+  const drafts = effectiveDrafts(S.models, S.drafts, S.resetNull);
+  const draft = drafts[scope];
   const modes = m.modes ?? [];
-  const lockedFn = (mode) => modeStatus(m, mode, false).locked;
-  const ms = masterState(modes, S.draft, lockedFn);
+  const statusOf = (mode, on) => scopeModeStatus(m, mode, on, scope, drafts.all);
+  const lockedFn = (mode) => statusOf(mode, false).locked;
+  const ms = masterState(modes, draft, lockedFn);
   const free = modes.filter((mode) => !lockedFn(mode));
   const single = modes.length === 1 ? modes[0] : null;
   const sub = [single?.label, m.provider, m.price?.text, single?.model_id].filter(Boolean).join(" · ");
+  const lockKinds = [...new Set(modes.map((mode) => statusOf(mode, false)).filter((st) => st.locked).map((st) => st.kind))];
 
   let stateKind;
   let stateText;
   if (single) {
-    const st = modeStatus(m, single, S.draft.has(single.model_id));
+    const st = statusOf(single, draft.has(single.model_id));
     stateKind = st.kind;
     stateText = st.text;
   } else if (modes.length === 0) {
     stateKind = "server_off";
     stateText = "経路なし";
   } else if (ms === "locked") {
-    stateKind = "server_off";
-    stateText = "サーバー側で無効";
+    stateKind = lockKinds.length === 1 ? lockKinds[0] : "server_off";
+    stateText = lockKinds.length === 1 ? (lockKinds[0] === "global_off" ? "全体でオフ" : "サーバー側で無効") : "変更できません";
   } else if (ms === "mixed") {
     stateKind = "mixed";
     stateText = "一部";
@@ -3244,12 +3416,12 @@ function modelItem(m) {
     stateKind = "off";
     stateText = "オフ";
   }
-  const changed = free.some((mode) => S.draft.has(mode.model_id) !== !!mode.console_enabled);
+  const changed = free.some((mode) => draft.has(mode.model_id) !== modeBaseOn(mode, scope));
 
   const input = el("input", {
     type: "checkbox",
     role: "switch",
-    checked: ms === "on" || (ms === "locked" && modes.some((mode) => S.draft.has(mode.model_id))),
+    checked: ms === "on" || (ms === "locked" && modes.some((mode) => draft.has(mode.model_id))),
     disabled: ms === "locked",
     "aria-label": single ? `${m.label}：${single.label}` : `${m.label}：まとめて`,
   });
@@ -3257,35 +3429,84 @@ function modelItem(m) {
   input.setAttribute("aria-checked", ms === "mixed" ? "mixed" : String(input.checked));
   input.dataset.focusKey = `master:${m.key ?? m.label}`;
   input.addEventListener("change", () => {
-    S.draft = applyMaster(modes, S.draft, lockedFn);
+    S.drafts[scope] = applyMaster(modes, draft, lockedFn); // draft は印のある区分では「今の形」。ここで下書きとして持ち、印を外す
+    S.resetNull[scope] = false;
     renderModelsBox();
   });
 
   let title = null;
-  if (ms === "locked") title = modes.length ? LOCKED_TITLE : "振り分け先の経路が無いため、切り替えられません";
-  else if (free.length < modes.length) title = "サーバー側で無効のモードは変わりません";
+  if (ms === "locked") title = modes.length ? lockedTitle(lockKinds.length === 1 ? lockKinds[0] : "", scope) : "振り分け先の経路が無いため、切り替えられません";
+  else if (free.length < modes.length) title = "押せないモード（サーバー側で無効・全体でオフ）は変わりません";
 
-  const head = el(
-    "label",
-    { className: `toggle master ${ms === "locked" ? "locked" : ""}`, title },
-    el("span", { className: "tlabel" }, el("span", { className: "model-name", text: m.label }), sub ? el("span", { className: "small muted ellipsis", text: sub }) : null),
-    el("span", { className: `tstate ${stateKind}` }, stateText, changed ? el("span", { className: "changed", text: "（未保存）" }) : null),
-    input,
+  // 一部だけオンのとき、閉じていても分かるよう「2 つのうち 1 つ」を添える
+  const onCount = free.filter((mode) => draft.has(mode.model_id)).length;
+  const multi = modes.length > 1;
+  const tstate = el(
+    "span",
+    { className: `tstate mstate ${multi ? "clickable" : ""} ${stateKind}`, title },
+    stateText,
+    changed ? el("span", { className: "changed", text: "（未保存）" }) : null,
+    ms === "mixed" ? el("span", { className: "tcount small muted", text: `${free.length} つのうち ${onCount} つ` }) : null,
   );
+  const nameBlock = el("span", { className: "tlabel" }, el("span", { className: "model-name", text: m.label }), sub ? el("span", { className: "small muted ellipsis", text: sub }) : null);
+  // スイッチを切り替えるのは、スイッチそのものを押したときだけ（label の範囲はスイッチだけ。名前は aria-label で付けている）
+  const switchLabel = (extra = "") => el("label", { className: `toggle master switch-only ${extra} ${ms === "locked" ? "locked" : ""}`, title }, input);
+
+  let row;
+  let wrap = null;
+  if (!multi) {
+    // 切り替えが 1 つだけ（または無い）モデル：開閉のボタンは出さず、スイッチ 1 つだけ（名前・状態の文字を押しても何も起きない）。右端の位置は開閉のボタンと揃える
+    row = el("div", { className: "model-row" }, el("div", { className: "model-main" }, nameBlock), tstate, switchLabel(), el("span", { className: "chev-space", "aria-hidden": "true" }));
+  } else {
+    // 普段は名前と全体のスイッチだけ。右端のボタン・名前・状態の文字を押すと、モードごとのスイッチが下へ出る（スイッチを押しても開閉しない）
+    const key = m.key ?? m.label;
+    const panelId = `model-modes-${++modelPanelSeq}`;
+    const open = S.openModels.has(key);
+    const inner = el("div", { className: "modes", id: panelId, inert: !open }, el("div", { className: "modes-in" }, ...modes.map((mode) => modeToggle(m, mode, scope))));
+    wrap = el("div", { className: `modes-wrap ${open ? "open" : ""}` }, inner);
+    const chev = el(
+      "button",
+      {
+        type: "button",
+        className: "chev-btn",
+        "aria-expanded": String(open),
+        "aria-controls": panelId,
+        "aria-label": `${m.label}：モードごとの設定`,
+        "data-focus-key": `chev:${key}`,
+      },
+      icon("chevron", 16, 2.2),
+    );
+    // 開閉は描き直さずにその場で切り替える（動きを付けるため）。開いた状態は S.openModels に覚える
+    const toggleOpen = () => {
+      const now = !S.openModels.has(key);
+      if (now) S.openModels.add(key);
+      else S.openModels.delete(key);
+      wrap.classList.toggle("open", now);
+      chev.setAttribute("aria-expanded", String(now));
+      if (now) inner.removeAttribute("inert");
+      else inner.setAttribute("inert", "");
+    };
+    chev.addEventListener("click", toggleOpen);
+    tstate.addEventListener("click", toggleOpen);
+    const main = el("div", { className: "model-main clickable", onclick: toggleOpen }, nameBlock);
+    row = el("div", { className: "model-row" }, main, tstate, switchLabel("sw"), chev);
+  }
   return el(
     "div",
     { className: "model" },
-    head,
+    row,
     m.provider_available ? null : el("p", { className: "small warn-text", text: "提供元が使えません（API キーが未設定など）。オンにしても生成できません。" }),
     modes.length ? null : el("p", { className: "small muted", text: "振り分け先の経路が無いため使えません。" }),
-    modes.length > 1 ? el("div", { className: "modes" }, ...modes.map((mode) => modeToggle(m, mode))) : null,
+    wrap,
   );
 }
 
-function modeToggle(m, mode) {
+function modeToggle(m, mode, scope) {
   const S = state.settings;
-  const on = S.draft.has(mode.model_id);
-  const st = modeStatus(m, mode, on);
+  const drafts = effectiveDrafts(S.models, S.drafts, S.resetNull);
+  const draft = drafts[scope];
+  const on = draft.has(mode.model_id);
+  const st = scopeModeStatus(m, mode, on, scope, drafts.all);
   const input = el("input", {
     type: "checkbox",
     role: "switch",
@@ -3295,18 +3516,22 @@ function modeToggle(m, mode) {
   });
   input.dataset.focusKey = mode.model_id;
   input.addEventListener("change", () => {
-    if (input.checked) S.draft.add(mode.model_id);
-    else S.draft.delete(mode.model_id);
+    // 印のある区分でも、押した時点の見えている形から始める（派生の下書きを持ち替えて、印を外す）
+    const next = new Set(draft);
+    if (input.checked) next.add(mode.model_id);
+    else next.delete(mode.model_id);
+    S.drafts[scope] = next;
+    S.resetNull[scope] = false;
     renderModelsBox();
   });
   return el(
     "label",
     {
       className: `toggle sub ${st.locked ? "locked" : ""}`,
-      title: st.locked ? LOCKED_TITLE : null,
+      title: st.locked ? lockedTitle(st.kind, scope) : null,
     },
     el("span", { className: "tlabel" }, el("span", { className: "mode-name", text: mode.label }), el("span", { className: "small muted ellipsis", text: mode.model_id })),
-    el("span", { className: `tstate ${st.kind}` }, st.text, on !== !!mode.console_enabled && !st.locked ? el("span", { className: "changed", text: "（未保存）" }) : null),
+    el("span", { className: `tstate ${st.kind}` }, st.text, on !== modeBaseOn(mode, scope) && !st.locked ? el("span", { className: "changed", text: "（未保存）" }) : null),
     input,
   );
 }
@@ -3314,38 +3539,34 @@ function modeToggle(m, mode) {
 async function saveModels() {
   clearNotice();
   const S = state.settings;
-  const list = S.models.models;
-  const labelOf = modelLabeler(list);
-  const changes = modelChanges(list, consoleSelection(list), S.draft);
-  const payload = enabledModelsPayload(list, S.draft);
-  const unknown = S.models.unknown_console_models ?? [];
-  const base = S.models.console_enabled_models ?? null;
-  const lines = ["モデルの設定を保存しますか？"];
-  if (changes.on.length) lines.push(`・オンにする：${listText(changes.on.map(labelOf), 6)}`);
-  if (changes.off.length) lines.push(`・オフにする：${listText(changes.off.map(labelOf), 6)}`);
-  if (unknown.length) lines.push(`・今のカタログに無い ID ${unknown.length} 件を外します。`);
-  if (payload === null) lines.push("・すべてオンのため「制限なし」（サーバーで許可されたモデルすべて）として保存します。");
-  lines.push("（次の生成から、すぐに効きます）");
-  if (!confirm(lines.join("\n"))) return;
-  if (Array.isArray(payload) && payload.length === 0 && !confirm("すべてのモデルがオフになり、誰も生成できなくなります。本当に保存しますか？")) return;
-  // 保存の直前に読み直す（確認のダイアログの間に、ほかの管理者が変えていないか）。食い違えば保存しない
+  const roles = rolesOn();
+  const plan = buildModelSave(S.models, effectiveDrafts(S.models, S.drafts, S.resetNull), roles, S.resetNull);
+  if (!plan.entries.length) return;
+  const labelOf = modelLabeler(S.models.models);
+  if (!confirm(saveConfirmLines(plan, labelOf).join("\n"))) return;
+  for (const warning of emptyScopeWarnings(plan)) if (!confirm(warning)) return;
+  // 保存の直前に読み直す（確認のダイアログの間に、ほかの管理者が変えていないか）。3 つの一覧のどれかが変わっていたら保存しない
   const fresh = await supabase.rpc("admin_get_settings");
   if (fresh.error) {
     notify(`保存できませんでした。${explainError(fresh.error)}`, "error");
     return;
   }
-  if (!sameIdSet(fresh.data?.settings?.enabled_models ?? null, base)) {
-    notify("読み込んだあとに、ほかの管理者がモデルの設定を変えたため、保存しませんでした。最新の設定を読み込み直しました。", "error");
+  const drift = changedScopes(fresh.data?.settings, S.models, roles);
+  if (drift.length) {
+    notify(`読み込んだあとに、ほかの管理者がモデルの設定（${drift.join("・")}）を変えたため、保存しませんでした。最新の設定を読み込み直しました。`, "error");
     await loadSettingsAll();
     return;
   }
-  const { error } = await supabase.rpc("admin_update_settings", { p_changes: { enabled_models: payload } });
+  const { error } = await supabase.rpc("admin_update_settings", { p_changes: plan.changes });
   if (error) {
     notify(`保存できませんでした。${explainError(error)}`, "error");
     await loadSettingsAll();
     return;
   }
-  notify(`モデルの設定を保存しました（オン ${changes.on.length} 件・オフ ${changes.off.length} 件）。`);
+  const on = plan.entries.reduce((n, e) => n + e.on.length, 0);
+  const off = plan.entries.reduce((n, e) => n + e.off.length, 0);
+  const where = roles ? `${plan.entries.map((e) => e.label).join("・")}：` : "";
+  notify(`モデルの設定を保存しました（${where}オン ${on} 件・オフ ${off} 件）。`);
   await loadSettingsAll({ resetDraft: true });
 }
 

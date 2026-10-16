@@ -9,6 +9,8 @@ import {
   LEGACY_STORAGE_PREFIX,
   MYPAGE_ACTIVITY_KEY,
   MYPAGE_IDLE_LIMIT_MS,
+  MYPAGE_RELOAD_GRACE_MS,
+  MYPAGE_RELOAD_HINT_KEY,
   MYPAGE_STORAGE_KEY,
   storedAccessToken,
 } from "./auth-storage.js";
@@ -16,7 +18,11 @@ import {
   clearStaleSession,
   creditsView,
   decideApiOutcome,
+  decideOnOpen,
   groupModels,
+  hadActiveSession,
+  MSG_CODE_FAILED,
+  parseReloadHint,
   priceText,
   roleBadgeClass,
 } from "./mypage-lib.js";
@@ -39,26 +45,60 @@ function show(id) {
   for (const s of SECTIONS) $(s).hidden = s !== id;
 }
 
-// 読み込めない（通信の失敗・integrity の不一致）ときは先へ進まない
+// 研修用の Mac にログインを残さない：保存はこのタブの間だけ（sessionStorage）、許可の画面・管理コンソールとは別の鍵。
+// 以前の版が localStorage に残したセッションは、開いた時点で消す
+const sessionStore = browserStorage("session");
+clearStoredSession(browserStorage("local"), LEGACY_STORAGE_PREFIX);
+
+/** この端末のセッションだけをサーバーで無効にする（keepalive。失敗しても先へ進む。global だと本人の ChatGPT・Codex の接続まで切れる） */
+function sendLocalLogout(token) {
+  if (!token) return;
+  try {
+    fetch(`${SUPABASE_URL}/auth/v1/logout?scope=local`, {
+      method: "POST",
+      keepalive: true,
+      headers: { apikey: SUPABASE_PUBLISHABLE_KEY, Authorization: `Bearer ${token}` },
+    }).catch(() => {});
+  } catch {
+    // 送れなくても、タブの保存先は呼び出し側で消す
+  }
+}
+
+// ページを開いた時点：supabase-js が読めるかの確認より前に（fetch と storage だけで）行う。読めなくても、前の人のログインは必ず消す。
+//  1. 保存先に残っているセッションがあれば、そのトークンでこの端末だけのログアウトを送り（?code 付きのときも同じ）、
+//     aiken-mypage-auth で始まる項目を消す（?code 付きのときは、Google の往復に要る code verifier と操作時刻だけ残す）
+//  2. 再読み込みの手がかり（pagehide で書く。トークンを含まない）と開き方から、このあとどうするかを決める（decideOnOpen）：
+//     "code"：Google から戻った／"relogin"：再読み込みなので Google のログインを自動でやり直す／"login"：ログイン前の画面
+//  3. 手がかりは判定のあとに必ず消す（自動のやり直しを繰り返さない）
+const openDecision = (() => {
+  const hasCode = !!new URLSearchParams(location.search).get("code");
+  sendLocalLogout(storedAccessToken(sessionStore, MYPAGE_STORAGE_KEY));
+  clearStaleSession(sessionStore, MYPAGE_STORAGE_KEY, MYPAGE_ACTIVITY_KEY, hasCode);
+  let raw = null;
+  try {
+    raw = sessionStore?.getItem(MYPAGE_RELOAD_HINT_KEY) ?? null;
+    sessionStore?.removeItem(MYPAGE_RELOAD_HINT_KEY);
+  } catch {
+    // 読めなければ、手がかりが無い扱い（ログイン前の画面）
+  }
+  const nav = typeof performance?.getEntriesByType === "function"
+    ? performance.getEntriesByType("navigation")[0]
+    : null;
+  return decideOnOpen({
+    hasCode,
+    navType: nav?.type ?? null,
+    hint: parseReloadHint(raw),
+    now: Date.now(),
+    graceMs: MYPAGE_RELOAD_GRACE_MS,
+  });
+})();
+
+// 読み込めない（通信の失敗・integrity の不一致）ときは先へ進まない（自動のログインもしない）
 if (typeof window.supabase?.createClient !== "function") {
   $("status").textContent = "画面の部品を読み込めませんでした。通信状態を確認して、ページを開き直してください。";
   throw new Error("supabase-js を読み込めませんでした");
 }
 
-// 研修用の Mac にログインを残さない：保存はこのタブの間だけ（sessionStorage）、許可の画面・管理コンソールとは別の鍵。
-// 画面を離れるときにも消す（下の pagehide）。
-// 以前の版が localStorage に残したセッションは、開いた時点で消す
-const sessionStore = browserStorage("session");
-clearStoredSession(browserStorage("local"), LEGACY_STORAGE_PREFIX);
-// ページを開いた時点で保存先に残っているログインは、Google から ?code 付きで戻ったとき以外は使わない（すべて消す）。
-// 強制終了・クラッシュで pagehide が走らなかったあとのセッション復元で、前の人のログインが戻るのを防ぐ。
-// ?code 付きのときは、PKCE の code verifier と signIn で書いた操作時刻だけを残し、保存済みのセッションは消す（createClient の前に行う）
-clearStaleSession(
-  sessionStore,
-  MYPAGE_STORAGE_KEY,
-  MYPAGE_ACTIVITY_KEY,
-  !!new URLSearchParams(location.search).get("code"),
-);
 const supabase = window.supabase.createClient(SUPABASE_URL, SUPABASE_PUBLISHABLE_KEY, {
   auth: {
     flowType: "pkce",
@@ -339,7 +379,39 @@ function renderModels(models) {
 
 // ---- 開始 ----
 
+/**
+ * 再読み込みのあとの自動のログインのやり直し（openDecision が "relogin" のときに 1 回だけ呼ぶ）。
+ * Google のログインを、アカウントの選択なしで始める（Google にログインしたままのブラウザなら、そのまま戻ってくる）。
+ * 失敗したときはログイン前の画面にして、自動ではやり直さない。Google の画面で取り消して戻ったときは、手がかりが
+ * 開いた時点で消えているので自動のやり直しにならない
+ */
+async function autoRelogin() {
+  $("status").replaceChildren(el("p", { className: "muted", text: "ログインし直しています…" }));
+  show("status");
+  // Google のログインへ移る：戻ったときに要る code verifier と時刻の記録を残す（pagehide で消さない）
+  leavingForLogin = true;
+  markActive(true);
+  try {
+    const { error } = await supabase.auth.signInWithOAuth({
+      provider: "google",
+      options: { redirectTo: returnUrl() },
+    });
+    if (!error) return;
+  } catch {
+    // 下で、ログイン前の画面にする
+  }
+  leavingForLogin = false;
+  clearStoredSession(sessionStore, MYPAGE_STORAGE_KEY);
+  showLoginNote("ログインし直せませんでした。もう一度ログインしてください。");
+  show("login");
+}
+
 async function main() {
+  // 再読み込みのあと：Google のログインを自動でやり直す（1 回だけ。失敗・取り消しでは繰り返さない）
+  if (openDecision === "relogin") {
+    await autoRelogin();
+    return;
+  }
   const hash = new URLSearchParams(location.hash.replace(/^#/, ""));
   const params = new URLSearchParams(location.search);
   if (params.get("error_description") || hash.get("error_description")) {
@@ -351,6 +423,15 @@ async function main() {
   }
 
   const { data: { session }, error } = await supabase.auth.getSession();
+  // Google から ?code 付きで戻ったのに、ログインを完了できなかった（code の交換の失敗）：URL の code と code verifier を消して、
+  // ログイン前の画面に案内を 1 行出す。自動のログインはしない
+  if (openDecision === "code" && (error || !session)) {
+    history.replaceState(null, "", returnUrl());
+    clearStoredSession(sessionStore, MYPAGE_STORAGE_KEY);
+    showLoginNote(MSG_CODE_FAILED);
+    show("login");
+    return;
+  }
   if (error) {
     $("failed-message").textContent = "ログイン状態を確認できませんでした。もう一度試してください。";
     show("failed");
@@ -368,25 +449,24 @@ async function main() {
   await load();
 }
 
-// 画面を離れるとき（タブを閉じる・別のページへ移る）はログアウトする。ただし Google のログインへ移るときは除く。
+// 画面を離れるとき（再読み込み・タブを閉じる・別のページへ移る）はログアウトする。ただし Google のログインへ移るときは除く。
 // ブラウザの「閉じたタブを開き直す」・履歴・セッションの復元で sessionStorage が戻り、前の人のログインで開いてしまうのを防ぐ
 // （consent.html と同じ）。待てないので、サーバーへの取り消しは keepalive で送り、タブの保存先はその場で消す。
-// 画面の中身も消す（戻る・進むでキャッシュから表示されたときに、前の人のデータが見えないように）
+// 画面の中身も消す（戻る・進むでキャッシュから表示されたときに、前の人のデータが見えないように）。
+// そのうえで「再読み込みの手がかり」（離れた時刻と、離れる前にログインしていたか。トークンは含めない）を、セッションの鍵とは
+// 別の鍵に書く。再読み込みのとき、次に開いた時点（decideOnOpen）で Google のログインを自動でやり直すための合図
 window.addEventListener("pagehide", () => {
   if (leavingForLogin) return;
   stopIdleWatch();
   const token = storedAccessToken(sessionStore, MYPAGE_STORAGE_KEY);
-  if (token) {
-    try {
-      fetch(`${SUPABASE_URL}/auth/v1/logout?scope=local`, {
-        method: "POST",
-        keepalive: true,
-        headers: { apikey: SUPABASE_PUBLISHABLE_KEY, Authorization: `Bearer ${token}` },
-      }).catch(() => {});
-    } catch {
-      // 送れなくても、タブの保存先は下で消す
-    }
-  }
+  // 手がかりの hadSession は、30 分の時間切れになっていないときだけ true（消去の前に最後の操作の時刻を読む）
+  const hadSession = hadActiveSession({
+    token,
+    lastActive: lastActive(),
+    now: Date.now(),
+    limitMs: MYPAGE_IDLE_LIMIT_MS,
+  });
+  sendLocalLogout(token);
   try {
     // メモリの分が自動の更新で保存し直されないよう、更新も止める
     supabase.auth.stopAutoRefresh?.();
@@ -394,11 +474,26 @@ window.addEventListener("pagehide", () => {
     // 無視
   }
   clearStoredSession(sessionStore, MYPAGE_STORAGE_KEY);
-  hideContent("ログアウトしました。");
+  try {
+    sessionStore?.setItem(MYPAGE_RELOAD_HINT_KEY, JSON.stringify({ leftAt: Date.now(), hadSession }));
+  } catch {
+    // 書けなければ、次に開いたときは手がかりが無い扱い（ログイン前の画面）になる
+  }
+  hideContent("読み込み中…");
 });
-// 戻る・進むでキャッシュから表示されたとき（ログアウト済み）は、読み込み直してログイン前の表示に戻す
+// 戻る・進むでキャッシュ（bfcache）から表示されたとき（pagehide でログアウト済み）は、再読み込みではないので自動のログインはしない：
+// 手がかりを消して読み込み直し、ログイン前の画面にする
 window.addEventListener("pageshow", (e) => {
-  if (e.persisted) location.reload();
+  if (!e.persisted) return;
+  try {
+    sessionStore?.removeItem(MYPAGE_RELOAD_HINT_KEY);
+  } catch {
+    // 無視
+  }
+  sendLocalLogout(storedAccessToken(sessionStore, MYPAGE_STORAGE_KEY));
+  clearStoredSession(sessionStore, MYPAGE_STORAGE_KEY);
+  hideContent("ログアウトしました。");
+  location.reload();
 });
 
 $("login-btn").addEventListener("click", signIn);

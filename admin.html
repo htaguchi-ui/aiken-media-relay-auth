@@ -129,7 +129,7 @@
     min-height: 40px; border-radius: 9px; border: 0; background: transparent; color: var(--text-2);
     font-weight: 700; display: flex; align-items: center; justify-content: center; cursor: pointer; position: relative;
   }
-  .seg > button[aria-current="page"], .seg > label:has(input:checked) { background: var(--surface); color: var(--text); box-shadow: var(--shadow-seg); }
+  .seg > button[aria-current="page"], .seg > button[aria-selected="true"], .seg > label:has(input:checked) { background: var(--surface); color: var(--text); box-shadow: var(--shadow-seg); }
   .seg > label:has(input:focus-visible) { outline: 2px solid var(--accent); outline-offset: 1px; }
   /* 選択チップ（区分） */
   .choice { display: grid; grid-template-columns: repeat(3, minmax(0, 1fr)); gap: 8px; }
@@ -367,7 +367,7 @@
   .model-group + .model-group { margin-top: 6px; }
   .model { padding: 10px 16px 6px; }
   .model + .model { border-top: 1px solid var(--line-soft); }
-  .model-name { font-weight: 700; }
+  .model-name { font-weight: 700; overflow-wrap: anywhere; }
   /* モデルのオン・オフ：スイッチは 32×18（つまみ 14）。押せる範囲は行の label 全体（最小の高さ 36px） */
   .toggle { display: flex; align-items: center; gap: 10px; min-height: 36px; cursor: pointer; }
   .toggle.locked { cursor: not-allowed; }
@@ -379,14 +379,56 @@
   .toggle input:indeterminate::after { left: 8px; background: var(--accent); }
   .toggle input:disabled { opacity: 0.5; }
   .toggle .tlabel { flex: 1 1 auto; min-width: 0; display: flex; flex-direction: column; }
-  .toggle .tstate { flex: none; font-size: 12px; font-weight: 600; color: var(--muted); text-align: right; max-width: 50%; }
-  .toggle .tstate.on { color: var(--ok-fg); }
-  .toggle .tstate.mixed { color: var(--text-2); }
-  .toggle .tstate.provider_off { color: var(--warn-fg); }
-  .toggle .tstate.server_off { color: var(--faint); }
-  .toggle .changed { color: var(--low-text); font-weight: 700; }
+  .tstate { flex: none; font-size: 12px; font-weight: 600; color: var(--muted); text-align: right; max-width: 50%; }
+  .tstate.on { color: var(--ok-fg); }
+  .tstate.mixed { color: var(--text-2); }
+  .tstate.provider_off { color: var(--warn-fg); }
+  .tstate.server_off, .tstate.global_off { color: var(--faint); }
+  .tstate .changed, .toggle .changed { color: var(--low-text); font-weight: 700; }
   .toggle.master { min-height: 40px; }
-  .modes { margin: 0 0 4px 12px; padding-left: 12px; border-left: 2px solid var(--line-soft); }
+  .model-tabs { margin: 2px 0 10px; }
+  .model-tabs .tab-count { margin-left: 6px; padding: 0 7px; border-radius: 999px; background: var(--accent-soft); color: var(--accent-soft-text); font-size: 11px; line-height: 18px; }
+  .model-panel { display: flex; flex-direction: column; gap: 10px; min-width: 0; }
+  .restore-null { align-self: flex-start; }
+  /* モデルの行：名前（押すと開く）・全体のスイッチ・開閉のボタン。モードごとのスイッチは普段は隠し、開くと上から下へすっと出る */
+  .model-row { display: flex; align-items: center; gap: 8px; }
+  .model-row > .toggle.master { flex: none; }
+  .model-main { flex: 1 1 auto; min-width: 96px; min-height: 40px; display: flex; align-items: center; }
+  .model-main.clickable { min-width: 72px; }
+  /* 区分のタブ：文字を語の途中で割らない（狭い幅では文字と余白を小さくする） */
+  .model-tabs { grid-auto-columns: minmax(max-content, 1fr); }
+  .model-tabs > button { white-space: nowrap; padding: 0 6px; }
+  @media (max-width: 430px) { .model-tabs > button { font-size: 13px; padding: 0 4px; } }
+  @media (max-width: 359px) {
+    .model-tabs > button { font-size: 12px; padding: 0 3px; }
+    .model { padding-left: 12px; padding-right: 8px; }
+    .model-row { gap: 4px; }
+    .chev-btn, .chev-space { width: 28px; }
+    .toggle.switch-only { padding: 0 3px; }
+    .model-main, .model-main.clickable { min-width: 0; }
+    .model-row .tstate.mstate { white-space: normal; max-width: 42%; flex: 0 1 auto; min-width: 3.5em; }
+    .model-row .tstate.mstate.clickable:not(.provider_off):not(.server_off):not(.global_off) { white-space: normal; max-width: 42%; }
+  }
+  .model-main .tlabel { flex: 1 1 auto; min-width: 0; display: flex; flex-direction: column; }
+  /* 切り替えが 2 つ以上（押すと開閉する）の状態の文字は折り返さない。1 つのモデルは折り返してよい（名前の欄を 96px 以上に保つ） */
+  .tstate.mstate.clickable:not(.provider_off):not(.server_off):not(.global_off) { max-width: none; white-space: nowrap; }
+  .tstate.mstate:not(.clickable), .tstate.mstate.provider_off, .tstate.mstate.server_off, .tstate.mstate.global_off { flex: 0 1 auto; min-width: 4.5em; }
+  .tstate.mstate.clickable, .model-main.clickable { cursor: pointer; }
+  .toggle.switch-only { padding: 0 6px; }
+  .chev-btn, .chev-space { flex: none; width: 32px; height: 36px; }
+  .chev-btn { display: inline-flex; align-items: center; justify-content: center; border: 0; border-radius: 8px; background: transparent; color: var(--muted); cursor: pointer; padding: 0; }
+  .chev-btn:hover { background: var(--surface-2); color: var(--text); }
+  .chev-btn svg { transition: transform 0.2s ease; }
+  .chev-btn[aria-expanded="true"] svg { transform: rotate(90deg); }
+  .tstate .tcount { display: block; font-weight: 400; }
+  .modes-wrap { display: grid; grid-template-rows: 0fr; transition: grid-template-rows 0.2s ease; }
+  .modes-wrap.open { grid-template-rows: 1fr; }
+  .modes { overflow: hidden; min-height: 0; visibility: hidden; transition: visibility 0s linear 0.2s; }
+  .modes-wrap.open > .modes { visibility: visible; transition-delay: 0s; }
+  .modes-in { margin-left: 12px; padding: 4px 6px 4px 12px; border-left: 2px solid var(--line-soft); }
+  @media (prefers-reduced-motion: reduce) {
+    .modes-wrap, .modes, .chev-btn svg { transition: none; }
+  }
   .toggle.sub { font-size: 13px; }
   .toggle.sub .tlabel { flex-direction: row; align-items: baseline; gap: 8px; }
   .toggle.sub .mode-name { flex: none; }

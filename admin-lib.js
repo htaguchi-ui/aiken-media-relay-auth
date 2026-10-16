@@ -795,7 +795,28 @@ export const SETTING_LIMITS = [
     confirm: true,
     desc: "全員の合計の見積額。超えると、誰も生成できなくなります。",
   },
+  {
+    // 015（区分ごとのモデルの制限）で足された項目。null は「上限なし」（環境変数の既定は無い）。古いサーバーには列が無いので、行に無ければ出さない
+    key: "job_max_credits",
+    label: "1 回の生成の上限（クレジット）",
+    min: 1,
+    max: 10000,
+    integer: true,
+    usd: false,
+    credits: true,
+    optional: true,
+    emptyIsNull: true,
+    nullText: "上限なし",
+    resetLabel: "上限なしに戻す",
+    confirm: true,
+    desc: "すべての人（管理者を含む）の 1 回の生成に効きます。講師・メンバーの通常の生成（例：Seedance 2.0 の 1080p・15 秒は約 1,023 クレジット）が止まらない値にしてください。空欄で保存すると「上限なし」になります。",
+  },
 ];
+
+/** 画面に出す上限の項目（optional の項目は、サーバーの設定の行にその列があるときだけ） */
+export function availableLimits(row) {
+  return SETTING_LIMITS.filter((s) => !s.optional || (row && Object.hasOwn(row, s.key)));
+}
 
 export function settingSpec(key) {
   return SETTING_LIMITS.find((s) => s.key === key) ?? null;
@@ -813,20 +834,24 @@ export function formatUsdShort(value) {
 
 /** 上限の値の表示（null は既定） */
 export function formatSettingValue(key, value) {
-  if (value === null || value === undefined) return DEFAULT_SETTING_TEXT;
-  return settingSpec(key)?.usd ? formatUsdShort(value) : `${formatCredits(value)} 回`;
+  const spec = settingSpec(key);
+  if (value === null || value === undefined) return spec?.nullText ?? DEFAULT_SETTING_TEXT;
+  if (spec?.usd) return formatUsdShort(value);
+  return spec?.credits ? `${formatCredits(value)} クレジット` : `${formatCredits(value)} 回`;
 }
 
 /** 範囲の表示「1〜1,000 回」「$10〜$5,000」 */
 export function settingRangeText(key) {
   const s = settingSpec(key);
   if (!s) return "";
-  return s.usd ? `${formatUsdShort(s.min)}〜${formatUsdShort(s.max)}` : `${formatCredits(s.min)}〜${formatCredits(s.max)} 回`;
+  if (s.usd) return `${formatUsdShort(s.min)}〜${formatUsdShort(s.max)}`;
+  return `${formatCredits(s.min)}〜${formatCredits(s.max)} ${s.credits ? "クレジット" : "回"}`;
 }
 
 /** 値の出どころ（DB に値があるか、既定〔環境変数〕か） */
-export function settingSource(value) {
-  return value === null || value === undefined ? { kind: "default", label: "既定" } : { kind: "db", label: "DB の値" };
+export function settingSource(value, key = "") {
+  const nullLabel = settingSpec(key)?.nullText ?? "既定";
+  return value === null || value === undefined ? { kind: "default", label: nullLabel } : { kind: "db", label: "DB の値" };
 }
 
 /**
@@ -838,7 +863,9 @@ export function parseSettingInput(key, text) {
   if (!spec) return { problem: "変更できる項目ではありません" };
   const s = String(text ?? "")
     .replace(/[０-９．]/g, (c) => String.fromCharCode(c.charCodeAt(0) - 0xFEE0))
-    .replace(/[,，\s$＄]|回|ドル|USD/gi, "");
+    .replace(/[,，\s$＄]|回|ドル|USD|クレジット/gi, "");
+  // 空欄が「上限なし」の項目は、空欄をそのまま null（上限なし）にする
+  if (s === "" && spec.emptyIsNull) return { value: null };
   if (s === "") return { problem: `${spec.label}を入力してください（既定に戻すときは「既定に戻す」を押します）` };
   if (!/^\d+(\.\d+)?$/.test(s)) return { problem: `${spec.label}は数値で入力してください` };
   // 小数の末尾の 0 は落とす（1.500 → 1.5）
@@ -866,6 +893,18 @@ export function limitChangeCheck(key, current, next, info) {
     }
     return { confirm: true, warnings };
   }
+  if (key === "job_max_credits") {
+    // 値を入れる・下げるとき、上限をなくすときは確認する（超える依頼が全員で止まる）
+    if (next === null || next === undefined) {
+      return { confirm: true, warnings, note: "1 回の生成の上限がなくなります（高い生成も受け付けるようになります）。" };
+    }
+    const lowering = current === null || current === undefined || next < Number(current);
+    return {
+      confirm: lowering,
+      warnings,
+      note: `目安が ${formatCredits(next)} クレジットを超える生成（長い動画・高い解像度）は、管理者を含む全員が受け付けられなくなります。`,
+    };
+  }
   if (key === "daily_job_limit") {
     const lowering = current === null || current === undefined || next < Number(current);
     const top = Math.max(0, ...(Array.isArray(info?.top_users) ? info.top_users : []).map((t) => Number(t.count ?? 0)));
@@ -881,9 +920,9 @@ export function limitChangeCheck(key, current, next, info) {
  * 未保存のオン・オフ（draft。oldModels で読んだ値が基準）を、読み直した newModels の値に乗せ直す。
  * 基準からの差分（オンにした・オフにした model_id）だけを、新しい基準に当てる（環境変数の外のものは当てない）
  */
-export function rebaseModelDraft(oldModels, newModels, draft) {
-  const { on, off } = modelChanges(oldModels, consoleSelection(oldModels), draft);
-  const next = consoleSelection(newModels);
+export function rebaseModelDraft(oldModels, newModels, draft, scope = "all") {
+  const { on, off } = modelChanges(oldModels, scopeSelection(oldModels, scope), draft);
+  const next = scopeSelection(newModels, scope);
   const known = new Set(catalogModes(newModels).filter(({ mode }) => mode.env_allowed).map(({ mode }) => mode.model_id));
   for (const id of on) if (known.has(id)) next.add(id);
   for (const id of off) if (known.has(id)) next.delete(id);
@@ -1025,6 +1064,219 @@ export function applyMaster(modes, draft, lockedFn = () => false) {
   return next;
 }
 
+// ---- モデルの設定の区分（全体・受講者・AIKENメンバー。DB の 015 role_models）----
+
+/** 区分のタブ。field は admin_update_settings・admin_get_settings の列名（全体は enabled_models） */
+export const MODEL_SCOPES = [
+  { key: "all", label: "全体", field: "enabled_models" },
+  { key: "student", label: "受講者", field: "enabled_models_student" },
+  { key: "member", label: "AIKENメンバー", field: "enabled_models_member" },
+];
+
+/** GET /models の応答が区分の一覧（role_enabled_models）を持つか（015 より前の admin-api は持たない） */
+export function rolesSupported(body) {
+  const r = body?.role_enabled_models;
+  return !!r && typeof r === "object" && "student" in r && "member" in r;
+}
+
+/** 区分のタブを出せるか：admin-api が区分の一覧を返し、設定の行（admin_get_settings）にも列がある（行がまだ無いときは前者だけで判断） */
+export function rolesAvailable(body, row) {
+  return rolesSupported(body) && (!row || Object.hasOwn(row, "enabled_models_student"));
+}
+
+/** 出す区分（区分のタブが無いときは全体だけ） */
+export function activeScopes(roles) {
+  return MODEL_SCOPES.filter((s) => s.key === "all" || roles);
+}
+
+/** サーバーに保存されている一覧（null は制限なし）。全体は console_enabled_models、区分は role_enabled_models */
+export function scopeList(body, scope) {
+  return (scope === "all" ? body?.console_enabled_models : body?.role_enabled_models?.[scope]) ?? null;
+}
+
+/** 今のカタログに無い ID（効果は無い。次の保存で外す） */
+export function unknownList(body, scope) {
+  return (scope === "all" ? body?.unknown_console_models : body?.unknown_role_models?.[scope]) ?? [];
+}
+
+/** 読み込んだ時点で、その区分の一覧でオンのモード（admin-api の console_enabled・role_enabled。一覧が null なら全部オン） */
+export function modeBaseOn(mode, scope) {
+  return scope === "all" ? !!mode.console_enabled : mode.role_enabled?.[scope] !== false;
+}
+
+/** その区分の、読み込んだ時点のオンの model_id の集合（下書きの基準。区分の一覧が null ならカタログのすべて） */
+export function scopeSelection(models, scope = "all") {
+  return new Set(catalogModes(models).filter(({ mode }) => modeBaseOn(mode, scope)).map(({ mode }) => mode.model_id));
+}
+
+/**
+ * 区分のタブでの 1 つのモードの状態（modeStatus に「全体でオフ」を足したもの）。
+ * allDraft は全体のタブの下書き。区分のタブでは、サーバー側で無効・全体でオフのモードは押せない
+ */
+export function scopeModeStatus(model, mode, on, scope, allDraft) {
+  const st = modeStatus(model, mode, on);
+  if (st.locked || scope === "all") return st;
+  if (!allDraft.has(mode.model_id)) return { kind: "global_off", text: "全体でオフ", locked: true };
+  return st;
+}
+
+/** その区分が今使えるモードの数（環境変数で許可・提供元が使える・その区分でオン・区分のタブでは全体でもオン） */
+export function scopeUsable(models, scope, drafts) {
+  return catalogModes(models).filter(({ model, mode }) =>
+    mode.env_allowed && model.provider_available && drafts[scope].has(mode.model_id) && (scope === "all" || drafts.all.has(mode.model_id))
+  ).length;
+}
+
+/** 全体のタブに出す 1 行：区分の一覧が設定されている（null でない）ときだけ。なければ null */
+export function roleListNotice(body) {
+  if (!rolesSupported(body)) return null;
+  const set = MODEL_SCOPES.filter((s) => s.key !== "all" && scopeList(body, s.key) !== null).map((s) => s.label);
+  if (set.length === 0) return null;
+  if (set.length === 1) return `${set[0]}の一覧が設定されています。全体でオンにしても、${set[0]}のタブでオンにしないと${set[0]}は使えません。`;
+  return `${set.join("・")}の一覧が設定されています。全体でオンにしても、それぞれのタブでオンにしないとその区分は使えません。`;
+}
+
+/**
+ * 保存の計画。変えたタブ（未保存の変更がある、または今のカタログに無い ID を外す）の分だけを changes にまとめる。
+ * drafts は { all, student, member } の Set。roles が false のときは全体だけ。
+ * resets は「制限なしに戻す」を押した区分（{ student: true }）。約束（画面の側で resets を管理するときの前提。テストで固定している）：
+ *   ・印がある区分は、下書きの中身に関係なく、payload を null（制限なし）にして保存の対象にする（下書きが今と同じでも、一部オフでも同じ）。
+ *   ・印は、保存されている一覧が明示（配列）の区分でだけ効く。保存されている一覧が null の区分には効かない。
+ *   ・resets.all も同じ。全体の保存されている一覧（console_enabled_models）が明示のときだけ効き、全体は resets.all で enabled_models を null にできる。
+ *   ・roles が false のとき、区分の印は見ない（全体の印だけ見る）。
+ *   ・印がある区分の件数は、下書きの変更が無くても 1 件と数える（変更があればその数）。
+ * 返り値：{ changes: { 列名: 配列か null }, entries: [{ key, label, field, payload, on, off, count, unknown, empty }], emptied: [{ key, label }], counts: { all, student, member }, count, roles }
+ */
+export function buildModelSave(body, drafts, roles = true, resets = {}) {
+  const models = body?.models ?? [];
+  const entries = [];
+  const counts = { all: 0, student: 0, member: 0 };
+  for (const sc of activeScopes(roles)) {
+    const ch = modelChanges(models, scopeSelection(models, sc.key), drafts[sc.key]);
+    // 「制限なしに戻す」を押した区分（保存されている一覧が明示のときだけ有効）：下書きが今と同じ（全部オンに見える）でも null で保存する
+    const reset = !!resets[sc.key] && Array.isArray(scopeList(body, sc.key));
+    counts[sc.key] = reset && ch.count === 0 ? 1 : ch.count;
+    const unknown = unknownList(body, sc.key);
+    if (ch.count === 0 && unknown.length === 0 && !reset) continue;
+    // 今のカタログに無い ID を外すだけ（オン・オフは変えていない）のときは、null にまとめない。
+    // 明示の一覧がカタログのすべてを含んでいても、「これから足すモデルも使える」には変えず、外した一覧のまま保存する
+    const saved = scopeList(body, sc.key);
+    const payload = reset
+      ? null
+      : ch.count === 0 && Array.isArray(saved)
+      ? catalogModes(models).map(({ mode }) => mode.model_id).filter((id) => saved.includes(id))
+      : enabledModelsPayload(models, drafts[sc.key]);
+    entries.push({
+      key: sc.key,
+      label: sc.label,
+      field: sc.field,
+      payload,
+      on: ch.on,
+      off: ch.off,
+      count: ch.count,
+      unknown,
+      empty: false, // 下の emptied で決める
+    });
+  }
+  // 保存で使えるモデルが 0 になる区分（変えていない区分も含む。全体のタブの変更で受講者・メンバーが 0 になる場合など）。
+  // 保存前（読み込んだときの基準）に 1 つ以上使えて、保存後（drafts）に 0 になるものだけ。保存前から 0 の区分は含めない
+  const base = { all: scopeSelection(models, "all"), student: scopeSelection(models, "student"), member: scopeSelection(models, "member") };
+  const emptied = activeScopes(roles)
+    .filter((sc) => scopeUsable(models, sc.key, base) > 0 && scopeUsable(models, sc.key, drafts) === 0)
+    .map((sc) => ({ key: sc.key, label: sc.label }));
+  for (const e of entries) e.empty = emptied.some((x) => x.key === e.key);
+  return {
+    emptied,
+    changes: Object.fromEntries(entries.map((e) => [e.field, e.payload])),
+    entries,
+    counts,
+    count: counts.all + counts.student + counts.member,
+    roles,
+  };
+}
+
+/**
+ * 読み直しのとき、「制限なしに戻す」の印（resets）を残すか消すか。
+ * 残す（keep）：その区分の保存されている一覧が、読み直しの前後でどちらも明示（配列）で、同じ ID の集合のとき（押した人の意図は変わっていない）。
+ * 消す（lost）：一覧が変わった（ほかの管理者が変えた）・もう明示でない（null になった）とき。消すときは、下書きも基準に戻すこと。
+ * 返り値：{ keep: [区分の key], lost: [区分の key] }（印のある区分だけ）
+ */
+export function resetCarry(prevBody, nextBody, resets = {}) {
+  const keep = [];
+  const lost = [];
+  for (const sc of MODEL_SCOPES) {
+    if (!resets?.[sc.key]) continue;
+    const a = scopeList(prevBody, sc.key);
+    const b = scopeList(nextBody, sc.key);
+    if (Array.isArray(a) && Array.isArray(b) && sameIdSet(a, b)) keep.push(sc.key);
+    else lost.push(sc.key);
+  }
+  return { keep, lost };
+}
+
+/**
+ * 「制限なしに戻す」を押したあとの区分の下書き：読み込んだときの基準（scopeSelection）に、押せるモード
+ * （サーバー側で無効でない・全体の下書き allDraft でもオン）をすべてオンにしたもの。押せないモードは基準のまま（件数・確認の文に入れない）。
+ * 保存する値は null（制限なし）で、下書きの中身には依らない（buildModelSave の resets）
+ */
+export function restoreNullDraft(models, scope, allDraft) {
+  const next = scopeSelection(models, scope);
+  for (const { model, mode } of catalogModes(models)) {
+    if (!scopeModeStatus(model, mode, false, scope, allDraft).locked) next.add(mode.model_id);
+  }
+  return next;
+}
+
+/**
+ * 画面・件数・確認の文・保存の計画に使う下書き。「制限なしに戻す」の印がある区分（保存されている一覧が明示のとき）は、
+ * 保存して持った下書きではなく、使うたびに restoreNullDraft(基準, 区分, 今の全体の下書き) で作る（全体のタブで何を変えても食い違わない）。
+ * 印の無い区分は、持っている下書きのまま。返すのは新しいオブジェクト（元の drafts は変えない）
+ */
+export function effectiveDrafts(body, drafts, resets = {}) {
+  const out = { ...drafts };
+  for (const sc of MODEL_SCOPES) {
+    if (sc.key === "all" || !resets?.[sc.key] || !Array.isArray(scopeList(body, sc.key))) continue;
+    out[sc.key] = restoreNullDraft(body.models, sc.key, drafts.all);
+  }
+  return out;
+}
+
+/** 保存の確認の文（タブごとに、オン・オフにするもの）。labelOf は model_id → 表示名 */
+export function saveConfirmLines(plan, labelOf = (id) => id) {
+  const lines = ["モデルの設定を保存しますか？"];
+  for (const e of plan.entries) {
+    if (plan.roles) lines.push(`【${e.label}】`); // 区分のタブが無い（古いサーバー）ときは見出しを出さない
+    if (e.on.length) lines.push(`・オンにする：${listText(e.on.map(labelOf), 6)}`);
+    if (e.off.length) lines.push(`・オフにする：${listText(e.off.map(labelOf), 6)}`);
+    if (e.unknown.length) lines.push(`・今のカタログに無い ID ${e.unknown.length} 件を外します。`);
+    if (e.payload === null) {
+      lines.push(
+        e.key === "all"
+          ? "・すべてオンのため「制限なし」（サーバーで許可されたモデルすべて）として保存します。"
+          : `・${e.label}は制限なし（全体と同じ。これから足すモデルも使える）として保存します。`,
+      );
+    }
+  }
+  lines.push("（次の生成から、すぐに効きます）");
+  return lines;
+}
+
+/** 一覧が空になる（その区分の全員が生成できなくなる）ときの追加の確認の文。なければ [] */
+export function emptyScopeWarnings(plan) {
+  const emptied = plan.emptied ?? [];
+  // 全体で使えるモデルが 0 になるときは、区分も必ず 0 になる。確認は全体の 1 件だけにする（誰も生成できなくなる、で足りる）
+  if (emptied.some((e) => e.key === "all")) return ["すべてのモデルがオフになり、誰も生成できなくなります。本当に保存しますか？"];
+  return emptied.map((e) => `${e.label}はどのモデルも使えなくなり、生成できなくなります。本当に保存しますか？`);
+}
+
+/**
+ * 保存の直前に読み直した設定の行（admin_get_settings の settings）が、読み込んだときの一覧と違う区分。
+ * 3 つの一覧（roles が false なら全体だけ）のどれかが変わっていたら、その区分の名前の配列を返す（空なら変わっていない）
+ */
+export function changedScopes(row, body, roles = true) {
+  return activeScopes(roles).filter((sc) => !sameIdSet(row?.[sc.field] ?? null, scopeList(body, sc.key))).map((sc) => sc.label);
+}
+
 /**
  * 保存する enabled_models。カタログのすべての model_id がオンなら null（制限なし＝環境変数の範囲すべて）、
  * それ以外はオンの model_id の配列（カタログ順）。カタログに無い ID（古い ID）は含めない。
@@ -1090,6 +1342,24 @@ export function settingsDiff(before, after, labelOf = (id) => id) {
       const off = bm.filter((id) => !am.includes(id));
       if (on.length) lines.push(`モデルをオン：${listText(on.map(labelOf))}`);
       if (off.length) lines.push(`モデルをオフ：${listText(off.map(labelOf))}`);
+    }
+  }
+  for (const sc of MODEL_SCOPES) {
+    if (sc.key === "all") continue;
+    const b = created ? null : (before[sc.field] ?? null);
+    const a = after?.[sc.field] ?? null;
+    if (sameIdSet(b, a)) continue;
+    const name = `${sc.label}のモデル`;
+    if (a === null) lines.push(`${name}：制限なし（全体と同じ）に戻す`);
+    else if (a.length === 0) lines.push(`${name}：すべてオフ`);
+    else if (b === null) lines.push(`${name}：${a.length} 件だけを有効に（${listText(a.map(labelOf))}）`);
+    else {
+      const on = a.filter((id) => !b.includes(id));
+      const off = b.filter((id) => !a.includes(id));
+      const parts = [];
+      if (on.length) parts.push(`オン ${on.length} 件（${listText(on.map(labelOf))}）`);
+      if (off.length) parts.push(`オフ ${off.length} 件（${listText(off.map(labelOf))}）`);
+      lines.push(`${name}：${parts.join("・")}`);
     }
   }
   if (created) return [lines.length ? `初期値を設定（${lines.join("・")}）` : "初期値を設定（すべて既定）"];

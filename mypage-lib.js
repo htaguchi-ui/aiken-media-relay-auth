@@ -2,6 +2,8 @@
 // テストは aiken-media-relay/scripts/mypage_lib_test.ts。
 // 画面にドルや換算の割合は出さない（user-api の応答にも含まれない）。クレジットの数字と文言は user-api の応答をそのまま使う。
 
+import { idleExpired } from "./auth-storage.js";
+
 /** 有限の数か（null・""・NaN・文字列は false） */
 function isNumber(v) {
   return typeof v === "number" && Number.isFinite(v);
@@ -124,6 +126,7 @@ export function priceText(model) {
   }
 }
 
+export const MSG_CODE_FAILED = "ログインを完了できませんでした。もう一度ログインしてください。";
 export const MSG_DENIED = "利用登録が確認できません。管理者にお問い合わせください。";
 export const MSG_EXPIRED = "ログインの有効期限が切れました。もう一度ログインしてください。";
 export const MSG_FAILED = "読み込めませんでした。通信の状態を確認して、もう一度試してください。";
@@ -171,6 +174,47 @@ export function staleSessionKeys(keys, prefix, activityKey, hasCode) {
     if (hasCode && (k === activityKey || k.endsWith(CODE_VERIFIER_SUFFIX))) return false;
     return true;
   });
+}
+
+/**
+ * 離れる前に「ログイン中だった」か（再読み込みの手がかりの hadSession）。トークンがあり、かつ 30 分の無操作で時間切れになっていないときだけ true。
+ * 時間切れのあと（スリープ復帰直後・背面タブでタイマーが遅れているとき）に再読み込みしても、自動でログインし直さないため。
+ * lastActive は最後の操作の時刻（sessionStorage の文字列。無い・不正は時間切れ扱い）
+ */
+export function hadActiveSession({ token, lastActive, now, limitMs = 30 * 60 * 1000 }) {
+  return !!token && !idleExpired(lastActive, now, limitMs);
+}
+
+/** sessionStorage の再読み込みの手がかり（JSON の文字列）を読む。{ leftAt, hadSession }。無い・不正なら null */
+export function parseReloadHint(raw) {
+  if (typeof raw !== "string" || !raw) return null;
+  try {
+    const v = JSON.parse(raw);
+    if (!v || typeof v !== "object") return null;
+    return { leftAt: v.leftAt, hadSession: v.hadSession === true };
+  } catch {
+    return null;
+  }
+}
+
+/**
+ * ページを開いた時点で、このあとどうするか。
+ *  - "code"：Google から ?code 付きで戻った（今までどおり、ログインを完了させる）
+ *  - "relogin"：再読み込み（navType が "reload"）で、手がかり（hint）があり、離れる前にログインしていて（hadSession）、
+ *    離れてから graceMs 以内。Google のログインを自動でやり直す
+ *  - "login"：それ以外（普段に開いた・タブを閉じて開き直した・強制終了や復元・手がかりが無い／ログインしていなかった／
+ *    時刻が不正・未来・古い・navType が取れない・戻る進む）。ログイン前の画面
+ * hint は parseReloadHint の結果（または null）。時刻の単位はミリ秒
+ */
+export function decideOnOpen({ hasCode, navType, hint, now, graceMs = 15000 }) {
+  if (hasCode) return "code";
+  if (navType !== "reload") return "login";
+  if (!hint || hint.hadSession !== true) return "login";
+  const t = hint.leftAt;
+  if (typeof t !== "number" || !Number.isFinite(t)) return "login";
+  const elapsed = now - t;
+  // 未来の時刻（時計のずれ・書き換え）は使わない
+  return elapsed >= 0 && elapsed <= graceMs ? "relogin" : "login";
 }
 
 /** storage から staleSessionKeys の鍵を消す。消した数を返す（storage が無いときは 0） */

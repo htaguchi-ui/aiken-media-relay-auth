@@ -22,6 +22,16 @@ export const MYPAGE_IDLE_LIMIT_MS = ADMIN_IDLE_LIMIT_MS;
 /** マイページの最後の操作の時刻（sessionStorage・ミリ秒） */
 export const MYPAGE_ACTIVITY_KEY = `${MYPAGE_STORAGE_KEY}-last-active`;
 
+/**
+ * 再読み込みの手がかり（pagehide で書く sessionStorage の値：{ leftAt: 離れた時刻のミリ秒, hadSession: 離れる前にログインしていたか }）。
+ * トークンなどの秘密は入れない。再読み込みのとき、開いた時点で Google のログインを自動でやり直すかの判定にだけ使う。
+ * 鍵はマイページのセッションの鍵の接頭辞（aiken-mypage-auth）で「始まらない」名前にする：
+ * 開いたときのセッションの掃除（接頭辞で一括して消す）で、判定の前に手がかりが消えないように
+ */
+export const MYPAGE_RELOAD_HINT_KEY = "aiken-mypage-reload-hint";
+/** 離れてからこの時間（ミリ秒）以内に「再読み込み」で開いたときだけ、自動でログインし直す */
+export const MYPAGE_RELOAD_GRACE_MS = 15 * 1000;
+
 /** 許可の画面のログインの時間切れ（ログインを始めてから・許可の画面を出してから、この時間でログアウトする） */
 export const CONSENT_TIME_LIMIT_MS = 5 * 60 * 1000;
 /** 許可の画面の時刻の記録（sessionStorage・ミリ秒。ログインを始めたとき・許可の画面を出したときに書く） */
