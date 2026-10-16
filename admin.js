@@ -500,7 +500,7 @@ async function signIn() {
 }
 
 async function signOut() {
-  // この管理コンソールのセッションだけを切る（global だと、管理者本人の ChatGPT・Codex の接続まで切れる）
+  // この管理コンソールのセッションだけを切る（global だと、管理者本人の ChatGPT・Codex・Claude Code の接続まで切れる）
   await endSession("local");
   location.replace(returnUrl());
 }

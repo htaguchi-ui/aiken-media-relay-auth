@@ -76,7 +76,7 @@
     </dl>
     <div class="warn" role="note">
       <p>人から送られてきたリンクで開いた場合は、許可しないでください。</p>
-      <p id="loopback-warning" hidden>いまこの PC で Codex を使っている場合だけ、許可してください。</p>
+      <p id="loopback-warning" hidden>いまこの PC で、あなたが自分で Codex・Claude Code などのアプリを操作していて、その流れでこの画面が開いた場合だけ、許可してください。</p>
       <p>許可したあとの画面（エラーの画面も）の URL は、人に送らないでください。</p>
     </div>
     <div class="actions">
@@ -109,7 +109,7 @@
   // 許可・拒否などが終わったあとのログアウトの方式（README の「公開の前の注意」）
   // - "signout-local"：サーバーでこのセッションを取り消し（signOut scope local）、タブからも消す（既定）
   // - "clear-storage-only"：サーバーには送らず、この画面の保存先（aiken-consent-auth の鍵）だけを消す。
-  //   公開後に ChatGPT・Codex の接続（トークンの交換）が失敗するときは、この 1 行をこちらに変えて公開し直す
+  //   公開後に ChatGPT・Codex・Claude Code の接続（トークンの交換）が失敗するときは、この 1 行をこちらに変えて公開し直す
   const CONSENT_END_SESSION = "signout-local";
 
   // 他のサイトに埋め込まれて操作させられるのを防ぐ（GitHub Pages では frame-ancestors を指定できないため。admin.js と同じ）
@@ -185,7 +185,7 @@
       return null;
     }
   };
-  const expiredText = `${CONSENT_TIME_LIMIT_MS / 60000} 分が過ぎたため、ログインを終了しました。ChatGPT または Codex からもう一度接続してください。`;
+  const expiredText = `${CONSENT_TIME_LIMIT_MS / 60000} 分が過ぎたため、ログインを終了しました。使っているアプリ（ChatGPT・Codex・Claude Code）から、もう一度接続してください。`;
 
   const $ = (id) => document.getElementById(id);
   const show = (id) => {
@@ -234,7 +234,7 @@
 
   async function main() {
     if (!authorizationId) {
-      fail("このページは ChatGPT の接続ボタンから開いてください。");
+      fail("このページは、ChatGPT・Codex・Claude Code の接続の操作から開いてください。");
       return;
     }
 
@@ -306,14 +306,14 @@
 
     const { data, error } = await supabase.auth.oauth.getAuthorizationDetails(authorizationId);
     if (error) {
-      fail("接続の情報を取得できませんでした。ChatGPT からもう一度接続してください。（" + error.message + "）");
+      fail("接続の情報を取得できませんでした。使っているアプリ（ChatGPT・Codex・Claude Code）から、もう一度接続してください。（" + error.message + "）");
       return false;
     }
-    // 接続アプリは誰でも自動登録できるので、戻り先が ChatGPT か PC 内のアプリ（Codex など）でなければ先へ進ませない。
+    // 接続アプリは誰でも自動登録できるので、戻り先が ChatGPT か PC 内のアプリ（Codex・Claude Code など）でなければ先へ進ませない。
     // 許可済みで戻り先 URL（認可コード付き）が直接返ってきた場合も同じ判定をしてから戻す
     const decision = decideConsent(data);
     if (decision.action === "block") {
-      fail("この接続元（" + decision.host + "）からは利用できません。ChatGPT または Codex から接続してください。");
+      fail("この接続元（" + decision.host + "）からは利用できません。使っているアプリ（ChatGPT・Codex・Claude Code）から接続してください。");
       return false;
     }
     if (decision.action === "redirect") {
@@ -323,13 +323,13 @@
       return true;
     }
     if (decision.action !== "consent") {
-      fail("接続の情報を読み取れませんでした。ChatGPT からもう一度接続してください。");
+      fail("接続の情報を読み取れませんでした。使っているアプリ（ChatGPT・Codex・Claude Code）から、もう一度接続してください。");
       return false;
     }
 
     $("client-name").textContent = decision.clientName;
     $("redirect-desc").textContent = decision.kind === "loopback"
-      ? "この PC の Codex など（" + decision.host + "）"
+      ? "この PC のアプリ（Codex・Claude Code など）（" + decision.host + "）"
       : "ChatGPT（" + decision.host + "）";
     $("loopback-warning").hidden = decision.kind !== "loopback";
     $("user-email").textContent = email;
@@ -381,7 +381,7 @@
   // 許可・拒否のあとの戻り先も、自動で遷移させずに同じ判定をしてから戻す
   const goBack = (url) => {
     if (!isAllowedRedirect(url)) {
-      fail("戻り先が正しくないため中止しました。ChatGPT または Codex からもう一度接続してください。");
+      fail("戻り先が正しくないため中止しました。使っているアプリ（ChatGPT・Codex・Claude Code）から、もう一度接続してください。");
       return;
     }
     location.assign(url);
@@ -401,13 +401,13 @@
       // 許可したら、戻る前にすぐログアウトする（研修用の Mac に次の人のためのログインを残さない）
       await endSession();
       if (error) {
-        fail("許可に失敗しました。ChatGPT からもう一度接続してください。（" + error.message + "）");
+        fail("許可に失敗しました。使っているアプリ（ChatGPT・Codex・Claude Code）から、もう一度接続してください。（" + error.message + "）");
         return;
       }
       goBack(data?.redirect_url);
     } catch (e) {
       await endSession();
-      fail("許可に失敗しました。ChatGPT からもう一度接続してください。（" + (e?.message || e) + "）");
+      fail("許可に失敗しました。使っているアプリ（ChatGPT・Codex・Claude Code）から、もう一度接続してください。（" + (e?.message || e) + "）");
     }
   });
 

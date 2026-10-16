@@ -50,7 +50,7 @@ function show(id) {
 const sessionStore = browserStorage("session");
 clearStoredSession(browserStorage("local"), LEGACY_STORAGE_PREFIX);
 
-/** この端末のセッションだけをサーバーで無効にする（keepalive。失敗しても先へ進む。global だと本人の ChatGPT・Codex の接続まで切れる） */
+/** この端末のセッションだけをサーバーで無効にする（keepalive。失敗しても先へ進む。global だと本人の ChatGPT・Codex・Claude Code の接続まで切れる） */
 function sendLocalLogout(token) {
   if (!token) return;
   try {
@@ -139,7 +139,7 @@ async function signIn() {
 /** ログアウトして、タブに残る分（セッション・最後の操作の時刻）も消す（通信できなくても消す） */
 async function endSession() {
   try {
-    // この端末のセッションだけを切る（global だと、本人の ChatGPT・Codex の接続まで切れる）
+    // この端末のセッションだけを切る（global だと、本人の ChatGPT・Codex・Claude Code の接続まで切れる）
     await supabase.auth.signOut({ scope: "local" });
   } catch {
     // 下で消す
