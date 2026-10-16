@@ -39,6 +39,15 @@ export function redirectKind(raw) {
   return new URL(raw).protocol === "https:" ? "chatgpt" : "loopback";
 }
 
+/** 表示する接続アプリの名前の長さの上限（文字数）。名前は DCR で誰でも決められるので、長い名前で画面を埋めさせない */
+export const CLIENT_NAME_MAX = 40;
+
+/** 表示名を上限で切る（超えたら「…」を付ける）。絵文字などの合成された文字は分けない */
+export function truncateClientName(name, max = CLIENT_NAME_MAX) {
+  const chars = Array.from(String(name ?? ""));
+  return chars.length > max ? chars.slice(0, max).join("") + "…" : chars.join("");
+}
+
 /**
  * getAuthorizationDetails の結果から、許可画面の進め方を決める
  * - block：許可しない戻り先（先へ進ませない）
@@ -58,6 +67,6 @@ export function decideConsent(data) {
     action: "consent",
     kind: redirectKind(target),
     host: redirectHost(target),
-    clientName: name || "不明なアプリ",
+    clientName: truncateClientName(name) || "不明なアプリ",
   };
 }

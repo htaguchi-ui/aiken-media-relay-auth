@@ -5,6 +5,8 @@
 <meta name="viewport" content="width=device-width, initial-scale=1">
 <meta name="robots" content="noindex">
 <title>A.I.KEN メディア生成 ログイン</title>
+<!-- supabase-js は版を固定し、改ざんされていないことを integrity（SRI）で確かめてから使う（window.supabase） -->
+<script src="https://cdn.jsdelivr.net/npm/@supabase/supabase-js@2.117.2/dist/umd/supabase.js" integrity="sha384-Rj26LVGvoeRVR6+mwQmFfcR3QOBEwT+ZmuCWpuiqeTzJpCs0ER4ITAWGb4Hiy3Ok" crossorigin="anonymous"></script>
 <style>
   :root {
     --bg: #f5f6f8; --card: #ffffff; --text: #1a1a1c; --muted: #5f6368;
@@ -31,7 +33,15 @@
   p { margin: 0 0 12px; }
   .muted { color: var(--muted); font-size: 0.9rem; }
   .error { color: var(--danger); }
-  .who { padding: 12px; border: 1px solid var(--border); border-radius: 10px; margin: 12px 0 20px; word-break: break-all; }
+  .who { padding: 12px; border: 1px solid var(--border); border-radius: 10px; margin: 12px 0 16px; word-break: break-all; }
+  .who dt { color: var(--muted); font-size: 0.9rem; }
+  .who dd { margin: 0 0 8px; font-weight: 600; }
+  .who dd:last-child { margin-bottom: 0; }
+  .who dd.dest { font-size: 1.15rem; }
+  .who .name-note { color: var(--muted); font-size: 0.8rem; font-weight: 400; }
+  .warn { border: 2px solid var(--danger); border-radius: 10px; padding: 10px 12px; margin: 0 0 16px; }
+  .warn p { margin: 0 0 6px; color: var(--danger); font-weight: 600; }
+  .warn p:last-child { margin-bottom: 0; }
   .actions { display: flex; gap: 12px; flex-wrap: wrap; }
   button {
     font: inherit; font-weight: 600; border-radius: 999px; padding: 10px 20px; cursor: pointer;
@@ -49,19 +59,26 @@
   <div id="status"><p class="muted">読み込み中…</p></div>
 
   <section id="login" hidden>
+    <p class="error" id="login-note" role="status" hidden></p>
     <p>会社から配布された Google アカウントでログインしてください。</p>
     <div class="actions"><button class="primary" id="login-btn">Google でログイン</button></div>
   </section>
 
   <section id="consent" hidden>
-    <p><strong><bdi id="client-name">ChatGPT</bdi></strong> から、動画・画像・音声の生成を使えるようにします。</p>
-    <div class="who">
-      <div class="muted">ログイン中のアカウント</div>
-      <div id="user-email"></div>
-      <div class="muted" style="margin-top:8px">接続先</div>
-      <div id="redirect-desc"></div>
+    <p>次のアプリに、あなたのアカウントで動画・画像・音声の生成を使わせます。</p>
+    <dl class="who">
+      <dt>戻り先（許可すると、ここに戻ります）</dt>
+      <dd class="dest" id="redirect-desc"></dd>
+      <dt>接続しようとしているアプリ</dt>
+      <dd><bdi id="client-name"></bdi> <span class="name-note">（登録された名前。正しいとは限りません）</span></dd>
+      <dt>ログイン中のアカウント</dt>
+      <dd id="user-email"></dd>
+    </dl>
+    <div class="warn" role="note">
+      <p>人から送られてきたリンクで開いた場合は、許可しないでください。</p>
+      <p id="loopback-warning" hidden>いまこの PC で Codex を使っている場合だけ、許可してください。</p>
+      <p>許可したあとの画面（エラーの画面も）の URL は、人に送らないでください。</p>
     </div>
-    <p class="error" id="loopback-warning" hidden>この PC で Codex から接続したときだけ許可してください。このあとブラウザに表示される URL を、他の人やサイトに貼り付けないでください。</p>
     <div class="actions">
       <button class="primary" id="approve-btn">許可する</button>
       <button id="deny-btn">やめる</button>
@@ -77,8 +94,36 @@
 </main>
 
 <script type="module">
-  import { createClient } from "https://cdn.jsdelivr.net/npm/@supabase/supabase-js@2.117.2/+esm";
   import { decideConsent, isAllowedRedirect } from "./redirect-check.js";
+  import {
+    browserStorage,
+    clearStoredSession,
+    CONSENT_ACTIVITY_KEY,
+    CONSENT_STORAGE_KEY,
+    CONSENT_TIME_LIMIT_MS,
+    idleExpired,
+    LEGACY_STORAGE_PREFIX,
+    storedAccessToken,
+  } from "./auth-storage.js";
+
+  // 許可・拒否などが終わったあとのログアウトの方式（README の「公開の前の注意」）
+  // - "signout-local"：サーバーでこのセッションを取り消し（signOut scope local）、タブからも消す（既定）
+  // - "clear-storage-only"：サーバーには送らず、この画面の保存先（aiken-consent-auth の鍵）だけを消す。
+  //   公開後に ChatGPT・Codex の接続（トークンの交換）が失敗するときは、この 1 行をこちらに変えて公開し直す
+  const CONSENT_END_SESSION = "signout-local";
+
+  // 他のサイトに埋め込まれて操作させられるのを防ぐ（GitHub Pages では frame-ancestors を指定できないため。admin.js と同じ）
+  if (window.top !== window.self) {
+    document.documentElement.hidden = true;
+    throw new Error("許可の画面は埋め込みでは使えません");
+  }
+
+  // 読み込めない（通信の失敗・integrity の不一致）ときは先へ進まない
+  if (typeof window.supabase?.createClient !== "function") {
+    document.getElementById("status").textContent = "画面の部品を読み込めませんでした。通信状態を確認して、ページを開き直してください。";
+    throw new Error("supabase-js を読み込めませんでした");
+  }
+  const { createClient } = window.supabase;
 
   const SUPABASE_URL = "https://tnzwhwitgnzoehbjrmoy.supabase.co";
   // 公開用のキー（ブラウザに置く前提のもの）。秘密鍵ではない。
@@ -86,9 +131,61 @@
   // 受講者は a-i-ken.jp、管理者は a-i-ken.com。サーバー側でも同じ判定をする。
   const ALLOWED_DOMAINS = ["a-i-ken.jp", "a-i-ken.com"];
 
+  // 研修用の Mac を何人もで使うため、ログインを端末に残さない：
+  // 保存はこのタブの間だけ（sessionStorage。Google のログインから戻るまでは要る）、管理コンソールとは別の鍵。
+  // 以前の版が localStorage に残したセッション（管理コンソールと共有していた）は、開いた時点で消す
+  const sessionStore = browserStorage("session");
+  clearStoredSession(browserStorage("local"), LEGACY_STORAGE_PREFIX);
   const supabase = createClient(SUPABASE_URL, SUPABASE_PUBLISHABLE_KEY, {
-    auth: { flowType: "pkce", detectSessionInUrl: true, persistSession: true },
+    auth: {
+      flowType: "pkce",
+      detectSessionInUrl: true,
+      persistSession: true,
+      storageKey: CONSENT_STORAGE_KEY,
+      ...(sessionStore ? { storage: sessionStore } : {}),
+    },
   });
+
+  /** 許可・拒否などが終わったら、すぐにログアウトする（方式は CONSENT_END_SESSION。どちらでもタブからは消す） */
+  const endSession = async () => {
+    if (CONSENT_END_SESSION === "signout-local") {
+      try {
+        await supabase.auth.signOut({ scope: "local" });
+      } catch {
+        // 通信できなくても、タブの中の分は下で消す
+      }
+    } else {
+      // サーバーには送らない。メモリの分が自動の更新で保存し直されないよう、更新も止める
+      try {
+        supabase.auth.stopAutoRefresh?.();
+      } catch {
+        // 無視
+      }
+    }
+    clearStoredSession(sessionStore, CONSENT_STORAGE_KEY);
+  };
+
+  // ---- 時間切れ（5 分）と、画面を離れたときのログアウト ----
+  // ログインを始めた時刻・許可の画面を出した時刻を記録し、5 分を過ぎたら（記録が無いときも）ログアウトする。
+  // 画面を離れる（タブを閉じる・別のページへ移る）ときもログアウトする。ただし Google のログインへ移るときは除く
+  // （戻ってきたときに、このタブのセッションの保存先にある PKCE の code_verifier と時刻の記録が要る）
+  let leavingForLogin = false;
+  let expireTimer = null;
+  const markStarted = () => {
+    try {
+      sessionStore?.setItem(CONSENT_ACTIVITY_KEY, String(Date.now()));
+    } catch {
+      // 記録できなければ、戻ったときに時間切れになる（安全側）
+    }
+  };
+  const startedAt = () => {
+    try {
+      return sessionStore?.getItem(CONSENT_ACTIVITY_KEY) ?? null;
+    } catch {
+      return null;
+    }
+  };
+  const expiredText = `${CONSENT_TIME_LIMIT_MS / 60000} 分が過ぎたため、ログインを終了しました。ChatGPT または Codex からもう一度接続してください。`;
 
   const $ = (id) => document.getElementById(id);
   const show = (id) => {
@@ -116,6 +213,9 @@
   };
 
   const signIn = async () => {
+    // Google から戻るまで、セッションの保存先（code_verifier・時刻の記録）を消さない
+    leavingForLogin = true;
+    markStarted();
     await supabase.auth.signInWithOAuth({
       provider: "google",
       options: { redirectTo: returnUrl(), queryParams: { prompt: "select_account" } },
@@ -123,7 +223,7 @@
   };
 
   const switchAccount = async () => {
-    await supabase.auth.signOut();
+    await endSession();
     await signIn();
   };
 
@@ -166,19 +266,34 @@
       show("login");
       return;
     }
+    // ログインを始めてから 5 分を過ぎている（記録が無いときも）ときは使わせない
+    if (idleExpired(startedAt(), Date.now(), CONSENT_TIME_LIMIT_MS)) {
+      await endSession();
+      $("login-note").textContent = expiredText;
+      $("login-note").hidden = false;
+      show("login");
+      return;
+    }
 
+    // 許可の画面を出さなかった（使えないアカウント・エラーなど）ときは、ログインを残さない
+    const shown = await showConsent(session);
+    if (!shown) await endSession();
+  }
+
+  /** ログイン後：アカウント・名簿・接続の情報を確かめて、許可の画面を出す。出した（許可済みで戻した）ら true */
+  async function showConsent(session) {
     const email = session.user.email;
     if (!isAllowed(email)) {
       $("blocked-email").textContent = email;
       show("blocked");
-      return;
+      return false;
     }
 
     // 名簿（管理者が登録した利用者）に載っていて、停止されていないことを確かめる
     const { data: membership, error: membershipError } = await supabase.rpc("my_membership");
     if (membershipError) {
       fail("利用登録の状態を確認できませんでした。少し待ってからページを開き直してください。");
-      return;
+      return false;
     }
     if (!membership?.registered || membership.status !== "active") {
       $("blocked-email").textContent = email;
@@ -186,38 +301,82 @@
         ? "利用が停止されています。管理者にお問い合わせください。"
         : "この機能を使うには、管理者による利用登録が必要です。管理者に登録を依頼してください。";
       show("blocked");
-      return;
+      return false;
     }
 
     const { data, error } = await supabase.auth.oauth.getAuthorizationDetails(authorizationId);
     if (error) {
       fail("接続の情報を取得できませんでした。ChatGPT からもう一度接続してください。（" + error.message + "）");
-      return;
+      return false;
     }
     // 接続アプリは誰でも自動登録できるので、戻り先が ChatGPT か PC 内のアプリ（Codex など）でなければ先へ進ませない。
     // 許可済みで戻り先 URL（認可コード付き）が直接返ってきた場合も同じ判定をしてから戻す
     const decision = decideConsent(data);
     if (decision.action === "block") {
       fail("この接続元（" + decision.host + "）からは利用できません。ChatGPT または Codex から接続してください。");
-      return;
+      return false;
     }
     if (decision.action === "redirect") {
+      // 許可済みで戻るだけのときも、ログインは残さない
+      await endSession();
       location.assign(decision.url);
-      return;
+      return true;
     }
     if (decision.action !== "consent") {
       fail("接続の情報を読み取れませんでした。ChatGPT からもう一度接続してください。");
-      return;
+      return false;
     }
 
     $("client-name").textContent = decision.clientName;
     $("redirect-desc").textContent = decision.kind === "loopback"
-      ? "この PC 上のアプリ（" + decision.host + "）"
+      ? "この PC の Codex など（" + decision.host + "）"
       : "ChatGPT（" + decision.host + "）";
     $("loopback-warning").hidden = decision.kind !== "loopback";
     $("user-email").textContent = email;
     show("consent");
+    // 許可の画面を出してから 5 分で、ログインを終える
+    markStarted();
+    clearTimeout(expireTimer);
+    expireTimer = setTimeout(expireConsent, CONSENT_TIME_LIMIT_MS);
+    return true;
   }
+
+  /** 許可の画面のまま 5 分が過ぎた：ログアウトして、接続し直すよう知らせる */
+  async function expireConsent() {
+    if ($("consent").hidden) return;
+    await endSession();
+    fail(expiredText);
+  }
+
+  // スリープ・背面のタブではタイマーが遅れるので、前に出たときにも確かめる
+  document.addEventListener("visibilitychange", () => {
+    if (document.visibilityState === "visible" && !$("consent").hidden && idleExpired(startedAt(), Date.now(), CONSENT_TIME_LIMIT_MS)) {
+      expireConsent();
+    }
+  });
+
+  // 画面を離れるときはログアウトする（Google のログインへ移るときを除く）。待てないので、
+  // サーバーへの取り消しは keepalive で送り（方式が "signout-local" のときだけ）、タブの保存先はその場で消す
+  window.addEventListener("pagehide", () => {
+    if (leavingForLogin) return;
+    const token = storedAccessToken(sessionStore, CONSENT_STORAGE_KEY);
+    if (token && CONSENT_END_SESSION === "signout-local") {
+      try {
+        fetch(SUPABASE_URL + "/auth/v1/logout?scope=local", {
+          method: "POST",
+          keepalive: true,
+          headers: { apikey: SUPABASE_PUBLISHABLE_KEY, Authorization: "Bearer " + token },
+        }).catch(() => {});
+      } catch {
+        // 送れなくても、タブの保存先は下で消す
+      }
+    }
+    clearStoredSession(sessionStore, CONSENT_STORAGE_KEY);
+  });
+  // 戻るボタンでキャッシュから表示されたとき（ログアウト済み）は、読み込み直して状態を作り直す
+  window.addEventListener("pageshow", (e) => {
+    if (e.persisted) location.reload();
+  });
 
   // 許可・拒否のあとの戻り先も、自動で遷移させずに同じ判定をしてから戻す
   const goBack = (url) => {
@@ -239,12 +398,15 @@
       const { data, error } = await supabase.auth.oauth.approveAuthorization(authorizationId, {
         skipBrowserRedirect: true,
       });
+      // 許可したら、戻る前にすぐログアウトする（研修用の Mac に次の人のためのログインを残さない）
+      await endSession();
       if (error) {
         fail("許可に失敗しました。ChatGPT からもう一度接続してください。（" + error.message + "）");
         return;
       }
       goBack(data?.redirect_url);
     } catch (e) {
+      await endSession();
       fail("許可に失敗しました。ChatGPT からもう一度接続してください。（" + (e?.message || e) + "）");
     }
   });
@@ -256,17 +418,22 @@
       const { data, error } = await supabase.auth.oauth.denyAuthorization(authorizationId, {
         skipBrowserRedirect: true,
       });
+      await endSession();
       if (error) {
         fail("処理に失敗しました。このタブを閉じてください。（" + error.message + "）");
         return;
       }
       goBack(data?.redirect_url);
     } catch (e) {
+      await endSession();
       fail("処理に失敗しました。このタブを閉じてください。（" + (e?.message || e) + "）");
     }
   });
 
-  main().catch((e) => fail("エラーが発生しました：" + (e?.message || e)));
+  main().catch(async (e) => {
+    await endSession();
+    fail("エラーが発生しました：" + (e?.message || e));
+  });
 </script>
 </body>
 </html>
