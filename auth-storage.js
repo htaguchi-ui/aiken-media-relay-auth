@@ -1,12 +1,14 @@
-// ログインの保存先（許可の画面 consent.html と管理コンソール admin.html が使う）。
+// ログインの保存先（許可の画面 consent.html・管理コンソール admin.html・マイページ mypage.html が使う）。
 // 研修用の Mac を何人もで使うため、ログインを端末に残さない（監査 docs/security-audit-credits-20261016.md の H1・M3）。
-// - 2 つの画面はセッションを共有しない（storageKey を分ける）
+// - 3 つの画面はセッションを共有しない（storageKey を分ける）
 // - 保存先は sessionStorage（タブを閉じれば消える。Google のログインから同じタブに戻るまでは残る）
 
 /** 許可の画面のセッションの鍵（sessionStorage） */
 export const CONSENT_STORAGE_KEY = "aiken-consent-auth";
 /** 管理コンソールのセッションの鍵（sessionStorage） */
 export const ADMIN_STORAGE_KEY = "aiken-admin-auth";
+/** マイページのセッションの鍵（sessionStorage） */
+export const MYPAGE_STORAGE_KEY = "aiken-mypage-auth";
 /** 以前の版が localStorage に残したセッション（supabase-js の既定の鍵 sb-<ref>-auth-token。2 つの画面で共有していた） */
 export const LEGACY_STORAGE_PREFIX = "sb-tnzwhwitgnzoehbjrmoy-auth-token";
 
@@ -14,6 +16,11 @@ export const LEGACY_STORAGE_PREFIX = "sb-tnzwhwitgnzoehbjrmoy-auth-token";
 export const ADMIN_IDLE_LIMIT_MS = 30 * 60 * 1000;
 /** 管理コンソールの最後の操作の時刻（sessionStorage・ミリ秒） */
 export const ADMIN_ACTIVITY_KEY = `${ADMIN_STORAGE_KEY}-last-active`;
+
+/** マイページを操作しないまま、この時間が過ぎたらログアウトする（管理コンソールと同じ 30 分） */
+export const MYPAGE_IDLE_LIMIT_MS = ADMIN_IDLE_LIMIT_MS;
+/** マイページの最後の操作の時刻（sessionStorage・ミリ秒） */
+export const MYPAGE_ACTIVITY_KEY = `${MYPAGE_STORAGE_KEY}-last-active`;
 
 /** 許可の画面のログインの時間切れ（ログインを始めてから・許可の画面を出してから、この時間でログアウトする） */
 export const CONSENT_TIME_LIMIT_MS = 5 * 60 * 1000;

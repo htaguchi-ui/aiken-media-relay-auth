@@ -1,6 +1,6 @@
 # aiken-media-relay-auth
 
-A.I.KEN メディア生成（ChatGPT から使う MCP 中継サーバー）のログイン・許可画面です。
+A.I.KEN Studio（Codex・ChatGPT から使う MCP 中継サーバー。画面に出る名前は「A.I.KEN Studio」で、リポジトリ名・関数名・URL などの内部の名前は従来のまま）のログイン・許可画面です。
 ChatGPT の接続ボタンから開かれ、Google アカウントでログインして接続を許可します。
 
 - `consent.html`：Supabase Auth の OAuth 2.1 サーバーの許可画面（authorization path）。名簿に登録された人だけが先へ進める
@@ -16,8 +16,14 @@ ChatGPT の接続ボタンから開かれ、Google アカウントでログイ�
   - 運用の注意：モデルを「全部オン」にすると「制限なし（`enabled_models = null`）」として保存する。そのため本番では `ENABLED_PROVIDER_MODELS`（環境変数の上限）を必ず設定しておく。未設定だと、後でカタログに足した高いモデルが自動で有効になる
   - 30 分操作が無ければ（最後の操作の記録が無いときも）ログアウトする。「ログアウト」はこのコンソールのセッションだけを切る（scope local。管理者本人の ChatGPT・Codex の接続は切らない）
   - 入力の範囲は DB（014）の天井に合わせる：全体の 24 時間の額は $10〜$2,000、クレジットの追加は 1 回 1〜10,000（1 人・今の枠への追加の合計も 10,000 まで）、回の期間ごと・メンバーの月額は 0〜10,000
-- `auth-storage.js`：2 つの画面のログインの保存先と時間切れ。どちらも sessionStorage（タブを閉じれば消える）で、鍵を分けてセッションを共有しない（許可の画面 `aiken-consent-auth`、管理コンソール `aiken-admin-auth`）。以前の版が localStorage に残したセッション（`sb-<ref>-auth-token`）は、どちらかの画面を開いた時点で消す
-- supabase-js は版を固定（2.117.2 の UMD）し、`integrity`（SRI）と `crossorigin` を付けて読み込む（`admin.html`・`consent.html`）。版を上げるときは、配信されるファイルの sha384 を計算し直して 2 つの `integrity` と `admin.html` の CSP（`script-src` のファイルの URL）を合わせて直す
+- `mypage.html` / `mypage.js` / `mypage-lib.js`：マイページ（ログイン中の本人の「残りクレジット」と「使えるモデルと目安単価〔クレジット〕」を見る。履歴・枠の予定・1 日の回数は出さない。ドルの金額・「1 クレジット＝$0.01」の換算は出さない）
+  - 右上にログイン中のメールアドレスと区分（受講者・AIKENメンバー・管理者）、ログアウト。「最新にする」で読み直す
+  - データは Edge Function `user-api`（`GET /me`。読み取り専用）から読む。`user-api` が先にデプロイされていないと「読み込めませんでした」になる（下の「マイページの公開」）
+  - ログインは Google（`prompt: select_account`、戻り先はこのページ）。セッションは sessionStorage（鍵は `aiken-mypage-auth`。ほかの画面とは共有しない）。30 分操作が無ければログアウトし、「ログアウト」はこの端末のセッションだけを切る（scope local）。画面を離れるとき（タブを閉じる・別のページへ移る）もログアウトして保存先を消す（Google のログインへ移るときを除く。consent.html と同じ）。ブラウザの「閉じたタブを開き直す」・履歴・セッションの復元で、前の人のログインが戻らないため。戻る・進むでキャッシュから表示されたときは読み込み直す。ページの再読み込み（F5）もログアウトになる（「最新にする」のボタンを使う）。ログアウト・30 分切れでは、通信を待つ前に画面の中身を消す
+  - 状態：ログイン前／読み込み中／名簿に無い・停止中（「利用登録が確認できません。管理者にお問い合わせください。」）／通信の失敗（「もう一度試す」）
+  - CSP・supabase-js（2.117.2 の UMD・SRI）・フレームへの埋め込み防止は `admin.html` と同じ。`<meta name="referrer" content="no-referrer">` を付けている
+- `auth-storage.js`：3 つの画面のログインの保存先と時間切れ。どれも sessionStorage で、鍵を分けてセッションを共有しない（許可の画面 `aiken-consent-auth`、管理コンソール `aiken-admin-auth`、マイページ `aiken-mypage-auth`）。以前の版が localStorage に残したセッション（`sb-<ref>-auth-token`）は、3 つのどの画面を開いた時点でも消す
+- supabase-js は版を固定（2.117.2 の UMD）し、`integrity`（SRI）と `crossorigin` を付けて読み込む（`admin.html`・`consent.html`・`mypage.html`）。版を上げるときは、配信されるファイルの sha384 を計算し直して 3 つの `integrity` と `admin.html`・`mypage.html` の CSP（`script-src` のファイルの URL）を合わせて直す
 - ページ内の Supabase キーは公開用（publishable）で、秘密情報は含みません。
 
 ## 公開の前の注意
@@ -30,3 +36,10 @@ ChatGPT の接続ボタンから開かれ、Google アカウントでログイ�
      `const CONSENT_END_SESSION = "signout-local";` → `const CONSENT_END_SESSION = "clear-storage-only";`
      に変えて公開し直す（サーバーには取り消しを送らず、このタブの保存先だけを消す。5 分の時間切れ・画面を離れたときの消去はそのまま効く）。そのあと 3. をやり直す。
    - それでも直らない・ほかの壊れ方のときは、公開した変更を `git revert` で戻して公開し直す。
+
+## マイページの公開
+
+1. **先に `user-api` 関数をデプロイする**（`supabase functions deploy user-api --project-ref tnzwhwitgnzoehbjrmoy`。`supabase/config.toml` で `verify_jwt = false`。認証は関数の中で行う）。`mcp` 関数と同じ Secrets を使う。
+2. **Supabase Auth の Redirect URLs に `https://htaguchi-ui.github.io/aiken-media-relay-auth/mypage.html` を入れる**（`https://htaguchi-ui.github.io/aiken-media-relay-auth/**` が入っていれば追加は不要）。入っていないと、Google のログイン後にマイページへ戻れない。
+3. このリポジトリを push する。新しいファイル（`mypage.html`・`mypage.js`・`mypage-lib.js`）を必ず `git add` する（`git status` で untracked が残っていないことを確かめる）。
+4. 公開した直後に、受講者のテスト用アカウント・管理者のアカウント・名簿に無いアカウントの 3 つでログインし、それぞれ「残りクレジットと使えるモデルが出る」「管理者は『期間ごとの上限なし』」「利用登録が確認できない旨が出る」ことを確かめる。

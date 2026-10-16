@@ -8,7 +8,7 @@
 <meta http-equiv="Content-Security-Policy" content="default-src 'self'; script-src 'self' https://cdn.jsdelivr.net/npm/@supabase/supabase-js@2.117.2/dist/umd/supabase.js; connect-src https://tnzwhwitgnzoehbjrmoy.supabase.co; style-src 'self' 'unsafe-inline' https://fonts.googleapis.com; font-src https://fonts.gstatic.com; img-src 'self' data:; object-src 'none'; base-uri 'self'; form-action 'self'">
 <!-- supabase-js は版を固定し、改ざんされていないことを integrity（SRI）で確かめてから使う（window.supabase）。CSP もこのファイルだけを許す -->
 <script src="https://cdn.jsdelivr.net/npm/@supabase/supabase-js@2.117.2/dist/umd/supabase.js" integrity="sha384-Rj26LVGvoeRVR6+mwQmFfcR3QOBEwT+ZmuCWpuiqeTzJpCs0ER4ITAWGb4Hiy3Ok" crossorigin="anonymous"></script>
-<title>A.I.KEN 動画生成 管理コンソール</title>
+<title>A.I.KEN Studio 管理コンソール</title>
 <link rel="preconnect" href="https://fonts.googleapis.com">
 <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
 <link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=IBM+Plex+Sans+JP:wght@400;500;600;700&amp;display=swap">
@@ -539,7 +539,7 @@
 <div id="status" class="center-card"><p class="muted">読み込み中…</p></div>
 
 <section id="login" class="center-card" hidden aria-labelledby="login-title">
-  <span class="brand-sub">A.I.KEN 動画生成</span>
+  <span class="brand-sub">A.I.KEN Studio</span>
   <h1 id="login-title">管理コンソール</h1>
   <p class="warn-text" id="login-note" role="status" hidden></p>
   <p>管理者の Google アカウントでログインしてください。</p>
@@ -548,7 +548,7 @@
 </section>
 
 <section id="denied" class="center-card" hidden aria-labelledby="denied-title">
-  <span class="brand-sub">A.I.KEN 動画生成</span>
+  <span class="brand-sub">A.I.KEN Studio</span>
   <h1 id="denied-title">管理コンソール</h1>
   <p class="error-text">管理者の権限がありません。</p>
   <p class="muted">ログイン中のアカウント：<span id="denied-email" class="tabular"></span></p>
@@ -559,7 +559,7 @@
   <header class="topbar">
     <div class="topbar-inner">
       <div class="brand">
-        <span class="brand-sub">A.I.KEN 動画生成</span>
+        <span class="brand-sub">A.I.KEN Studio</span>
         <h1>管理コンソール</h1>
       </div>
       <nav class="tabs seg" aria-label="表示の切り替え">

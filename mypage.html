@@ -1,0 +1,222 @@
+<!doctype html>
+<html lang="ja">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+<meta name="robots" content="noindex">
+<meta name="referrer" content="no-referrer">
+<meta name="color-scheme" content="light dark">
+<meta http-equiv="Content-Security-Policy" content="default-src 'self'; script-src 'self' https://cdn.jsdelivr.net/npm/@supabase/supabase-js@2.117.2/dist/umd/supabase.js; connect-src https://tnzwhwitgnzoehbjrmoy.supabase.co; style-src 'self' 'unsafe-inline' https://fonts.googleapis.com; font-src https://fonts.gstatic.com; img-src 'self' data:; object-src 'none'; base-uri 'self'; form-action 'self'">
+<!-- supabase-js は版を固定し、改ざんされていないことを integrity（SRI）で確かめてから使う（window.supabase）。CSP もこのファイルだけを許す -->
+<script src="https://cdn.jsdelivr.net/npm/@supabase/supabase-js@2.117.2/dist/umd/supabase.js" integrity="sha384-Rj26LVGvoeRVR6+mwQmFfcR3QOBEwT+ZmuCWpuiqeTzJpCs0ER4ITAWGb4Hiy3Ok" crossorigin="anonymous"></script>
+<title>A.I.KEN Studio マイページ</title>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=IBM+Plex+Sans+JP:wght@400;500;600;700&amp;display=swap">
+<style>
+  :root {
+    --accent: #26396E; --accent-hover: #1B2B55; --on-accent: #FFFFFF;
+    --accent-soft: #EEF1F6; --accent-soft-line: #C8D0DE; --accent-soft-text: #22325E;
+    --bg: #F4F5F8; --surface: #FFFFFF; --surface-2: #F6F7F9; --seg: #E7E9EE;
+    --text: #16181D; --text-2: #4A505B; --text-3: #2B2F36; --muted: #5B6270; --faint: #8C93A0;
+    --line: #E3E6EB; --line-2: #DDE1E7; --line-soft: #EEF0F3; --input-line: #C9CED6; --dot: #C4C9D2;
+    --track: #E9ECF1;
+    --student-bg: #E6EAF2; --student-fg: #22325E;
+    --member-bg: #E5ECEA; --member-fg: #355A54;
+    --admin-bg: #ECEDF0; --admin-fg: #30343B;
+    --ok-bg: #E7EDE8; --ok-fg: #3D5B45;
+    --warn-fg: #74512C;
+    --low: #A0573A; --low-text: #8A4B33;
+    --danger: #96413A; --danger-line: #E2CDC9;
+    --font: "IBM Plex Sans JP", "Hiragino Sans", "Hiragino Kaku Gothic ProN", "Noto Sans JP", "Yu Gothic UI", Meiryo, system-ui, sans-serif;
+  }
+  /* ダーク表示：紺基調のまま明度を反転（管理コンソールと同じ） */
+  @media (prefers-color-scheme: dark) {
+    :root {
+      --accent: #A9B9E9; --accent-hover: #C3CFF2; --on-accent: #0E1322;
+      --accent-soft: #1E2741; --accent-soft-line: #34406A; --accent-soft-text: #C7D2F2;
+      --bg: #0E1220; --surface: #161B2B; --surface-2: #1C2234; --seg: #222A3E;
+      --text: #E8EAF0; --text-2: #C2C7D2; --text-3: #D5D9E2; --muted: #A0A7B6; --faint: #7A8294;
+      --line: #283048; --line-2: #323B54; --line-soft: #222A3E; --input-line: #3C4661; --dot: #4A5370;
+      --track: #262E44;
+      --student-bg: #243052; --student-fg: #C7D2F2;
+      --member-bg: #1E3532; --member-fg: #A9D0C6;
+      --admin-bg: #2A2E39; --admin-fg: #D0D4DC;
+      --ok-bg: #1F3527; --ok-fg: #A9D4B4;
+      --warn-fg: #EBC79C;
+      --low: #D8916F; --low-text: #EBA887;
+      --danger: #EE968C; --danger-line: #5C3631;
+    }
+  }
+  * { box-sizing: border-box; }
+  html { -webkit-text-size-adjust: 100%; }
+  body {
+    margin: 0; min-height: 100vh; background: var(--bg); color: var(--text);
+    font-family: var(--font); font-size: 14px; line-height: 1.6;
+  }
+  [hidden] { display: none !important; }
+  .tabular { font-variant-numeric: tabular-nums; }
+  .muted { color: var(--muted); }
+  .small { font-size: 12px; }
+  .ellipsis { white-space: nowrap; overflow: hidden; text-overflow: ellipsis; min-width: 0; }
+  .error-text { color: var(--danger); }
+  .warn-text { color: var(--warn-fg); font-weight: 600; }
+  h1, h2, h3, p { margin: 0; }
+  button { font: inherit; color: inherit; cursor: pointer; }
+  button:disabled { cursor: not-allowed; }
+  :focus-visible { outline: 2px solid var(--accent); outline-offset: 2px; }
+
+  /* ---- ボタン ---- */
+  .btn {
+    min-height: 44px; padding: 0 16px; border-radius: 12px; border: 1px solid var(--line-2);
+    background: var(--surface); color: var(--text); font-weight: 700; font-size: 14px;
+    display: inline-flex; align-items: center; justify-content: center; gap: 8px; text-decoration: none;
+  }
+  .btn:hover:not(:disabled) { border-color: var(--input-line); }
+  .btn.primary { background: var(--accent); border-color: var(--accent); color: var(--on-accent); }
+  .btn.primary:hover:not(:disabled) { background: var(--accent-hover); border-color: var(--accent-hover); }
+  .btn.big { min-height: 52px; border-radius: 14px; font-size: 16px; }
+  .btn.compact { min-height: 40px; padding: 0 14px; }
+  .btn:disabled { opacity: 0.55; }
+
+  /* ---- バッジ ---- */
+  .badge { flex: none; display: inline-flex; align-items: center; font-size: 12px; font-weight: 600; padding: 2px 10px; border-radius: 999px; white-space: nowrap; line-height: 1.5; }
+  .badge.student { background: var(--student-bg); color: var(--student-fg); }
+  .badge.member { background: var(--member-bg); color: var(--member-fg); }
+  .badge.admin { background: var(--admin-bg); color: var(--admin-fg); }
+  .badge.default { background: var(--ok-bg); color: var(--ok-fg); margin-left: 8px; font-size: 11px; padding: 1px 8px; }
+
+  /* ---- 読み込み・ログイン・エラー ---- */
+  .center-card { max-width: 440px; margin: 12vh auto 0; background: var(--surface); border: 1px solid var(--line); border-radius: 16px; padding: 24px; display: flex; flex-direction: column; gap: 12px; }
+  .center-card .brand-sub { font-size: 12px; color: var(--muted); letter-spacing: 0.04em; }
+  .center-card h1 { font-size: 22px; }
+  .center-card .row { display: flex; flex-wrap: wrap; gap: 8px; }
+  @media (max-width: 480px) { .center-card { margin: 10vh 16px 0; } }
+
+  /* ---- 上部の帯 ---- */
+  .topbar { background: var(--surface); border-bottom: 1px solid var(--line); }
+  .topbar-inner { max-width: 960px; margin: 0 auto; display: flex; flex-wrap: wrap; align-items: center; justify-content: space-between; gap: 8px 16px; padding: 12px 20px; }
+  .brand { display: flex; flex-direction: column; min-width: 0; }
+  .brand-sub { font-size: 12px; color: var(--muted); letter-spacing: 0.04em; }
+  .brand h1 { font-size: 18px; font-weight: 700; letter-spacing: 0.01em; }
+  .account { display: flex; flex-wrap: wrap; align-items: center; justify-content: flex-end; gap: 8px 12px; min-width: 0; }
+  .account .who { display: flex; align-items: center; gap: 8px; min-width: 0; }
+  #me-email { max-width: 260px; }
+  @media (max-width: 560px) {
+    .topbar-inner { padding: 10px 16px; }
+    .account { width: 100%; justify-content: space-between; flex-wrap: nowrap; }
+    .account .who { flex: 1 1 auto; }
+    #me-email { max-width: none; }
+  }
+
+  /* ---- 本体 ---- */
+  .content { max-width: 960px; margin: 0 auto; padding: 20px 20px 80px; display: flex; flex-direction: column; gap: 16px; }
+  @media (max-width: 560px) { .content { padding: 16px 16px 64px; } }
+  .toolbar { display: flex; align-items: center; justify-content: space-between; gap: 12px; flex-wrap: wrap; }
+  .card { background: var(--surface); border: 1px solid var(--line); border-radius: 16px; padding: 20px; display: flex; flex-direction: column; gap: 12px; }
+  .card h2 { font-size: 16px; font-weight: 700; }
+  .slot-label { font-size: 13px; color: var(--muted); font-weight: 600; }
+  .big-number { display: flex; align-items: baseline; gap: 8px; flex-wrap: wrap; }
+  .big-number .value { font-size: 48px; font-weight: 700; line-height: 1.1; letter-spacing: 0.01em; color: var(--accent); }
+  .big-number .value.text { font-size: 24px; }
+  .big-number .unit { font-size: 16px; color: var(--text-2); font-weight: 600; }
+  .big-number.low .value { color: var(--low-text); }
+  .bar { height: 8px; border-radius: 4px; background: var(--track); overflow: hidden; }
+  .bar > span { display: block; height: 100%; border-radius: inherit; background: var(--accent); }
+  .bar.low > span { background: var(--low); }
+  .explain { display: flex; flex-direction: column; gap: 4px; color: var(--text-2); }
+  .explain p:last-child { color: var(--muted); font-size: 13px; }
+
+  /* ---- モデルの表 ---- */
+  .kind-group { display: flex; flex-direction: column; gap: 8px; }
+  .kind-group + .kind-group { margin-top: 8px; }
+  .kind-group h3 { font-size: 14px; font-weight: 700; color: var(--accent-soft-text); background: var(--accent-soft); border: 1px solid var(--accent-soft-line); border-radius: 8px; padding: 4px 12px; align-self: flex-start; }
+  table.models { width: 100%; border-collapse: collapse; }
+  table.models th { text-align: left; font-size: 12px; color: var(--muted); font-weight: 600; padding: 6px 10px; border-bottom: 1px solid var(--line); }
+  table.models td { padding: 10px; border-bottom: 1px solid var(--line-soft); vertical-align: top; overflow-wrap: anywhere; }
+  table.models tr:last-child td { border-bottom: 0; }
+  table.models .name { font-weight: 700; }
+  table.models .desc { display: block; font-size: 12px; color: var(--muted); font-weight: 400; margin-top: 2px; }
+  @media (max-width: 640px) {
+    table.models thead { position: absolute; width: 1px; height: 1px; overflow: hidden; clip: rect(0, 0, 0, 0); }
+    table.models, table.models tbody, table.models tr, table.models td { display: block; width: 100%; }
+    table.models tr { padding: 10px 0; border-bottom: 1px solid var(--line-soft); }
+    table.models tr:last-child { border-bottom: 0; }
+    table.models td { padding: 2px 0; border: 0; }
+    table.models td[data-label]::before { content: attr(data-label) "　"; font-size: 12px; color: var(--muted); font-weight: 600; }
+  }
+</style>
+</head>
+<body>
+<div id="status" class="center-card" role="status"><p class="muted">読み込み中…</p></div>
+
+<section id="login" class="center-card" hidden aria-labelledby="login-title">
+  <span class="brand-sub">A.I.KEN Studio</span>
+  <h1 id="login-title">マイページ</h1>
+  <p class="warn-text" id="login-note" role="status" hidden></p>
+  <p>自分の残りクレジットと、使えるモデルを確認できます。研修・A.I.KEN の Google アカウントでログインしてください。</p>
+  <p class="muted small">このページを離れる・再読み込みする・30 分操作しないと、ログアウトします。最新の値は「最新にする」で確かめてください。</p>
+  <button type="button" class="btn primary big" id="login-btn">Google でログイン</button>
+</section>
+
+<section id="denied" class="center-card" hidden aria-labelledby="denied-title">
+  <span class="brand-sub">A.I.KEN Studio</span>
+  <h1 id="denied-title">マイページ</h1>
+  <p class="error-text" id="denied-message">利用登録が確認できません。管理者にお問い合わせください。</p>
+  <p class="muted">ログイン中のアカウント：<span id="denied-email" class="tabular"></span></p>
+  <div class="row"><button type="button" class="btn" id="denied-logout-btn">ログアウト</button></div>
+</section>
+
+<section id="failed" class="center-card" hidden aria-labelledby="failed-title">
+  <span class="brand-sub">A.I.KEN Studio</span>
+  <h1 id="failed-title">マイページ</h1>
+  <p class="error-text" id="failed-message">読み込めませんでした。</p>
+  <div class="row">
+    <button type="button" class="btn primary" id="retry-btn">もう一度試す</button>
+    <button type="button" class="btn" id="failed-logout-btn">ログアウト</button>
+  </div>
+</section>
+
+<div id="app" hidden>
+  <header class="topbar">
+    <div class="topbar-inner">
+      <div class="brand">
+        <h1>A.I.KEN Studio マイページ</h1>
+      </div>
+      <div class="account">
+        <div class="who">
+          <span id="me-email" class="ellipsis tabular"></span>
+          <span id="me-role" class="badge"></span>
+        </div>
+        <button type="button" class="btn compact" id="logout-btn">ログアウト</button>
+      </div>
+    </div>
+  </header>
+
+  <main class="content">
+    <div class="toolbar">
+      <span class="muted small">最終更新 <span id="updated-at" class="tabular">—</span></span>
+      <button type="button" class="btn compact" id="reload-btn">最新にする</button>
+    </div>
+
+    <section class="card" aria-labelledby="credits-title">
+      <h2 id="credits-title">残りクレジット</h2>
+      <p class="slot-label" id="slot-label" hidden></p>
+      <div class="big-number" id="big-number">
+        <span class="value tabular" id="credits-value">—</span>
+        <span class="unit" id="credits-unit">クレジット</span>
+      </div>
+      <div class="bar" id="credits-bar" hidden><span id="credits-bar-fill"></span></div>
+      <div class="explain" id="credits-explain"></div>
+    </section>
+
+    <section class="card" aria-labelledby="models-title">
+      <h2 id="models-title">使えるモデル</h2>
+      <p class="muted small">目安単価は、生成するときに使うクレジットの目安です。</p>
+      <div id="models"></div>
+    </section>
+  </main>
+</div>
+<script type="module" src="./mypage.js"></script>
+</body>
+</html>
