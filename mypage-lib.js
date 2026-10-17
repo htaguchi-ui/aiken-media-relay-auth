@@ -17,7 +17,7 @@ export function formatCredits(value) {
 }
 
 /** 「使えるモデル」を並べる種類の順（list_models の順とは別に、動画を先頭にする） */
-export const KIND_ORDER = ["video", "image", "speech", "music"];
+export const KIND_ORDER = ["video", "image", "speech", "music", "lipsync"];
 
 /** 区分（role）ごとのバッジの class（admin.html と同じ配色） */
 export function roleBadgeClass(role) {
@@ -90,7 +90,7 @@ export function stageView(credits) {
 }
 
 /** 「使えるモデル」の小見出し（user-api の kind_label ではなく、この画面の呼び方） */
-export const KIND_HEADINGS = { video: "動画", image: "画像", speech: "読み上げ", music: "音楽" };
+export const KIND_HEADINGS = { video: "動画", image: "画像", speech: "読み上げ", music: "音楽", lipsync: "口パク動画" };
 
 /**
  * モデルを種類ごとにまとめる（KIND_ORDER の順。知らない種類は最後に、出てきた順）。
