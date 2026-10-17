@@ -1403,7 +1403,7 @@ export function buildModelSave(body, drafts, roles = true, resets = {}) {
       ? null
       : ch.count === 0 && Array.isArray(saved)
       ? catalogModes(models).map(({ mode }) => mode.model_id).filter((id) => saved.includes(id))
-      : enabledModelsPayload(models, drafts[sc.key]);
+      : enabledModelsPayload(models, drafts[sc.key], sc.key);
     entries.push({
       key: sc.key,
       label: sc.label,
@@ -1518,12 +1518,27 @@ export function changedScopes(row, body, roles = true) {
 /**
  * 保存する enabled_models。カタログのすべての model_id がオンなら null（制限なし＝環境変数の範囲すべて）、
  * それ以外はオンの model_id の配列（カタログ順）。カタログに無い ID（古い ID）は含めない。
- * 環境変数の外のモードは押せないので、selected には読み込んだ時点のコンソールの値が残る
+ * 環境変数の外のモードは押せないので、selected には読み込んだ時点のコンソールの値が残る。
+ * 例外：全体の一覧（scope "all"）では、opt_in のモデル（口パク）がオンのときは null にまとめず、
+ * オンの全部の配列を送る（中継サーバーは opt_in のモデルを、全体の一覧に明示されたときだけ有効にする）。
+ * opt_in がオフのときは、それ以外がすべてオンなら null。区分（受講者・メンバー）の一覧は、null なら全体と同じなので、まとめてよい
  */
-export function enabledModelsPayload(models, selected) {
+export function enabledModelsPayload(models, selected, scope = "all") {
   const ids = catalogModes(models).map(({ mode }) => mode.model_id);
   const on = ids.filter((id) => selected.has(id));
-  return ids.length > 0 && on.length === ids.length ? null : on;
+  if (scope !== "all") return ids.length > 0 && on.length === ids.length ? null : on;
+  const optIn = optInModelIds(models);
+  if (on.some((id) => optIn.has(id))) return on;
+  // opt_in のモデルがオフのときは、それ以外がすべてオンなら null（opt_in のモデルは null では有効にならず、無効のまま）
+  const rest = ids.filter((id) => !optIn.has(id));
+  return rest.length > 0 && rest.every((id) => selected.has(id)) ? null : on;
+}
+
+/** 全体の一覧に明示されたときだけ有効になるモデル（admin-api の opt_in。今は口パクだけ）の model_id */
+export function optInModelIds(models) {
+  const out = new Set();
+  for (const m of models ?? []) if (m.opt_in === true) for (const mode of m.modes ?? []) out.add(mode.model_id);
+  return out;
 }
 
 /** 画面上の変更（オンにする・オフにする model_id。カタログ順） */

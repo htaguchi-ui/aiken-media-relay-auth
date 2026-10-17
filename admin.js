@@ -3712,6 +3712,9 @@ function modelItem(m, scope) {
     row,
     m.provider_available ? null : el("p", { className: "small warn-text", text: "提供元が使えません（API キーが未設定など）。オンにしても生成できません。" }),
     modes.length ? null : el("p", { className: "small muted", text: "振り分け先の経路が無いため使えません。" }),
+    m.opt_in === true
+      ? el("p", { className: "small muted", text: "全体のタブでオンにして保存したときだけ使えます（「全部オン」の保存では有効になりません）。" })
+      : null,
     wrap,
   );
 }
