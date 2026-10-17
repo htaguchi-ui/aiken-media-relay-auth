@@ -165,6 +165,11 @@ function hideContent(message = "ログアウトしています…") {
   $("credits-bar-fill").style.width = "0%";
   $("slot-line").textContent = "";
   $("slot-line").hidden = true;
+  $("stage-name").replaceChildren();
+  $("stage-name").hidden = true;
+  $("stages").replaceChildren();
+  $("stage-note").textContent = "";
+  $("stages-card").hidden = true;
   $("credits-notice").textContent = "";
   $("credits-notice").hidden = true;
   $("models").replaceChildren();
@@ -340,6 +345,27 @@ function renderCredits(credits, role) {
   $("credits-bar-fill").style.width = `${Math.round((v.ratio ?? 0) * 100)}%`;
   setLine("slot-line", v.slotLine);
   setLine("credits-notice", v.notice);
+  renderStages(v);
+}
+
+/** 段階の回だけ：今の段階の名前と、今日の段階の一覧（user-api が段階の項目を返さないときは、何も出さない） */
+function renderStages(v) {
+  const name = $("stage-name");
+  name.replaceChildren();
+  name.hidden = !v.stageName;
+  if (v.stageName) name.append(el("span", { className: "tag default", text: "今の段階" }), document.createTextNode(v.stageName));
+  $("stages-card").hidden = v.stages.length === 0;
+  $("stage-note").textContent = v.stages.length ? v.stageNote ?? "" : "";
+  $("stages").replaceChildren(
+    ...v.stages.map((s) =>
+      el(
+        "li",
+        { className: s.current ? "current" : "" },
+        el("span", { className: "name" }, el("span", { text: s.name }), s.current ? el("span", { className: "tag default", text: "今" }) : null),
+        el("span", { className: "num", text: `${s.usedText}・${s.limitText}` }),
+      )
+    ),
+  );
 }
 
 function renderModels(models) {

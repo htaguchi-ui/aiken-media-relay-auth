@@ -21,7 +21,7 @@ export const KIND_ORDER = ["video", "image", "speech", "music"];
 
 /** 区分（role）ごとのバッジの class（admin.html と同じ配色） */
 export function roleBadgeClass(role) {
-  return role === "student" || role === "member" || role === "admin" ? role : "";
+  return role === "student" || role === "member" || role === "instructor" || role === "admin" ? role : "";
 }
 
 /** 枠の対象外（管理者以外）で、案内の文も無いときの 1 行 */
@@ -39,7 +39,7 @@ export const LOW_RATIO = 0.2;
  */
 export function creditsView(credits, role) {
   const c = credits && typeof credits === "object" ? credits : {};
-  const base = { value: "—", limitText: null, slotLine: null, notice: null, ratio: null, low: false };
+  const base = { value: "—", limitText: null, slotLine: null, notice: null, ratio: null, low: false, stageName: null, stages: [], stageNote: null };
   if (c.applies !== true) {
     if (role === "admin") return { ...base, mode: "unlimited", value: "上限なし" };
     // 管理者以外で枠の対象外：見出しだけの空にならないよう、1 行の案内を出す
@@ -52,7 +52,9 @@ export function creditsView(credits, role) {
   const ratio = limit !== null && limit > 0 ? Math.min(1, Math.max(0, c.remaining / limit)) : null;
   const slot = typeof c.slot === "string" && c.slot ? c.slot : null;
   const until = typeof c.until === "string" && c.until ? c.until : null;
+  const stage = stageView(c);
   return {
+    ...stage,
     mode: "number",
     value: formatCredits(c.remaining),
     limitText: limit === null ? null : `/ 上限 ${formatCredits(limit)}`,
@@ -61,6 +63,30 @@ export function creditsView(credits, role) {
     ratio,
     low: ratio !== null && ratio <= LOW_RATIO,
   };
+}
+
+/** 段階の回で、段階の使い切らなかった分は次に持ち越せないことの 1 行（段階の回だけに出す） */
+export const MSG_STAGE_NO_CARRY = "ワークショップごとに上限があり、使い切らなかった分は次に持ち越せません。";
+
+/**
+ * 段階の回（016）の表示。user-api の credits に `stage`（今の段階の名前の文字列）と
+ * `stages_today`（[{ name, limit, used, current }]）があるときだけ。Day ごとの回・メンバー・講師にはどちらも無く、空になる。
+ * 返り値：{ stageName, stages: [{ name, limitText, usedText, current }], stageNote }
+ */
+export function stageView(credits) {
+  const c = credits && typeof credits === "object" ? credits : {};
+  const stageName = typeof c.stage === "string" && c.stage ? c.stage : null;
+  if (!stageName) return { stageName: null, stages: [], stageNote: null };
+  const list = Array.isArray(c.stages_today) ? c.stages_today : [];
+  const stages = list
+    .filter((s) => s && typeof s.name === "string" && s.name)
+    .map((s) => ({
+      name: s.name,
+      limitText: isNumber(s.limit) ? `上限 ${formatCredits(s.limit)}` : "—",
+      usedText: isNumber(s.used) ? `使用 ${formatCredits(s.used)}` : "—",
+      current: s.current === true,
+    }));
+  return { stageName, stages, stageNote: MSG_STAGE_NO_CARRY };
 }
 
 /** 「使えるモデル」の小見出し（user-api の kind_label ではなく、この画面の呼び方） */

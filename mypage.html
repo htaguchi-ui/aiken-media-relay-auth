@@ -24,6 +24,7 @@
     --student-bg: #E6EAF2; --student-fg: #22325E;
     --member-bg: #E5ECEA; --member-fg: #355A54;
     --admin-bg: #ECEDF0; --admin-fg: #30343B;
+    --instructor-bg: #ECE8F2; --instructor-fg: #4A3A66;
     --ok-bg: #E7EDE8; --ok-fg: #3D5B45;
     --warn-fg: #74512C;
     --low: #A0573A; --low-text: #8A4B33;
@@ -42,6 +43,7 @@
       --student-bg: #243052; --student-fg: #C7D2F2;
       --member-bg: #1E3532; --member-fg: #A9D0C6;
       --admin-bg: #2A2E39; --admin-fg: #D0D4DC;
+      --instructor-bg: #2E2640; --instructor-fg: #D2C6EC;
       --ok-bg: #1F3527; --ok-fg: #A9D4B4;
       --warn-fg: #EBC79C;
       --low: #D8916F; --low-text: #EBA887;
@@ -84,6 +86,7 @@
   .badge.student { background: var(--student-bg); color: var(--student-fg); }
   .badge.member { background: var(--member-bg); color: var(--member-fg); }
   .badge.admin { background: var(--admin-bg); color: var(--admin-fg); }
+  .badge.instructor { background: var(--instructor-bg); color: var(--instructor-fg); }
   .tag { display: inline-block; margin-left: 8px; font-size: 11px; font-weight: 600; padding: 0 8px; border-radius: 999px; white-space: nowrap; line-height: 1.6; vertical-align: 1px; }
   .tag.default { background: var(--ok-bg); color: var(--ok-fg); }
   .tag.image-only { background: var(--accent-soft); color: var(--accent-soft-text); border: 1px solid var(--accent-soft-line); }
@@ -127,6 +130,14 @@
   .bar.low > span { background: var(--low); }
   .slot-line { color: var(--text-2); }
   .notice { color: var(--text-2); font-size: 16px; }
+  .stage-name { font-size: 17px; font-weight: 700; overflow-wrap: anywhere; }
+  .stage-name .tag { margin-left: 0; margin-right: 8px; }
+  ul.stages { list-style: none; margin: 0; padding: 0; }
+  ul.stages li { display: grid; grid-template-columns: minmax(0, 1fr) auto; align-items: baseline; gap: 4px 12px; padding: 10px 0; border-bottom: 1px solid var(--line-soft); }
+  ul.stages li:last-child { border-bottom: 0; }
+  ul.stages li.current { font-weight: 700; }
+  ul.stages .name { overflow-wrap: anywhere; }
+  ul.stages .num { color: var(--text-2); white-space: nowrap; font-variant-numeric: tabular-nums; font-weight: 500; }
 
   /* ---- モデル ---- */
   .kind-group { display: flex; flex-direction: column; gap: 4px; }
@@ -192,8 +203,17 @@
         <span class="limit tabular" id="credits-limit"></span>
       </div>
       <div class="bar" id="credits-bar" hidden><span id="credits-bar-fill"></span></div>
+      <p class="stage-name" id="stage-name" hidden></p>
       <p class="slot-line" id="slot-line" hidden></p>
       <p class="notice" id="credits-notice" hidden></p>
+    </section>
+
+    <section class="card" id="stages-card" aria-labelledby="stages-title" hidden>
+      <div class="card-head">
+        <h2 id="stages-title">今日の段階</h2>
+      </div>
+      <ul class="stages" id="stages"></ul>
+      <p class="muted small" id="stage-note"></p>
     </section>
 
     <section class="card" aria-labelledby="models-title">
