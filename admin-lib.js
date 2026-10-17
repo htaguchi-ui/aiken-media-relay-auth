@@ -1011,6 +1011,23 @@ export const SETTING_LIMITS = [
     resetLabel: "既定に戻す",
     ...s,
   })),
+  // 017（口パク）で足された項目。null は既定の 60 秒（DB の既定と同じ）。列が無い 017 の前の DB では、行に無いので出さない
+  {
+    key: "lipsync_max_audio_seconds",
+    label: "口パクの音声の長さの上限",
+    min: 6,
+    max: 900,
+    defaultValue: 60,
+    integer: true,
+    usd: false,
+    unit: "秒",
+    optional: true,
+    emptyIsNull: true,
+    nullText: "既定（60 秒）",
+    resetLabel: "既定に戻す",
+    confirm: false,
+    desc: "口パクの動画に使える音声の長さ（秒）です。これより長い音声は、次の生成から断られます。空欄で保存すると既定の 60 秒になります。",
+  },
 ];
 
 /** 画面に出す上限の項目（optional の項目は、サーバーの設定の行にその列があるときだけ） */
@@ -1037,6 +1054,7 @@ export function formatSettingValue(key, value) {
   const spec = settingSpec(key);
   if (value === null || value === undefined) return spec?.nullText ?? DEFAULT_SETTING_TEXT;
   if (spec?.usd) return formatUsdShort(value);
+  if (spec?.unit) return `${formatCredits(value)} ${spec.unit}`;
   return spec?.credits ? `${formatCredits(value)} クレジット` : `${formatCredits(value)} 回`;
 }
 
@@ -1045,7 +1063,7 @@ export function settingRangeText(key) {
   const s = settingSpec(key);
   if (!s) return "";
   if (s.usd) return `${formatUsdShort(s.min)}〜${formatUsdShort(s.max)}`;
-  return `${formatCredits(s.min)}〜${formatCredits(s.max)} ${s.credits ? "クレジット" : "回"}`;
+  return `${formatCredits(s.min)}〜${formatCredits(s.max)} ${s.unit ?? (s.credits ? "クレジット" : "回")}`;
 }
 
 /** 値の出どころ（DB に値があるか、既定〔環境変数〕か） */
@@ -1063,7 +1081,7 @@ export function parseSettingInput(key, text) {
   if (!spec) return { problem: "変更できる項目ではありません" };
   const s = String(text ?? "")
     .replace(/[０-９．]/g, (c) => String.fromCharCode(c.charCodeAt(0) - 0xFEE0))
-    .replace(/[,，\s$＄]|回|ドル|USD|クレジット/gi, "");
+    .replace(/[,，\s$＄]|回|秒|ドル|USD|クレジット/gi, "");
   // 空欄が「上限なし」の項目は、空欄をそのまま null（上限なし）にする
   if (s === "" && spec.emptyIsNull) return { value: null };
   if (s === "") return { problem: `${spec.label}を入力してください（既定に戻すときは「既定に戻す」を押します）` };
@@ -1103,6 +1121,16 @@ export function limitChangeCheck(key, current, next, info) {
       confirm: lowering,
       warnings,
       note: `目安が ${formatCredits(next)} クレジットを超える生成（長い動画・高い解像度）は、管理者を含む全員が受け付けられなくなります。`,
+    };
+  }
+  if (key === "lipsync_max_audio_seconds") {
+    // 017：下げるとき（今が既定のときは既定の 60 秒と比べる）だけ確認する。保存済みの生成は変わらない
+    const effective = current === null || current === undefined ? settingSpec(key).defaultValue : Number(current);
+    const lowering = next === null || next === undefined ? settingSpec(key).defaultValue < effective : next < effective;
+    return {
+      confirm: lowering,
+      warnings,
+      note: `${next === null || next === undefined ? settingSpec(key).defaultValue : formatCredits(next)} 秒より長い音声の口パクは、次の生成から断られます。`,
     };
   }
   if (settingSpec(key)?.defaultValue !== undefined) {
@@ -1161,9 +1189,9 @@ export function globalUsageView(info) {
 }
 
 /** モデルの種類の並びと表示名 */
-export const MODEL_KIND_LABELS = { video: "動画", image: "画像", speech: "読み上げ", music: "音楽" };
+export const MODEL_KIND_LABELS = { video: "動画", image: "画像", speech: "読み上げ", music: "音楽", lipsync: "口パク動画" };
 
-/** admin-api の models を種類ごとにまとめる（動画・画像・読み上げ・音楽の順。知らない種類は後ろ） */
+/** admin-api の models を種類ごとにまとめる（動画・画像・読み上げ・音楽・口パク動画の順。知らない種類は後ろ） */
 export function groupModels(models) {
   const order = Object.keys(MODEL_KIND_LABELS);
   const groups = new Map();

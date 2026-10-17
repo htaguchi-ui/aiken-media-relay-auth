@@ -3297,9 +3297,10 @@ function limitsBox() {
           text: "「既定」はサーバーの環境変数の値です（その数値はこのコンソールからは見えません）。" +
             "「既定に戻す」は DB の値を消して、環境変数の値に戻します。変更は次の生成からすぐに効きます。" +
             (limits.some((l) => l.key === "job_max_credits") ? "「1 回の生成の上限」だけは環境変数の既定がなく、空欄は「上限なし」です。" : "") +
-            (limits.some((l) => l.defaultValue !== undefined)
+            (limits.some((l) => l.defaultValue !== undefined && l.key !== "lipsync_max_audio_seconds")
               ? "段階の回・講師の追加の項目は、「既定」のとき括弧の中の値で動きます（講師の 3 つの既定は仮の値です）。"
-              : ""),
+              : "") +
+            (limits.some((l) => l.key === "lipsync_max_audio_seconds") ? "「口パクの音声の長さの上限」は、空欄（既定）のとき 60 秒です。" : ""),
         }),
       ];
     },
