@@ -1,0 +1,228 @@
+<!doctype html>
+<html lang="ja">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+<meta name="robots" content="noindex">
+<meta name="referrer" content="no-referrer">
+<meta name="color-scheme" content="light dark">
+<meta http-equiv="Content-Security-Policy" content="default-src 'self'; script-src 'self' https://cdn.jsdelivr.net/npm/@supabase/supabase-js@2.117.2/dist/umd/supabase.js; connect-src https://tnzwhwitgnzoehbjrmoy.supabase.co; style-src 'self' 'unsafe-inline' https://fonts.googleapis.com; font-src https://fonts.gstatic.com; img-src 'self' data:; object-src 'none'; base-uri 'self'; form-action 'self'">
+<!-- supabase-js は版を固定し、改ざんされていないことを integrity（SRI）で確かめてから使う（window.supabase）。CSP もこのファイルだけを許す -->
+<script src="https://cdn.jsdelivr.net/npm/@supabase/supabase-js@2.117.2/dist/umd/supabase.js" integrity="sha384-Rj26LVGvoeRVR6+mwQmFfcR3QOBEwT+ZmuCWpuiqeTzJpCs0ER4ITAWGb4Hiy3Ok" crossorigin="anonymous"></script>
+<title>A.I.KEN Studio 講師の画面</title>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=IBM+Plex+Sans+JP:wght@400;500;600;700&amp;display=swap">
+<style>
+  :root {
+    --accent: #26396E; --accent-hover: #1B2B55; --on-accent: #FFFFFF;
+    --accent-soft: #EEF1F6; --accent-soft-line: #C8D0DE; --accent-soft-text: #22325E;
+    --bg: #F4F5F8; --surface: #FFFFFF;
+    --text: #16181D; --text-2: #4A505B; --muted: #5B6270;
+    --line: #E3E6EB; --line-2: #DDE1E7; --line-soft: #EEF0F3; --input-line: #C9CED6;
+    --track: #E9ECF1;
+    --student-bg: #E6EAF2; --student-fg: #22325E;
+    --member-bg: #E5ECEA; --member-fg: #355A54;
+    --admin-bg: #ECEDF0; --admin-fg: #30343B;
+    --instructor-bg: #ECE8F2; --instructor-fg: #4A3A66;
+    --ok-bg: #E7EDE8; --ok-fg: #3D5B45;
+    --warn-bg: #F6EEE4; --warn-fg: #74512C;
+    --low: #A0573A; --low-text: #8A4B33;
+    --danger: #96413A;
+    --font: "IBM Plex Sans JP", "Hiragino Sans", "Hiragino Kaku Gothic ProN", "Noto Sans JP", "Yu Gothic UI", Meiryo, system-ui, sans-serif;
+  }
+  /* ダーク表示：紺基調のまま明度を反転（マイページ・管理コンソールと同じ） */
+  @media (prefers-color-scheme: dark) {
+    :root {
+      --accent: #A9B9E9; --accent-hover: #C3CFF2; --on-accent: #0E1322;
+      --accent-soft: #1E2741; --accent-soft-line: #34406A; --accent-soft-text: #C7D2F2;
+      --bg: #0E1220; --surface: #161B2B;
+      --text: #E8EAF0; --text-2: #C2C7D2; --muted: #A0A7B6;
+      --line: #283048; --line-2: #323B54; --line-soft: #222A3E; --input-line: #3C4661;
+      --track: #262E44;
+      --student-bg: #243052; --student-fg: #C7D2F2;
+      --member-bg: #1E3532; --member-fg: #A9D0C6;
+      --admin-bg: #2A2E39; --admin-fg: #D0D4DC;
+      --instructor-bg: #2E2640; --instructor-fg: #D2C6EC;
+      --ok-bg: #1F3527; --ok-fg: #A9D4B4;
+      --warn-bg: #3A2E20; --warn-fg: #EBC79C;
+      --low: #D8916F; --low-text: #EBA887;
+      --danger: #EE968C;
+    }
+  }
+  * { box-sizing: border-box; }
+  html { -webkit-text-size-adjust: 100%; }
+  body {
+    margin: 0; min-height: 100vh; background: var(--bg); color: var(--text);
+    font-family: var(--font); font-size: 15px; line-height: 1.7;
+  }
+  [hidden] { display: none !important; }
+  .tabular { font-variant-numeric: tabular-nums; }
+  .muted { color: var(--muted); }
+  .small { font-size: 12px; }
+  .ellipsis { white-space: nowrap; overflow: hidden; text-overflow: ellipsis; min-width: 0; }
+  .error-text { color: var(--danger); }
+  .warn-text { color: var(--warn-fg); font-weight: 600; }
+  h1, h2, h3, p { margin: 0; }
+  button { font: inherit; color: inherit; cursor: pointer; }
+  button:disabled { cursor: not-allowed; }
+  :focus-visible { outline: 2px solid var(--accent); outline-offset: 2px; }
+
+  /* ---- ボタン・入力 ---- */
+  .btn {
+    min-height: 44px; padding: 0 16px; border-radius: 12px; border: 1px solid var(--line-2);
+    background: var(--surface); color: var(--text); font-weight: 700; font-size: 14px;
+    display: inline-flex; align-items: center; justify-content: center; gap: 8px; text-decoration: none;
+  }
+  .btn:hover:not(:disabled) { border-color: var(--input-line); }
+  .btn.primary { background: var(--accent); border-color: var(--accent); color: var(--on-accent); }
+  .btn.primary:hover:not(:disabled) { background: var(--accent-hover); border-color: var(--accent-hover); }
+  .btn.big { min-height: 52px; border-radius: 14px; font-size: 16px; }
+  .btn.compact { min-height: 36px; padding: 0 12px; font-size: 13px; border-radius: 10px; }
+  .btn:disabled { opacity: 0.55; }
+  .input { min-height: 44px; width: 100%; padding: 0 12px; border-radius: 10px; border: 1px solid var(--input-line); background: var(--surface); color: var(--text); font: inherit; }
+  label.field-label { display: block; font-size: 13px; font-weight: 600; margin-bottom: 4px; }
+
+  /* ---- バッジ ---- */
+  .badge { flex: none; display: inline-flex; align-items: center; font-size: 12px; font-weight: 600; padding: 1px 10px; border-radius: 999px; white-space: nowrap; line-height: 1.6; }
+  .badge.student { background: var(--student-bg); color: var(--student-fg); }
+  .badge.member { background: var(--member-bg); color: var(--member-fg); }
+  .badge.admin { background: var(--admin-bg); color: var(--admin-fg); }
+  .badge.instructor { background: var(--instructor-bg); color: var(--instructor-fg); }
+  .badge.now { background: var(--ok-bg); color: var(--ok-fg); }
+  .badge.off { background: var(--track); color: var(--muted); }
+
+  /* ---- 読み込み・ログイン・エラー ---- */
+  .center-card { max-width: 440px; margin: 14vh auto 0; background: var(--surface); border: 1px solid var(--line); border-radius: 16px; padding: 32px 28px; display: flex; flex-direction: column; gap: 16px; }
+  .center-card h1 { font-size: 22px; }
+  .center-card .row { display: flex; flex-wrap: wrap; gap: 8px; }
+  @media (max-width: 480px) { .center-card { margin: 10vh 16px 0; padding: 28px 22px; } }
+
+  /* ---- 上部の帯 ---- */
+  .topbar { background: var(--surface); border-bottom: 1px solid var(--line); }
+  .topbar-inner { max-width: 960px; margin: 0 auto; display: flex; flex-wrap: wrap; align-items: center; justify-content: space-between; gap: 8px 16px; padding: 14px 20px; }
+  .topbar h1 { font-size: 17px; font-weight: 700; letter-spacing: 0.01em; min-width: 0; }
+  .account { display: flex; align-items: center; justify-content: flex-end; gap: 8px 12px; min-width: 0; }
+  .account .who { display: flex; align-items: center; gap: 8px; min-width: 0; }
+  #me-email { max-width: 260px; font-size: 13px; }
+  @media (max-width: 560px) {
+    .topbar-inner { padding: 10px 16px; }
+    .account { width: 100%; justify-content: space-between; }
+    .account .who { flex: 1 1 auto; }
+    #me-email { max-width: none; }
+  }
+
+  /* ---- 本体 ---- */
+  .content { max-width: 960px; margin: 0 auto; padding: 24px 20px 96px; display: flex; flex-direction: column; gap: 20px; }
+  @media (max-width: 560px) { .content { padding: 16px 16px 72px; gap: 16px; } }
+  .card { background: var(--surface); border: 1px solid var(--line); border-radius: 16px; padding: 24px; display: flex; flex-direction: column; gap: 16px; }
+  @media (max-width: 560px) { .card { padding: 20px 18px; } }
+  .card-head { display: flex; align-items: center; justify-content: space-between; gap: 12px; flex-wrap: wrap; }
+  .card h2 { font-size: 16px; font-weight: 700; }
+  .card h3 { font-size: 14px; font-weight: 700; }
+  .row-actions { display: flex; flex-wrap: wrap; gap: 8px; }
+  .hint { font-size: 13px; color: var(--muted); }
+  .note-box { background: var(--warn-bg); color: var(--warn-fg); border-radius: 12px; padding: 10px 14px; font-size: 14px; }
+
+  /* ---- お知らせ ---- */
+  #notice { position: sticky; top: 0; z-index: 5; display: flex; flex-direction: column; gap: 8px; max-width: 960px; margin: 0 auto; padding: 0 20px; }
+  #notice .toast { margin-top: 12px; padding: 12px 16px; border-radius: 12px; border: 1px solid var(--line-2); background: var(--surface); box-shadow: 0 4px 16px rgba(0, 0, 0, 0.12); display: flex; gap: 12px; align-items: flex-start; justify-content: space-between; }
+  #notice .toast.error { border-color: var(--danger); }
+  #notice .toast.ok { border-color: var(--ok-fg); }
+  #notice .toast p { overflow-wrap: anywhere; }
+  #notice .toast ul { margin: 4px 0 0; padding-left: 18px; }
+
+  /* ---- 段階 ---- */
+  .stage-now { display: flex; flex-direction: column; gap: 4px; }
+  .stage-now .label { font-size: 13px; color: var(--muted); }
+  .stage-now .name { font-size: 24px; font-weight: 700; color: var(--accent); overflow-wrap: anywhere; line-height: 1.4; }
+  ol.stage-list { list-style: none; margin: 0; padding: 0; display: flex; flex-direction: column; }
+  ol.stage-list li { display: grid; grid-template-columns: minmax(0, 1fr) auto; gap: 4px 12px; align-items: baseline; padding: 10px 0; border-top: 1px solid var(--line-soft); }
+  ol.stage-list li:first-child { border-top: 0; }
+  ol.stage-list li.current { font-weight: 700; }
+  ol.stage-list .name { overflow-wrap: anywhere; display: flex; gap: 8px; align-items: baseline; flex-wrap: wrap; }
+  ol.stage-list .credits { color: var(--text-2); white-space: nowrap; }
+  .move-row { display: grid; grid-template-columns: 1fr 1fr; gap: 12px; }
+  @media (max-width: 480px) { .move-row { grid-template-columns: 1fr; } }
+  .undo-box { background: var(--accent-soft); border: 1px solid var(--accent-soft-line); color: var(--accent-soft-text); border-radius: 12px; padding: 12px 14px; display: flex; flex-wrap: wrap; gap: 8px 16px; align-items: center; justify-content: space-between; }
+
+  /* ---- 受講者 ---- */
+  .students { list-style: none; margin: 0; padding: 0; }
+  .students li { border-top: 1px solid var(--line-soft); }
+  .students li:first-child { border-top: 0; }
+  .students label { display: grid; grid-template-columns: auto minmax(0, 1fr) auto; gap: 4px 12px; align-items: center; padding: 10px 0; cursor: pointer; }
+  .students label.disabled { opacity: 0.6; cursor: default; }
+  .students .who { display: flex; flex-direction: column; min-width: 0; }
+  .students .quota { text-align: right; display: flex; flex-direction: column; align-items: flex-end; gap: 4px; min-width: 120px; }
+  .students .last { font-size: 12px; color: var(--muted); }
+  .students .rem.low { color: var(--low-text); font-weight: 700; }
+  .bar { height: 6px; width: 120px; border-radius: 3px; background: var(--track); overflow: hidden; }
+  .bar > span { display: block; height: 100%; border-radius: inherit; background: var(--accent); }
+  .bar.low > span { background: var(--low); }
+  .grant-form { display: grid; grid-template-columns: 1fr 2fr; gap: 12px; }
+  @media (max-width: 560px) { .grant-form { grid-template-columns: 1fr; } }
+  ul.limits { list-style: none; margin: 0; padding: 0; display: grid; grid-template-columns: repeat(auto-fit, minmax(220px, 1fr)); gap: 8px 16px; font-size: 14px; }
+  ul.limits li { background: var(--accent-soft); border-radius: 10px; padding: 8px 12px; }
+  ul.limits b { font-variant-numeric: tabular-nums; }
+  ul.my-grants { list-style: none; margin: 0; padding: 0; }
+  ul.my-grants li { display: grid; grid-template-columns: minmax(0, 1fr) auto; gap: 8px 12px; align-items: center; padding: 10px 0; border-top: 1px solid var(--line-soft); }
+  ul.my-grants li:first-child { border-top: 0; }
+  ul.my-grants .what { overflow-wrap: anywhere; }
+
+  /* ---- 確認のダイアログ ---- */
+  dialog.confirm { border: 1px solid var(--line-2); border-radius: 16px; padding: 24px; width: min(440px, calc(100vw - 32px)); background: var(--surface); color: var(--text); }
+  dialog.confirm::backdrop { background: rgba(0, 0, 0, 0.5); }
+  dialog.confirm form { display: flex; flex-direction: column; gap: 16px; }
+  dialog.confirm h2 { font-size: 17px; }
+  dialog.confirm p { overflow-wrap: anywhere; }
+  dialog.confirm .row { display: flex; flex-wrap: wrap; gap: 8px; justify-content: flex-end; }
+</style>
+</head>
+<body>
+<div id="status" class="center-card" role="status"><p class="muted">読み込み中…</p></div>
+
+<section id="login" class="center-card" hidden aria-labelledby="login-title">
+  <h1 id="login-title">講師の画面</h1>
+  <p class="warn-text" id="login-note" role="status" hidden></p>
+  <p>講師・管理者の Google アカウントでログインしてください。</p>
+  <button type="button" class="btn primary big" id="login-btn">Google でログイン</button>
+  <p class="muted small">このページを閉じたり、ほかのページへ移ったりすると、ログアウトします（再読み込みのときは自動でログインし直します）。</p>
+</section>
+
+<section id="denied" class="center-card" hidden aria-labelledby="denied-title">
+  <h1 id="denied-title">講師の画面</h1>
+  <p class="error-text" id="denied-message">講師の画面は、担当する回の講師と管理者だけが使えます。担当の登録は管理者に確かめてください。</p>
+  <p class="muted small"><span id="denied-email" class="tabular"></span></p>
+  <div class="row"><button type="button" class="btn" id="denied-logout-btn">ログアウト</button></div>
+</section>
+
+<section id="failed" class="center-card" hidden aria-labelledby="failed-title">
+  <h1 id="failed-title">講師の画面</h1>
+  <p class="error-text" id="failed-message">読み込めませんでした。</p>
+  <div class="row">
+    <button type="button" class="btn primary" id="retry-btn">もう一度試す</button>
+    <button type="button" class="btn" id="failed-logout-btn">ログアウト</button>
+  </div>
+</section>
+
+<div id="app" hidden>
+  <header class="topbar">
+    <div class="topbar-inner">
+      <h1>A.I.KEN Studio 講師の画面</h1>
+      <div class="account">
+        <div class="who">
+          <span id="me-email" class="ellipsis tabular"></span>
+          <span id="me-role" class="badge"></span>
+        </div>
+        <button type="button" class="btn compact" id="logout-btn">ログアウト</button>
+      </div>
+    </div>
+  </header>
+  <div id="notice" role="region" aria-label="お知らせ" aria-live="polite"></div>
+  <main class="content" id="view"></main>
+</div>
+
+<dialog id="confirm" class="confirm" aria-labelledby="confirm-title"></dialog>
+<script type="module" src="./instructor.js"></script>
+</body>
+</html>

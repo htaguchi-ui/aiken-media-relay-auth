@@ -9,6 +9,8 @@ export const CONSENT_STORAGE_KEY = "aiken-consent-auth";
 export const ADMIN_STORAGE_KEY = "aiken-admin-auth";
 /** マイページのセッションの鍵（sessionStorage） */
 export const MYPAGE_STORAGE_KEY = "aiken-mypage-auth";
+/** 講師の画面のセッションの鍵（sessionStorage。マイページと同じ作りで、鍵だけ分ける） */
+export const INSTRUCTOR_STORAGE_KEY = "aiken-instructor-auth";
 /** 以前の版が localStorage に残したセッション（supabase-js の既定の鍵 sb-<ref>-auth-token。2 つの画面で共有していた） */
 export const LEGACY_STORAGE_PREFIX = "sb-tnzwhwitgnzoehbjrmoy-auth-token";
 
@@ -21,6 +23,15 @@ export const ADMIN_ACTIVITY_KEY = `${ADMIN_STORAGE_KEY}-last-active`;
 export const MYPAGE_IDLE_LIMIT_MS = ADMIN_IDLE_LIMIT_MS;
 /** マイページの最後の操作の時刻（sessionStorage・ミリ秒） */
 export const MYPAGE_ACTIVITY_KEY = `${MYPAGE_STORAGE_KEY}-last-active`;
+
+/** 講師の画面を操作しないまま、この時間が過ぎたらログアウトする（マイページ・管理コンソールと同じ 30 分） */
+export const INSTRUCTOR_IDLE_LIMIT_MS = ADMIN_IDLE_LIMIT_MS;
+/** 講師の画面の最後の操作の時刻（sessionStorage・ミリ秒） */
+export const INSTRUCTOR_ACTIVITY_KEY = `${INSTRUCTOR_STORAGE_KEY}-last-active`;
+/** 講師の画面の再読み込みの手がかりの鍵（セッションの鍵の接頭辞で「始まらない」名前。マイページの MYPAGE_RELOAD_HINT_KEY と同じ理由） */
+export const INSTRUCTOR_RELOAD_HINT_KEY = "aiken-instructor-reload-hint";
+/** 離れてからこの時間（ミリ秒）以内に「再読み込み」で開いたときだけ、自動でログインし直す */
+export const INSTRUCTOR_RELOAD_GRACE_MS = 15 * 1000;
 
 /**
  * 再読み込みの手がかり（pagehide で書く sessionStorage の値：{ leftAt: 離れた時刻のミリ秒, hadSession: 離れる前にログインしていたか }）。
