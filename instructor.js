@@ -311,23 +311,30 @@ function clearNotice() {
 
 // ---- 確認のダイアログ（既定は「やめる」） ----
 
-/** 確認を出す。「やめる」が最初にフォーカスされ、Esc でもやめる。続けるなら true */
+/**
+ * 確認を出す。「やめる」が最初にフォーカスされ、Esc でもやめる。続けるなら true。
+ * 押されたボタンで直接決める（close イベントの returnValue は、続けて開き直したときに前のダイアログの分と取り違える）
+ */
 function confirmDialog({ title, lines, okText }) {
   const dialog = $("confirm");
   return new Promise((resolve) => {
-    const cancel = el("button", { type: "submit", value: "cancel", className: "btn big", text: "やめる", autofocus: true });
-    const ok = el("button", { type: "submit", value: "ok", className: "btn primary big", text: okText });
+    const ctl = new AbortController();
+    const finish = (value) => {
+      if (ctl.signal.aborted) return;
+      ctl.abort();
+      if (dialog.open) dialog.close();
+      resolve(value);
+    };
+    const cancel = el("button", { type: "button", className: "btn big", text: "やめる", autofocus: true, onclick: () => finish(false) });
+    const ok = el("button", { type: "button", className: "btn primary big", text: okText, onclick: () => finish(true) });
     dialog.replaceChildren(
-      el(
-        "form",
-        { method: "dialog" },
-        el("h2", { id: "confirm-title", text: title }),
-        ...lines.map((t) => el("p", { text: t })),
-        el("div", { className: "row" }, cancel, ok),
-      ),
+      el("div", { className: "confirm-body" }, el("h2", { id: "confirm-title", text: title }), ...lines.map((t) => el("p", { text: t })), el("div", { className: "row" }, cancel, ok)),
     );
-    dialog.addEventListener("close", () => resolve(dialog.returnValue === "ok"), { once: true });
-    dialog.returnValue = "cancel";
+    // Esc は、閉じる前に止めて、やめるとして扱う
+    dialog.addEventListener("cancel", (e) => {
+      e.preventDefault();
+      finish(false);
+    }, { signal: ctl.signal });
     dialog.showModal();
     cancel.focus();
   });
