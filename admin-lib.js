@@ -680,6 +680,15 @@ export const ROSTER_FILTERS = [
   { id: "stopped", label: "停止中" },
 ];
 
+/** 名簿の絞り込みの選択肢。講師がいるときだけ「講師」を足す（016 の前の DB には講師がいない） */
+export function rosterFilters(rows) {
+  const list = [...ROSTER_FILTERS];
+  if ((rows ?? []).some((r) => r?.role === "instructor")) {
+    list.splice(list.findIndex((f) => f.id === "admin"), 0, { id: "instructor", label: "講師" });
+  }
+  return list;
+}
+
 export function matchesFilter(row, filter) {
   switch (filter) {
     case "needs":

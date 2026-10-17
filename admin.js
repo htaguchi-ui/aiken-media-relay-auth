@@ -97,7 +97,37 @@ import {
   rebaseModelDraft,
   resetCarry,
   effectiveDrafts,
+  isMissingSchemaError,
+  isMonthlyRole,
+  isWindowRole,
+  rosterFilters,
+  roleLabelsFor,
+  MSG_STAGE_NOT_READY,
 } from "./admin-lib.js";
+import {
+  adminGrantGroups,
+  cohortDateProblem,
+  cohortDateRule,
+  cohortDeleteBlock,
+  DAY_KIND_LABELS,
+  DAY_KINDS,
+  dayKindStartDate,
+  dayKindStarted,
+  dayTotals,
+  grantRowAction,
+  grantTotalLine,
+  groupStagesByDay,
+  memberDeleteBlock,
+  normalizeStageStatus,
+  parseStageRows,
+  parseTemplateForm,
+  REVOKE_CONFIRM_TEXT,
+  stageGrantTotalProblem,
+  stageName,
+  templateApplyProblem,
+  MAX_DAY_STAGE_TOTAL,
+  MAX_STAGES_PER_DAY,
+} from "./stage-lib.js";
 
 // 他のサイトに埋め込まれて操作させられるのを防ぐ（GitHub Pages では frame-ancestors を指定できないため）
 if (window.top !== window.self) {
@@ -166,6 +196,11 @@ const state = {
   /** 回の読み込みの失敗（013 が無いかの判定に使う） */
   cohortsErrorRaw: null,
   updatedAt: null,
+  /**
+   * 段階（016）の情報。available は DB が 016 を当てているか（cohorts に credit_mode の列があるか）。
+   * false の間は、新しい欄・操作を出さず、今までの書き込み（直接の insert・update・delete）を使う
+   */
+  stages: emptyStageState(),
   /** 設定の画面（初めて開いたときに読む。status は idle | loading | ok | error） */
   settings: {
     status: "idle",
@@ -259,6 +294,11 @@ function statusBadge(status) {
   return status === "active"
     ? el("span", { className: "badge ok", text: "有効" })
     : el("span", { className: "badge stopped", text: "停止中" });
+}
+
+/** 段階ごとの枠の回の印（016 が当たっていて、段階の回のときだけ） */
+function stageBadge(cohortId) {
+  return stagesAvailable() && isStageCohort(cohortId) ? el("span", { className: "badge stage", text: "段階ごと" }) : null;
 }
 
 function cohortStatusBadge(period) {
@@ -583,7 +623,7 @@ function stopIdleWatch() {
 
 /** 枠のある区分（まとめての操作・クレジット追加の対象） */
 function hasWindow(r) {
-  return r.role === "student" || r.role === "member";
+  return isWindowRole(r.role);
 }
 
 function applyRows(data) {
@@ -637,7 +677,7 @@ async function loadCohorts() {
 async function refresh() {
   $("reload-btn").disabled = true;
   try {
-    await Promise.all([loadUsage(), loadCohorts(), state.settings.status !== "idle" ? loadSettingsAll() : null]);
+    await Promise.all([loadUsage(), loadCohorts(), loadStageInfo(), state.settings.status !== "idle" ? loadSettingsAll() : null]);
   } finally {
     $("reload-btn").disabled = false;
   }
@@ -787,7 +827,7 @@ function setFilter(id) {
 
 function renderChips() {
   $("chips").replaceChildren(
-    ...ROSTER_FILTERS.map((f) =>
+    ...rosterFilters(state.rows).map((f) =>
       el(
         "button",
         {
@@ -943,7 +983,7 @@ function rosterCard(r) {
 
 function tableRow(r) {
   const v = windowView(r);
-  const cohortText = r.role === "student" ? (r.cohort_id ?? "回が未設定") : r.role === "member" ? "月額制" : "";
+  const cohortText = r.role === "student" ? (r.cohort_id ?? "回が未設定") : isMonthlyRole(r.role) ? "月額制" : "";
   let quota;
   if (v.state === "quota") {
     quota = [
@@ -1024,7 +1064,7 @@ function renderSelHead(visible) {
   const sel = selectedRows();
   const students = sel.filter((r) => r.role === "student").length;
   const members = sel.length - students;
-  const filterLabel = ROSTER_FILTERS.find((f) => f.id === state.filter)?.label;
+  const filterLabel = rosterFilters(state.rows).find((f) => f.id === state.filter)?.label;
   const narrowed = state.filter !== "all" || state.query.trim()
     ? `今は絞り込み（${[state.filter !== "all" ? filterLabel : "", state.query.trim() ? `「${state.query.trim()}」` : ""].filter(Boolean).join("・")}）中です。`
     : "";
@@ -1099,7 +1139,7 @@ function renderSelectBar() {
   }
   const sel = selectedRows();
   const students = sel.filter((r) => r.role === "student");
-  const members = sel.filter((r) => r.role === "member");
+  const members = sel.filter((r) => isMonthlyRole(r.role));
   const allStopped = sel.length > 0 && sel.every((r) => r.status !== "active");
   const target = state.selectCohortTarget;
   barEl.hidden = false;
@@ -1214,7 +1254,7 @@ function memberDetail(r, titleId) {
   const sections = [];
   if (hasWindow(r)) sections.push(windowSection(r, v));
   if (r.role === "student") sections.push(cohortSection(r, v));
-  if (r.role === "member") sections.push(monthlySection(r));
+  if (isMonthlyRole(r.role)) sections.push(monthlySection(r));
   sections.push(usageSection(r));
   if (hasWindow(r)) sections.push(grantsSection(r));
   sections.push(...manageSection(r));
@@ -1277,7 +1317,7 @@ function windowSection(r, v) {
         el("span", { text: `基本 ${formatCredits(v.base)}` }),
         el("span", { text: `追加 +${formatCredits(v.granted)}` }),
         el("span", { text: `使用 ${formatCredits(v.used)}` }),
-        r.role === "member" ? el("span", { text: `上限 ${formatYen(v.limit)}` }) : null,
+        isMonthlyRole(r.role) ? el("span", { text: `上限 ${formatYen(v.limit)}` }) : null,
       ),
     );
   } else if (v.state === "unset") {
@@ -1298,6 +1338,9 @@ function windowSection(r, v) {
     ...content,
     toggle,
     canAdd ? null : el("p", { className: "hint", text: "今の枠が無い（期間外・未設定）ため、クレジットを追加できません。" }),
+    isStageStudent(r)
+      ? el("p", { className: "hint", text: "この人の回は、段階ごとの枠です。上限は今の段階で決まり、講師が段階を進めると切り替わります。追加は今の段階に付きます。" })
+      : null,
     form,
   );
 }
@@ -1399,52 +1442,96 @@ function usageSection(r) {
 function grantsSection(r) {
   const list = el("ul", { className: "grants" }, el("li", { className: "muted", text: "読み込み中…" }));
   loadGrants(r, list);
-  return el("section", { className: "box" }, el("h3", { text: "今の枠で追加したクレジット" }), list);
+  return el(
+    "section",
+    { className: "box" },
+    el("h3", { text: isStageStudent(r) ? "この回で追加したクレジット" : "今の枠で追加したクレジット" }),
+    list,
+  );
 }
 
-/** 今の枠の一時追加を一覧にする（RLS で管理者だけが読める） */
-async function loadGrants(r, list) {
-  if (!r.current_kind || !r.current_window_start || !r.current_window_end) {
-    list.replaceChildren(el("li", { className: "muted", text: "今の枠がありません。" }));
-    return;
+/** 一時追加の一覧の 1 行（段階の回の行と、Day ごと・月額の行で、ボタンが違う） */
+function grantItem(r, g, isStageRow) {
+  const action = grantRowAction(g, isStageRow);
+  const text = el(
+    "div",
+    { className: "gtext" },
+    el("span", { className: `ellipsis ${g.note ? "" : "muted"}`, text: g.note || "メモなし", title: g.note || null }),
+    el(
+      "span",
+      { className: "small muted num ellipsis" },
+      `${formatShortDateTime(g.createdAt)} · ${g.createdByEmail ?? "付与した人は不明"}${g.grantedAs === "instructor" ? "（講師）" : ""}`,
+    ),
+  );
+  let tail = null;
+  if (action.kind === "revoke") {
+    tail = el("button", { type: "button", className: "btn small-btn", text: action.label, "aria-label": `この追加（+${formatCredits(g.credits)}）を取り消す`, onclick: () => revokeStageGrant(r, g) });
+  } else if (action.kind === "none") {
+    tail = el("span", { className: "small muted", text: action.label });
+  } else {
+    tail = el("button", { type: "button", className: "icon-btn bare", "aria-label": `この追加（+${formatCredits(g.credits)}）を取り消す`, onclick: () => removeGrant(r, g) }, icon("trash"));
   }
-  const { data, error } = await supabase
+  return el("li", { className: g.revoked ? "revoked" : "" }, el("span", { className: "plus num", text: `+${formatCredits(g.credits)}` }), text, tail);
+}
+
+const GRANT_COLUMNS = "id, credits, note, created_at, created_by_email";
+const STAGE_GRANT_COLUMNS = `${GRANT_COLUMNS}, stage_id, revoked_at, revoked_by_email, granted_as`;
+
+/** 今の枠の一時追加（Day ごと・月額）を読む。RLS で管理者だけが読める */
+function queryWindowGrants(r, columns) {
+  return supabase
     .from("credit_grants")
-    .select("id, credits, note, created_at, created_by_email")
+    .select(columns)
     .eq("email", r.email)
     // 区分を変えた人の前の区分の付与（受講者の期間 ↔ 月額）は、今の枠に数えないので出さない
     .eq("window_kind", r.current_kind)
     .gte("window_start", r.current_window_start)
     .lte("window_end", r.current_window_end)
     .order("created_at", { ascending: false });
+}
+
+/** 一時追加を一覧にする。段階の回の受講者は、段階ごとに分け、取り消した行は取り消し済みとして出す（設計 7.1 の案 B） */
+async function loadGrants(r, list) {
+  const stageStudent = isStageStudent(r);
+  const hasWindowNow = !!(r.current_kind && r.current_window_start && r.current_window_end);
+  if (!hasWindowNow && !stageStudent) {
+    list.replaceChildren(el("li", { className: "muted", text: "今の枠がありません。" }));
+    return;
+  }
+  const columns = stagesAvailable() ? STAGE_GRANT_COLUMNS : GRANT_COLUMNS;
+  const [win, stg] = await Promise.all([
+    hasWindowNow ? queryWindowGrants(r, columns) : { data: [] },
+    stageStudent
+      ? supabase.from("credit_grants").select(columns).eq("email", r.email).not("stage_id", "is", null).order("created_at", { ascending: false })
+      : { data: [] },
+  ]);
+  const error = win.error || stg.error;
   if (error) {
     list.replaceChildren(el("li", { className: "error-text", text: explainError(error) }));
     return;
   }
-  if (!data?.length) {
+  const stageRows = stageStudent ? (stg.data ?? []) : [];
+  // 段階の回の追加は、段階の行に分ける。stage_id が無い行（その回に Day ごとの時代の追加が残っているなど）は、今の枠の分だけ別に出す
+  const rows = [...(win.data ?? []).filter((g) => !g.stage_id), ...stageRows];
+  if (!rows.length) {
     list.replaceChildren(el("li", { className: "muted", text: "追加はありません。" }));
     return;
   }
-  list.replaceChildren(
-    ...data.map((g) =>
-      el(
-        "li",
-        {},
-        el("span", { className: "plus num", text: `+${formatCredits(g.credits)}` }),
-        el(
-          "div",
-          { className: "gtext" },
-          el("span", { className: `ellipsis ${g.note ? "" : "muted"}`, text: g.note || "メモなし", title: g.note || null }),
-          el("span", { className: "small muted num ellipsis", text: `${formatShortDateTime(g.created_at)} · ${g.created_by_email ?? "付与した人は不明"}` }),
-        ),
-        el(
-          "button",
-          { type: "button", className: "icon-btn bare", "aria-label": `この追加（+${formatCredits(g.credits)}）を取り消す`, onclick: () => removeGrant(r, g) },
-          icon("trash"),
-        ),
-      )
-    ),
+  const view = adminGrantGroups(
+    rows.map((g) => ({ ...g })),
+    stagesOfCohort(r.cohort_id),
   );
+  const out = [];
+  if (stageStudent) {
+    out.push(el("li", { className: "grant-total small muted num", text: grantTotalLine(view.total, state.stages.limitT) }));
+  }
+  for (const g of view.groups) {
+    out.push(el("li", { className: "grant-group-head", text: g.heading }));
+    for (const row of g.rows) out.push(grantItem(r, row, true));
+  }
+  if (view.plain.length && stageStudent) out.push(el("li", { className: "grant-group-head", text: "Day ごとの枠の追加（段階の回にする前のもの）" }));
+  for (const row of view.plain) out.push(grantItem(r, row, false));
+  list.replaceChildren(...out);
 }
 
 function manageSection(r) {
@@ -1452,7 +1539,9 @@ function manageSection(r) {
   const roleSelect = el(
     "select",
     { "aria-label": `${r.email} の区分` },
-    ...Object.entries(ROLE_LABELS).map(([value, label]) => el("option", { value, text: label, selected: value === r.role })),
+    ...Object.entries(roleLabelsFor(stagesAvailable() || r.role === "instructor")).map(([value, label]) =>
+      el("option", { value, text: label, selected: value === r.role })
+    ),
   );
   roleSelect.addEventListener("change", () => changeRole(r, roleSelect));
   const rows = [el("label", { className: "mrow" }, el("span", { text: "区分を変更" }), el("span", { className: "mrow-val" }, roleSelect, icon("chevron", 16)))];
@@ -1468,6 +1557,8 @@ function manageSection(r) {
       el("label", { className: "mrow" }, el("span", { text: "所属する回を変更" }), el("span", { className: "mrow-val" }, cohortSelect, icon("chevron", 16))),
     );
   }
+  // 段階の回の追加がある受講者は削除できない（追加は記録として残す）。利用を止めるのは「停止」
+  const deleteBlock = memberDeleteBlock({ hasStageGrants: state.stages.grantEmails.has(r.email) });
   rows.push(
     el("button", {
       type: "button",
@@ -1479,12 +1570,13 @@ function manageSection(r) {
       type: "button",
       className: "mrow danger",
       text: "名簿から削除",
-      disabled: isMe,
-      title: isMe ? "自分自身は削除できません" : null,
+      disabled: isMe || !!deleteBlock,
+      title: isMe ? "自分自身は削除できません" : deleteBlock,
       onclick: () => removeMember(r),
     }),
   );
   const notes = ["停止・削除・区分の変更は、実行前に確認が出ます。"];
+  if (deleteBlock) notes.push(deleteBlock);
   if (isMe) notes.push("自分自身は削除できません。");
   if (r.role === "admin") notes.push("最後の有効な管理者は、停止・区分の変更・削除ができません。");
   return [
@@ -1539,15 +1631,16 @@ async function changeStatus(r, status) {
 
 async function changeRole(r, select) {
   const role = select.value;
-  // AIKENメンバーにするとき、月額が未設定なら初期値（3,300）を入れる
+  // AIKENメンバー・講師にするとき、月額が未設定なら初期値（3,300）を入れる
   const patch = { role };
-  if (role === "member" && (r.monthly_credits === null || r.monthly_credits === undefined)) {
+  if (isMonthlyRole(role) && (r.monthly_credits === null || r.monthly_credits === undefined)) {
     patch.monthly_credits = DEFAULT_MONTHLY_CREDITS;
   }
   const extra = "monthly_credits" in patch
     ? `\n（月額クレジットは初期値 ${formatCredits(DEFAULT_MONTHLY_CREDITS)}〔${formatYen(DEFAULT_MONTHLY_CREDITS)}〕にします）`
     : "";
-  if (!confirm(`${r.email} の区分を「${ROLE_LABELS[role]}」に変更しますか？${extra}`)) {
+  const roleLabel = roleLabelsFor(true)[role] ?? role;
+  if (!confirm(`${r.email} の区分を「${roleLabel}」に変更しますか？${extra}`)) {
     select.value = r.role;
     return;
   }
@@ -1556,7 +1649,7 @@ async function changeRole(r, select) {
     return;
   }
   const hint = role === "student" && !r.cohort_id ? "所属する回を設定してください（回が未設定の間は生成できません）。" : "";
-  await updateMember(r.email, patch, `${r.email} の区分を「${ROLE_LABELS[role]}」に変更しました。${hint}`);
+  await updateMember(r.email, patch, `${r.email} の区分を「${roleLabel}」に変更しました。${hint}`);
 }
 
 async function changeCohort(r, select) {
@@ -1583,7 +1676,14 @@ async function saveMonthly(r, value) {
   await updateMember(r.email, patch, `${r.email} の月額クレジットを保存しました。`);
 }
 
-/** 今の枠に一時追加する（時間枠は DB のトリガが決め、枠外なら拒否する） */
+/** 段階の回の受講者の、この回の追加の合計（G。取り消した追加も数える）を、追加の行から求める。読めなければ null */
+async function stageGrantedTotal(r) {
+  const { data, error } = await supabase.from("credit_grants").select("credits, stage_id").eq("email", r.email).not("stage_id", "is", null);
+  if (error) return null;
+  return (data ?? []).reduce((n, g) => n + Number(g.credits ?? 0), 0);
+}
+
+/** 今の枠に一時追加する（時間枠は DB のトリガが決め、枠外なら拒否する）。段階の回は今の段階に付く */
 async function addGrant(r, creditsText, noteText) {
   clearNotice();
   const credits = parseGrantCredits(creditsText);
@@ -1591,40 +1691,82 @@ async function addGrant(r, creditsText, noteText) {
     notify(`追加するクレジットは 1〜${formatCredits(MAX_CREDITS)} の整数で入力してください。`, "error");
     return;
   }
-  const over = grantTotalProblem(r, credits);
-  if (over) {
-    notify(`追加できません。${over}。`, "error");
-    return;
+  const stageStudent = isStageStudent(r);
+  if (stageStudent) {
+    // 段階の回は、10,000 の固定ではなく、この回の合計（T）で見る。T か追加済みが分からないときは DB が決める
+    const over = stageGrantTotalProblem({ granted: await stageGrantedTotal(r), limit: state.stages.limitT }, credits);
+    if (over) {
+      notify(`追加できません。${over}`, "error");
+      return;
+    }
+  } else {
+    const over = grantTotalProblem(r, credits);
+    if (over) {
+      notify(`追加できません。${over}。`, "error");
+      return;
+    }
   }
   const note = String(noteText ?? "").trim();
-  if (!confirm(`${r.email} の今の枠に ${formatCredits(credits)} クレジット（${formatYen(credits)}）を追加しますか？`)) return;
-  const { data, error } = await supabase
-    .from("credit_grants")
-    .insert({ email: r.email, credits, note: note || null })
-    .select("window_start, window_end")
-    .maybeSingle();
+  const where = stageStudent ? "今の段階（回の追加の合計に数えます。取り消しても戻りません）" : "今の枠";
+  if (!confirm(`${r.email} の${where}に ${formatCredits(credits)} クレジット（${formatYen(credits)}）を追加しますか？`)) return;
+  let data;
+  let error;
+  if (stagesAvailable()) {
+    ({ data, error } = await supabase.rpc("admin_grant_credits", { p_emails: [r.email], p_credits: credits, p_note: note || null }));
+  } else {
+    ({ data, error } = await supabase
+      .from("credit_grants")
+      .insert({ email: r.email, credits, note: note || null })
+      .select("window_start, window_end")
+      .maybeSingle());
+  }
   if (error) {
     notify(explainError(error), "error");
   } else {
     // 枠は DB のトリガがその時点の今の枠で決める（一覧が古いまま日付の境目をまたいでも、実際に付いた枠を示す）
-    const until = data?.window_end ? `（${windowLastDayText(data.window_end)} までの枠）` : "";
-    notify(`${r.email} の今の枠${until}に ${formatCredits(credits)} クレジットを追加しました。`);
+    const row = Array.isArray(data) ? data[0] : data;
+    const until = row?.window_end ? `（${windowLastDayText(row.window_end)} までの枠）` : "";
+    notify(`${r.email} の${stageStudent ? "今の段階" : "今の枠"}${until}に ${formatCredits(credits)} クレジットを追加しました。`);
   }
   await refresh();
 }
 
+/** Day ごと・月額の追加の削除（段階の回の追加は削除できない。取り消す） */
 async function removeGrant(r, g) {
   if (!confirm(`${r.email} への追加（+${formatCredits(g.credits)}）を取り消しますか？`)) return;
-  const { data, error } = await supabase.from("credit_grants").delete().eq("id", g.id).select("id");
+  let error;
+  let removed = true;
+  if (stagesAvailable()) {
+    ({ error } = await supabase.rpc("admin_delete_grant", { p_grant_id: g.id }));
+  } else {
+    const res = await supabase.from("credit_grants").delete().eq("id", g.id).select("id");
+    error = res.error;
+    removed = !!res.data?.length;
+  }
   if (error) notify(explainError(error), "error");
-  else if (!data?.length) notify("取り消せませんでした（権限が無いか、対象が見つかりません）。", "error");
+  else if (!removed) notify("取り消せませんでした（権限が無いか、対象が見つかりません）。", "error");
   else notify(`${r.email} への追加（+${formatCredits(g.credits)}）を取り消しました。`);
+  await refresh();
+}
+
+/** 段階の回の追加の取り消し（印を付けるだけ。判定からは外れ、回の合計には残る） */
+async function revokeStageGrant(r, g) {
+  clearNotice();
+  if (!confirm(`${r.email} への追加（+${formatCredits(g.credits)}）を取り消しますか？\n${REVOKE_CONFIRM_TEXT}`)) return;
+  const { error } = await supabase.rpc("revoke_stage_grant", { p_grant_id: g.id, p_note: null });
+  if (error) notify(explainError(error), "error");
+  else notify(`${r.email} への追加（+${formatCredits(g.credits)}）を取り消しました。回の合計の枠は戻りません。`);
   await refresh();
 }
 
 async function removeMember(r) {
   if (r.email === myEmail) {
     notify("自分自身は削除できません。", "error");
+    return;
+  }
+  const block = memberDeleteBlock({ hasStageGrants: state.stages.grantEmails.has(r.email) });
+  if (block) {
+    notify(block, "error");
     return;
   }
   if (!confirm(`${r.email} を名簿から削除しますか？\n（使用量の記録は残ります。元に戻すには追加し直してください）`)) return;
@@ -1743,7 +1885,7 @@ async function applyCohort(targets, cohortId) {
 }
 
 function openBulkMonthly(targets) {
-  const members = targets.filter((r) => r.role === "member");
+  const members = targets.filter((r) => isMonthlyRole(r.role));
   const input = creditInput("", { placeholder: "例：3300" });
   openSheet("bulk-monthly", () =>
     setSheet({
@@ -1751,7 +1893,7 @@ function openBulkMonthly(targets) {
       body: [
         el("p", {
           className: "muted",
-          text: `選んだ AIKENメンバー ${members.length} 人の月額クレジットを、同じ値にします。` +
+          text: `選んだ AIKENメンバー・講師 ${members.length} 人の月額クレジットを、同じ値にします。` +
             (targets.length > members.length ? `（受講者 ${targets.length - members.length} 人は対象外です）` : ""),
         }),
         field("毎月（日本時間の 1 日に戻る・繰り越しなし）", input, yenHint(input)),
@@ -1772,16 +1914,16 @@ async function applyBulkMonthly(members, value) {
     return;
   }
   if (!members.length) {
-    notify("AIKENメンバーを選んでください。", "error");
+    notify("AIKENメンバーか講師を選んでください。", "error");
     return;
   }
-  if (!confirm(`AIKENメンバー ${members.length} 人の月額を ${formatCredits(n)}（${formatYen(n)}）にしますか？`)) return;
+  if (!confirm(`AIKENメンバー・講師 ${members.length} 人の月額を ${formatCredits(n)}（${formatYen(n)}）にしますか？`)) return;
   const emails = members.map((r) => r.email);
   const { data, error } = await supabase
     .from("members")
     .update({ monthly_credits: n })
     .in("email", emails)
-    .eq("role", "member")
+    .in("role", ["member", "instructor"])
     .select("email");
   if (error) {
     notify(`月額を設定できませんでした（${explainError(error)}）。`, "error");
@@ -1790,7 +1932,7 @@ async function applyBulkMonthly(members, value) {
   }
   const updated = data?.length ?? 0;
   const short = shortfallText(emails.length, updated);
-  notify(`AIKENメンバー ${updated} 人の月額を設定しました。${short}`, short ? "error" : "ok");
+  notify(`AIKENメンバー・講師 ${updated} 人の月額を設定しました。${short}`, short ? "error" : "ok");
   if (!short) closeSheet();
   await refresh();
 }
@@ -1825,7 +1967,10 @@ function openBulkGrant(targets) {
   );
 }
 
-/** 1 人ずつ順に追加する（枠は DB のトリガが人ごとに決める）。途中で失敗した人は理由を添えて知らせる */
+/**
+ * まとめて追加する。016 の DB では admin_grant_credits を 1 回（全員分が通るか、全部断られる。枠・段階は DB が人ごとに決める）。
+ * 016 の前の DB では、今までどおり 1 人ずつ順に追加し、途中で失敗した人は理由を添えて知らせる
+ */
 async function applyBulkGrant(targets, creditsText, noteText) {
   clearNotice();
   const credits = parseGrantCredits(creditsText);
@@ -1835,9 +1980,9 @@ async function applyBulkGrant(targets, creditsText, noteText) {
   }
   const withWindow = targets.filter(canGrant);
   const skipped = targets.filter((r) => !canGrant(r));
-  // 1 人あたりの追加の合計の上限を超える人は、送らずに除く
-  const overTotal = withWindow.filter((r) => grantTotalProblem(r, credits));
-  const eligible = withWindow.filter((r) => !grantTotalProblem(r, credits));
+  // 1 人あたりの追加の合計の上限を超える人は、送らずに除く（Day ごと・月額だけ。段階の回の受講者は回の合計で DB が判定する）
+  const overTotal = withWindow.filter((r) => !isStageStudent(r) && grantTotalProblem(r, credits));
+  const eligible = withWindow.filter((r) => isStageStudent(r) || !grantTotalProblem(r, credits));
   if (!eligible.length) {
     notify(
       overTotal.length
@@ -1847,14 +1992,26 @@ async function applyBulkGrant(targets, creditsText, noteText) {
     );
     return;
   }
-  if (!confirm(`${eligible.length} 人の今の枠に、1 人あたり ${formatCredits(credits)} クレジット（${formatYen(credits)}）を追加しますか？`)) return;
+  const stageCount = eligible.filter(isStageStudent).length;
+  const stageNote = stageCount ? `（うち ${stageCount} 人は段階の回です。今の段階に付き、回の合計に数えます）` : "";
+  if (!confirm(`${eligible.length} 人の今の枠に、1 人あたり ${formatCredits(credits)} クレジット（${formatYen(credits)}）を追加しますか？${stageNote}`)) return;
   const note = String(noteText ?? "").trim() || null;
   let done = 0;
   const failed = [];
-  for (const r of eligible) {
-    const { error } = await supabase.from("credit_grants").insert({ email: r.email, credits, note }).select("id").maybeSingle();
-    if (error) failed.push(`${r.email}：${explainError(error)}`);
-    else done++;
+  if (stagesAvailable()) {
+    const { error } = await supabase.rpc("admin_grant_credits", { p_emails: eligible.map((r) => r.email), p_credits: credits, p_note: note });
+    if (error) {
+      notify(`追加できませんでした（全員分とも追加していません）。${explainError(error)}`, "error");
+      await refresh();
+      return;
+    }
+    done = eligible.length;
+  } else {
+    for (const r of eligible) {
+      const { error } = await supabase.from("credit_grants").insert({ email: r.email, credits, note }).select("id").maybeSingle();
+      if (error) failed.push(`${r.email}：${explainError(error)}`);
+      else done++;
+    }
   }
   const parts = [`${done} 人の今の枠に ${formatCredits(credits)} クレジットを追加しました。`];
   if (failed.length) parts.push(`次の ${failed.length} 人には追加できませんでした。`);
@@ -1918,8 +2075,10 @@ function buildAddUi() {
     "fieldset",
     { className: "plain" },
     el("legend", { text: "区分" }),
-    el("div", { className: "choice" }, role("student", "受講者", true), role("member", "メンバー", false), role("admin", "管理者", false)),
+    el("div", { className: "choice" }, role("student", "受講者", true), role("member", "メンバー", false), role("instructor", "講師", false), role("admin", "管理者", false)),
   );
+  // 講師は 016 が DB に当たってから選べる（016 の前は members の区分の check が断る）
+  const instructorChoice = roles.querySelector('input[value="instructor"]').closest("label");
   // 受講者：所属する回
   const cohortSelect = el("select", { className: "input num", id: "add-cohort" });
   const cohortPreview = el("div");
@@ -1938,7 +2097,7 @@ function buildAddUi() {
   const memberBox = el(
     "section",
     { className: "box" },
-    el("h3", { text: "月額のクレジット" }),
+    el("h3", { text: "月額のクレジット（メンバー・講師）" }),
     field("毎月（1日に戻る・繰越なし）", monthly, yenHint(monthly)),
     el("p", { className: "hint", text: `初期値は ${formatCredits(DEFAULT_MONTHLY_CREDITS)}。空欄にすると未設定（生成できません）。` }),
   );
@@ -1984,7 +2143,7 @@ function buildAddUi() {
     bulk.hidden = isSingle;
     const r = currentRole();
     studentBox.hidden = r !== "student";
-    memberBox.hidden = r !== "member";
+    memberBox.hidden = !isMonthlyRole(r);
     adminNote.hidden = r !== "admin";
     submit.textContent = isSingle ? "追加する" : "まとめて追加する";
   };
@@ -2003,6 +2162,11 @@ function buildAddUi() {
     submit,
     currentMode,
     currentRole,
+    /** 講師の選択肢を、016 が当たっているときだけ出す（外れたときに講師が選ばれていれば、受講者に戻す） */
+    syncRoles() {
+      instructorChoice.hidden = !stagesAvailable();
+      if (instructorChoice.hidden && currentRole() === "instructor") this.setRole("student");
+    },
     setRole(value) {
       const input = roles.querySelector(`input[value="${value}"]`);
       if (input) input.checked = true;
@@ -2030,6 +2194,7 @@ function openAdd({ role = null, cohortId } = {}) {
     addUi.refreshCohorts(cohortId);
   }
   openSheet("add", () => {
+    addUi.syncRoles();
     addUi.refreshCohorts();
     setSheet({ title: "名簿に追加", body: addUi.body, foot: addUi.foot });
   });
@@ -2039,7 +2204,7 @@ function openAdd({ role = null, cohortId } = {}) {
 function extrasForAdd(role) {
   // 013 が無い DB には cohort_id の列が無いので送らない（null でも送ると PGRST204 で拒否される）
   if (role === "student") return no013() ? {} : { cohort_id: addUi.cohortSelect.value || null };
-  if (role === "member") {
+  if (isMonthlyRole(role)) {
     const { patch, problems } = parseCreditForm({ monthly_credits: addUi.monthly.value }, { partial: false, fields: MONTHLY_FIELDS });
     if (problems.length) {
       notify("追加できません。月額クレジットを確認してください。", "error", problems);
@@ -2153,7 +2318,7 @@ function cohortCards() {
         el(
           "button",
           { type: "button", className: "card", onclick: () => openCohort(c.id) },
-          el("span", { className: "card-top" }, el("span", { className: "cid num", text: c.id }), el("span", { className: "card-name" }), cohortStatusBadge(c.current_period)),
+          el("span", { className: "card-top" }, el("span", { className: "cid num", text: c.id }), el("span", { className: "card-name" }), stageBadge(c.id), cohortStatusBadge(c.current_period)),
           el("span", { className: "small ellipsis", text: [c.name, c.venue_name].filter(Boolean).join(" · ") || "（名前なし）" }),
           el("span", { className: "num", text: `Day1 ${formatDateWithWeekday(c.day1_date)}　→　Day2 ${formatDateWithWeekday(c.day2_date)}` }),
           u && u.limit !== null
@@ -2230,7 +2395,7 @@ function cohortTable() {
           "aria-current": state.cohortId === c.id ? "true" : null,
           onclick: () => openCohort(c.id),
         },
-        el("span", { className: "cell" }, el("span", { className: "num strong", text: c.id }), cohortStatusBadge(c.current_period)),
+        el("span", { className: "cell" }, el("span", { className: "num strong", text: c.id }), cohortStatusBadge(c.current_period), stageBadge(c.id)),
         el(
           "span",
           { className: "cell" },
@@ -2304,7 +2469,8 @@ async function openCohort(id) {
     openSheet("cohort", () => setSheet({ title: id, body: [el("p", { className: "muted", text: "最新の状態を読み込んでいます…" })] }));
   }
   // 編集の前に読み直す（人数・使用・日付を最新に）
-  await Promise.all([loadCohorts(), loadUsage()]);
+  await Promise.all([loadCohorts(), loadUsage(), loadStageInfo()]);
+  if (stagesAvailable() && isStageCohort(id)) await loadCohortStageStatus(id);
   if (seq !== cohortSeq) return;
   state.cohortLoading = false;
   if (!isDesktop() && sheetKind !== "cohort") return;
@@ -2328,7 +2494,7 @@ function cohortHead(c, titleId) {
     { className: "detail-title" },
     el("h2", { id: titleId, className: "title-lg num cid", text: c.id }),
     el("span", { className: "sub", text: [c.name, `会場 ${c.venue_no} ${c.venue_name ?? ""}`].filter(Boolean).join(" · ") }),
-    el("div", { className: "badges" }, cohortStatusBadge(c.current_period)),
+    el("div", { className: "badges" }, cohortStatusBadge(c.current_period), stageBadge(c.id)),
   );
 }
 
@@ -2366,7 +2532,7 @@ function renderCohortSheet() {
     );
   setSheet({
     head: cohortHead(c, "sheet-title"),
-    body: [schedule, cohortSumBox(c), cohortStudentsBox(c, 5), cohortAddButtons(c), ...cohortManage(c)],
+    body: [schedule, cohortSumBox(c), ...stageBoxes(c), cohortStudentsBox(c, 5), cohortAddButtons(c), ...cohortManage(c)],
   });
 }
 
@@ -2382,7 +2548,7 @@ function renderCohortAside() {
     aside.replaceChildren(el("p", { className: "side-empty", text: "回を選ぶと、ここで設定できます。" }));
     return;
   }
-  aside.replaceChildren(cohortHead(c, "aside-cohort-title"), cohortEditForm(c), cohortSumBox(c), cohortStudentsBox(c, 5), cohortAddButtons(c), ...cohortManage(c));
+  aside.replaceChildren(cohortHead(c, "aside-cohort-title"), cohortEditForm(c), cohortSumBox(c), ...stageBoxes(c), cohortStudentsBox(c, 5), cohortAddButtons(c), ...cohortManage(c));
 }
 
 function cohortSumBox(c) {
@@ -2498,25 +2664,20 @@ function cohortAddButtons(c) {
 }
 
 function cohortManage(c) {
-  const busy = Number(c.member_count ?? 0) > 0;
+  const block = cohortDeleteBlock({ memberCount: c.member_count, ...cohortStageData(c.id) });
   return [
     el("h3", { className: "group-title", text: "管理" }),
     el(
       "div",
       { className: "menu" },
-      el("button", { type: "button", className: "mrow danger", text: "回を削除", disabled: busy, onclick: () => removeCohort(c) }),
+      el("button", { type: "button", className: "mrow danger", text: "回を削除", disabled: !!block, title: block, onclick: () => removeCohort(c) }),
     ),
-    el("p", {
-      className: "hint",
-      text: busy
-        ? "所属している受講者がいる回は削除できません。先に別の回へ移すか、名簿から外してください。"
-        : "削除すると元に戻せません。",
-    }),
+    el("p", { className: "hint", text: block ?? "削除すると元に戻せません。" }),
   ];
 }
 
 /** 回の入力欄（作成・編集で共通）。読む関数と ID の予告を返す */
-function cohortInputs(values = {}) {
+function cohortInputs(values = {}, rule = null) {
   const venueOptions = state.venues
     .filter((v) => v.active || v.no === values.venue_no)
     .map((v) => ({ value: v.no, label: `${v.no} ${v.name}` }));
@@ -2526,6 +2687,13 @@ function cohortInputs(values = {}) {
   );
   const day1 = dateInput(values.day1_date);
   const day2 = dateInput(values.day2_date);
+  // テンプレートを当てた回は、Day1 が始まったあとは Day1 を、Day2 は明日以降の日付どうしだけ変えられる（DB の規則と同じ。最後に断るのは DB）
+  if (rule?.guarded) {
+    day1.disabled = !rule.day1Editable;
+    day2.disabled = !rule.day2Editable;
+    if (rule.day1Editable && rule.minDay1) day1.min = rule.minDay1;
+    if (rule.day2Editable && rule.minDay2) day2.min = rule.minDay2;
+  }
   const credits = {
     day1_credits: creditInput(values.day1_credits),
     bridge_credits: creditInput(values.bridge_credits),
@@ -2670,7 +2838,9 @@ async function createCohort(f, { returnToAdd }) {
 function cohortEditForm(c) {
   // 未保存の入力は、再読み込みで作り直しても残す（保存・「元に戻す」で捨てる）
   const draft = state.cohortDraft?.id === c.id ? state.cohortDraft.raw : null;
-  const f = cohortInputs(draft ? { ...c, ...draft } : c);
+  const rule = stagesAvailable() ? cohortDateRule(cohortFull(c)) : null;
+  const stageMode = isStageCohort(c.id);
+  const f = cohortInputs(draft ? { ...c, ...draft } : c, rule);
   const idLine = el("p", { className: "note-box num", "aria-live": "polite" });
   const draftLine = el("p", { className: "hint warn-text", role: "status" });
   const showDraft = () => {
@@ -2708,7 +2878,10 @@ function cohortEditForm(c) {
     { className: "stack", onsubmit: (e) => e.preventDefault() },
     field("会場", f.venue),
     el("div", { className: "grid-2" }, field("Day1", f.day1), field("Day2", f.day2)),
-    creditsFieldset(f, c.current_period),
+    rule?.guarded ? el("p", { className: "hint", text: rule.note }) : null,
+    stageMode
+      ? el("p", { className: "note-box", text: "この回の上限は、段階ごとに決まります（下の「段階」で変えます）。" })
+      : creditsFieldset(f, c.current_period),
     field("名前", f.name),
     field("メモ", f.note),
     idLine,
@@ -2747,6 +2920,17 @@ async function saveCohort(c, f) {
     notify(`${newId} は既にあります（同じ会場・同じ Day1 の回にはできません）。`, "error");
     return;
   }
+  const available = stagesAvailable();
+  const stageMode = available && isStageCohort(c.id);
+  if (available) {
+    // 段階の回の 3 期間のクレジットは、段階の合計を表示しているだけ。書き戻さない（Day ごとに戻したときの値を消さない）
+    if (stageMode) for (const k of ["day1_credits", "bridge_credits", "day2_credits"]) delete patch[k];
+    const dateProblem = cohortDateProblem(cohortFull(c), patch);
+    if (dateProblem) {
+      notify(`保存できません。${dateProblem}`, "error");
+      return;
+    }
+  }
   const lines = [`${c.id} の設定を保存しますか？`];
   if (newId !== c.id) lines.push(`・回の ID が ${c.id} → ${newId} に変わります（所属する受講者は新しい ID に移ります）。`);
   if (Number(c.member_count ?? 0) > 0) lines.push(`・所属している受講者 ${c.member_count} 人全員に反映されます。`);
@@ -2754,27 +2938,41 @@ async function saveCohort(c, f) {
     lines.push("・日付を変えると、前の日付の枠に付けた一時的な追加は、新しい枠には数えられません。");
   }
   if (!confirm(lines.join("\n"))) return;
-  // id は送らない（会場番号・Day1 を変えると DB が計算し直す）
-  const { data, error } = await supabase.from("cohorts").update(patch).eq("id", c.id).select("id");
+  // id は送らない（会場番号・Day1 を変えると DB が計算し直す）。016 の DB では admin_update_cohort（日付の規則は DB が判定する）
+  let rowId = null;
+  let error = null;
+  let notFound = false;
+  if (available) {
+    const res = await supabase.rpc("admin_update_cohort", { p_cohort_id: c.id, p_changes: patch });
+    error = res.error;
+    rowId = (Array.isArray(res.data) ? res.data[0] : res.data)?.id ?? null;
+    notFound = !error && !rowId;
+  } else {
+    const res = await supabase.from("cohorts").update(patch).eq("id", c.id).select("id");
+    error = res.error;
+    rowId = res.data?.[0]?.id ?? null;
+    notFound = !error && !rowId;
+  }
   if (error) {
     notify(explainError(error), "error");
     await refresh();
     return;
   }
-  if (!data?.length) {
+  if (notFound) {
     notify("変更できませんでした（権限が無いか、対象が見つかりません）。", "error");
   } else {
-    state.cohortId = data[0].id;
+    state.cohortId = rowId;
     state.cohortEditing = false;
     state.cohortDraft = null;
-    notify(`${data[0].id} を保存しました。`);
+    notify(`${rowId} を保存しました。`);
   }
   await refresh();
 }
 
 async function removeCohort(c) {
-  if (Number(c.member_count ?? 0) > 0) {
-    notify("所属している受講者がいる回は削除できません。先に別の回へ移すか、名簿から外してください。", "error");
+  const block = cohortDeleteBlock({ memberCount: c.member_count, ...cohortStageData(c.id) });
+  if (block) {
+    notify(block, "error");
     return;
   }
   if (!confirm(`${c.id} を削除しますか？（元に戻せません）`)) return;
@@ -2996,7 +3194,7 @@ async function loadSettingsAll(options = {}) {
 
 function renderSettings() {
   if (state.tab !== "settings") return;
-  $("settings-main").replaceChildren(usageBox(), limitsBox());
+  $("settings-main").replaceChildren(usageBox(), limitsBox(), ...(stagesAvailable() ? [templatesBox()] : []));
   renderModelsBox();
   $("settings-history").replaceChildren(historyBox());
 }
@@ -3087,7 +3285,10 @@ function limitsBox() {
           className: "hint",
           text: "「既定」はサーバーの環境変数の値です（その数値はこのコンソールからは見えません）。" +
             "「既定に戻す」は DB の値を消して、環境変数の値に戻します。変更は次の生成からすぐに効きます。" +
-            (limits.some((l) => l.nullText) ? "「1 回の生成の上限」だけは環境変数の既定がなく、空欄は「上限なし」です。" : ""),
+            (limits.some((l) => l.key === "job_max_credits") ? "「1 回の生成の上限」だけは環境変数の既定がなく、空欄は「上限なし」です。" : "") +
+            (limits.some((l) => l.defaultValue !== undefined)
+              ? "段階の回・講師の追加の項目は、「既定」のとき括弧の中の値で動きます（講師の 3 つの既定は仮の値です）。"
+              : ""),
         }),
       ];
     },
@@ -3100,7 +3301,9 @@ function limitRow(spec, current) {
     id: `f-${++fieldSeq}`,
     inputmode: spec.integer ? "numeric" : "decimal",
     className: "input num",
-    placeholder: current === null ? (spec.usd ? `例：${spec.min * 10}` : spec.credits ? "例：1,500" : "例：200") : String(current),
+    placeholder: current === null
+      ? (spec.usd ? `例：${spec.min * 10}` : spec.defaultValue !== undefined ? `例：${spec.defaultValue}` : spec.credits ? "例：1,500" : "例：200")
+      : String(current),
   });
   const save = el("button", {
     type: "button",
@@ -3605,6 +3808,566 @@ function historyBox() {
   });
 }
 
+// ---- 段階（016：セミナーの段階）----
+// 回の枠を、Day ごとではなく「ワークショップごとの段階」にする。テンプレートを回に当て、講師を担当にする。
+// 段階を進める・戻すのは講師の画面（instructor.html）。ここの書き込みはすべて DB の RPC（守りは DB が入れる）。
+// DB が 016 を当てていない間（state.stages.available が false）は、このブロックの欄・操作を出さない。
+
+function emptyStageState() {
+  return {
+    available: false,
+    loaded: false,
+    /** cohorts の新しい列：id → { id, credit_mode, stage_template_id, stages_applied_at } */
+    cohortInfo: new Map(),
+    stages: [],
+    templates: [],
+    templateItems: [],
+    /** 回の講師の担当：{ cohort_id, email } */
+    instructors: [],
+    /** 段階を動かした記録がある回の id */
+    entryCohorts: new Set(),
+    /** 段階の回の追加がある段階の id・受講者の email */
+    grantStageIds: new Set(),
+    grantEmails: new Set(),
+    /** 1 人あたり・この回の追加の合計の上限（T）。分からなければ null（DB が判定する） */
+    limitT: null,
+    /** 回ごとの cohort_stage_status（normalizeStageStatus した値） */
+    status: new Map(),
+    /** 回ごとに選んでいるテンプレートの id */
+    pick: new Map(),
+  };
+}
+
+const stagesAvailable = () => state.stages.available;
+const cohortInfoOf = (id) => state.stages.cohortInfo.get(id) ?? null;
+/** 回の行（admin_cohorts）に、段階の列（credit_mode・stages_applied_at）を足したもの */
+const cohortFull = (c) => ({ ...c, ...(cohortInfoOf(c?.id) ?? {}) });
+const isStageCohort = (id) => cohortInfoOf(id)?.credit_mode === "stage";
+const isStageStudent = (r) => r?.role === "student" && !!r.cohort_id && stagesAvailable() && isStageCohort(r.cohort_id);
+const stagesOfCohort = (id) => state.stages.stages.filter((s) => s.cohort_id === id);
+
+/** 回の段階の記録・追加の有無（回は、あると削除できない） */
+function cohortStageData(id) {
+  const S = state.stages;
+  return {
+    hasEntries: S.entryCohorts.has(id),
+    hasGrants: S.stages.some((s) => s.cohort_id === id && S.grantStageIds.has(s.id)),
+  };
+}
+
+/**
+ * 段階の情報を読む。cohorts に新しい列（credit_mode など）が無ければ 016 の前の DB：available を false にして、何も出さない。
+ * 読めなかった（通信の失敗など）ときは、前の値のまま
+ */
+async function loadStageInfo() {
+  const S = state.stages;
+  const c = await supabase.from("cohorts").select("id, credit_mode, stage_template_id, stages_applied_at");
+  if (c.error) {
+    if (isMissingSchemaError(c.error)) Object.assign(S, emptyStageState(), { loaded: true });
+    return false;
+  }
+  const [st, en, tp, ti, ins, gr, set] = await Promise.all([
+    supabase.from("cohort_stages").select("id, cohort_id, day_kind, seq, label, title, credits").order("seq"),
+    supabase.from("cohort_stage_entries").select("cohort_id").limit(1000),
+    supabase.from("stage_templates").select("id, name, note, active, updated_at").order("name"),
+    supabase.from("stage_template_items").select("id, template_id, day_kind, seq, label, title, credits").order("seq"),
+    supabase.from("cohort_instructors").select("cohort_id, email"),
+    supabase.from("credit_grants").select("email, stage_id").not("stage_id", "is", null).limit(1000),
+    supabase.rpc("admin_get_settings"),
+  ]);
+  S.available = true;
+  S.loaded = true;
+  S.cohortInfo = new Map((c.data ?? []).map((x) => [x.id, x]));
+  if (!st.error) S.stages = st.data ?? [];
+  if (!en.error) S.entryCohorts = new Set((en.data ?? []).map((x) => x.cohort_id));
+  if (!tp.error) S.templates = tp.data ?? [];
+  if (!ti.error) S.templateItems = ti.data ?? [];
+  if (!ins.error) S.instructors = ins.data ?? [];
+  if (!gr.error) {
+    S.grantStageIds = new Set((gr.data ?? []).map((x) => x.stage_id));
+    S.grantEmails = new Set((gr.data ?? []).map((x) => x.email));
+  }
+  if (!set.error) S.limitT = set.data?.settings?.stage_grant_total_limit ?? 10000;
+  return true;
+}
+
+/** 回の今の段階など（cohort_stage_status）を読む。読めなければ null（段階の欄に今の段階を出さないだけ） */
+async function loadCohortStageStatus(id) {
+  const { data, error } = await supabase.rpc("cohort_stage_status", { p_cohort_id: id });
+  state.stages.status.set(id, error ? null : normalizeStageStatus(data));
+}
+
+/** 回の詳細に足す箱（016 が当たっているときだけ） */
+function stageBoxes(c) {
+  if (!stagesAvailable() || !cohortInfoOf(c.id)) return [];
+  return [stagesSection(c), instructorsSection(c)];
+}
+
+function templateItemsOf(id) {
+  return state.stages.templateItems.filter((i) => i.template_id === id);
+}
+
+function templateName(id) {
+  return state.stages.templates.find((t) => t.id === id)?.name ?? null;
+}
+
+/** 段階の行の入力欄の組（テンプレートの編集・回の段階の編集で共通）。canStructure は順番・数を変えられるか */
+function rowsEditor(kind, initial, { canStructure }) {
+  const where = DAY_KIND_LABELS[kind];
+  const max = kind === "bridge" ? 1 : MAX_STAGES_PER_DAY;
+  let rows = initial.map((r) => ({
+    id: r.id ?? null,
+    label: r.label ?? "",
+    title: r.title ?? "",
+    credits: r.credits === null || r.credits === undefined ? "" : String(r.credits),
+  }));
+  const host = el("div", { className: "stage-rows" });
+  const total = el("p", { className: "hint num", "aria-live": "polite" });
+  const addBtn = el("button", { type: "button", className: "btn", text: "段階を足す", onclick: () => {
+    read();
+    rows.push({ id: null, label: "", title: "", credits: "" });
+    draw();
+  } });
+  /** 画面の入力を rows に取り込む */
+  function read() {
+    host.querySelectorAll(".stage-row").forEach((row, i) => {
+      if (!rows[i]) return;
+      rows[i].label = row.querySelector('[data-f="label"]').value;
+      rows[i].title = row.querySelector('[data-f="title"]').value;
+      rows[i].credits = row.querySelector('[data-f="credits"]').value;
+    });
+    return rows;
+  }
+  function updateTotal() {
+    read();
+    const sum = rows.reduce((n, r) => n + (parseCredits(r.credits) ?? 0), 0);
+    total.textContent = `${where}の合計 ${formatCredits(sum)} / ${formatCredits(MAX_DAY_STAGE_TOTAL)}`;
+    total.classList.toggle("warn-text", sum > MAX_DAY_STAGE_TOTAL);
+  }
+  function move(i, d) {
+    read();
+    const j = i + d;
+    if (j < 0 || j >= rows.length) return;
+    [rows[i], rows[j]] = [rows[j], rows[i]];
+    draw();
+  }
+  function draw() {
+    host.replaceChildren(
+      ...rows.map((r, i) => {
+        const label = textInput({ maxlength: "40", placeholder: "名前（例：ワークショップ 1）", "aria-label": `${where} ${i + 1} 番目の名前`, "data-f": "label" });
+        label.value = r.label;
+        const title = textInput({ maxlength: "60", placeholder: "題名（任意。例：企画）", "aria-label": `${where} ${i + 1} 番目の題名`, "data-f": "title" });
+        title.value = r.title;
+        const credits = creditInput(r.credits, { placeholder: "上限", "aria-label": `${where} ${i + 1} 番目のクレジット`, "data-f": "credits" });
+        for (const input of [label, title, credits]) input.addEventListener("input", updateTotal);
+        return el(
+          "div",
+          { className: "stage-row" },
+          el("span", { className: "stage-no num", text: `${i + 1}` }),
+          label,
+          title,
+          credits,
+          canStructure
+            ? el(
+              "span",
+              { className: "stage-actions" },
+              el("button", { type: "button", className: "btn small-btn", text: "↑", "aria-label": `${i + 1} 番目を上へ`, disabled: i === 0, onclick: () => move(i, -1) }),
+              el("button", { type: "button", className: "btn small-btn", text: "↓", "aria-label": `${i + 1} 番目を下へ`, disabled: i === rows.length - 1, onclick: () => move(i, 1) }),
+              el("button", {
+                type: "button",
+                className: "btn small-btn",
+                text: "削除",
+                "aria-label": `${i + 1} 番目を削除`,
+                onclick: () => {
+                  read();
+                  rows.splice(i, 1);
+                  draw();
+                },
+              }),
+            )
+            : null,
+        );
+      }),
+    );
+    addBtn.disabled = rows.length >= max;
+    updateTotal();
+  }
+  draw();
+  return {
+    node: el("div", { className: "stack" }, host, canStructure ? addBtn : null, total),
+    /** 入力された行（id・名前・題名・クレジットの文字） */
+    read: () => read().map((r) => ({ ...r })),
+  };
+}
+
+// ---- 回の「段階」の箱 ----
+
+function stagesSection(c) {
+  const full = cohortFull(c);
+  const info = cohortInfoOf(c.id);
+  const S = state.stages;
+  const rule = cohortDateRule(full);
+  const stageMode = info.credit_mode === "stage";
+  const rows = stagesOfCohort(c.id);
+  const out = [];
+  if (stageMode) {
+    out.push(
+      el("p", { className: "small", text: `テンプレート：${templateName(info.stage_template_id) ?? "（当てたテンプレートは削除されました）"}。当てたあとに変えた分は、テンプレートには戻りません。` }),
+    );
+    const status = S.status.get(c.id);
+    if (status?.current) {
+      out.push(el("p", { className: "small strong", text: `今の段階：${stageName(status.current)}` }));
+    } else if (status && status.period && !["day1", "bridge", "day2"].includes(status.period)) {
+      out.push(el("p", { className: "small muted", text: status.period === "before" ? "Day1 の 0:00 に、最初の段階に自動で入ります。" : "Day2 が終わりました。" }));
+    }
+    const totals = dayTotals(rows);
+    const g = groupStagesByDay(rows);
+    for (const kind of DAY_KINDS) {
+      if (kind === "bridge" && !dayKindStartDate(full, "bridge")) continue;
+      out.push(
+        el(
+          "div",
+          { className: "stage-day" },
+          el("div", { className: "box-head" }, el("h4", { className: "group-title", text: DAY_KIND_LABELS[kind] }), el("span", { className: "small muted num", text: `合計 ${formatCredits(totals[kind])}` })),
+          g[kind].length
+            ? el(
+              "ol",
+              { className: "periods" },
+              ...g[kind].map((s) =>
+                el(
+                  "li",
+                  {},
+                  el("div", { className: "period-text" }, el("span", { className: "period-name", text: stageName(s) })),
+                  el("span", { className: "period-credits num", text: formatCredits(s.credits) }),
+                )
+              ),
+            )
+            : el("p", { className: "warn-text small", text: "段階がありません（このままでは、この日は生成できません）。" }),
+        ),
+      );
+    }
+    out.push(
+      el("button", { type: "button", className: "btn", text: "段階を編集", onclick: () => openStageEditor(c.id) }),
+      el("p", {
+        className: "hint",
+        text: "段階の名前・題名・クレジットは、授業の途中でも変えられます。順番と数は、その日が始まる前だけ変えられます。段階を進める・戻すのは、講師の画面で行います。",
+      }),
+      el("a", { className: "link-btn", href: "instructor.html", target: "_blank", rel: "noopener", text: "講師の画面を開く（別のタブ）" }),
+    );
+  } else {
+    out.push(el("p", { className: "small", text: "今は Day ごとの枠です（Day1・ブリッジワーク・Day2 の 1 人あたりの上限）。" }));
+  }
+  // テンプレートを当てる・枠の種類を戻す（Day1 が始まる前だけ）
+  if (!rule.modeEditable) {
+    out.push(
+      el("p", {
+        className: "hint",
+        text: stageMode ? "Day1 が始まったため、テンプレートの当て直し・Day ごとの枠に戻すことはできません。" : "Day1 が始まったため、段階ごとの枠にはできません。",
+      }),
+    );
+  } else {
+    const active = S.templates.filter((t) => t.active);
+    if (!active.length && !S.templates.length) {
+      out.push(el("p", { className: "hint", text: "テンプレートがありません。設定の画面の「段階のテンプレート」で作ります。" }));
+    } else {
+      const choices = active.length ? active : S.templates;
+      const select = el(
+        "select",
+        { className: "input", "aria-label": "当てるテンプレート" },
+        ...choices.map((t) => el("option", { value: t.id, text: t.name, selected: t.id === (S.pick.get(c.id) ?? info.stage_template_id) })),
+      );
+      select.addEventListener("change", () => S.pick.set(c.id, select.value));
+      out.push(
+        field(stageMode ? "テンプレートを当て直す" : "テンプレートを当てる", select),
+        el("button", {
+          type: "button",
+          className: "btn primary",
+          text: stageMode ? "当て直す（段階を全部入れ替える）" : "当てて、段階ごとの枠にする",
+          onclick: () => applyTemplate(c, select.value),
+        }),
+      );
+    }
+    if (stageMode) {
+      out.push(el("button", { type: "button", className: "btn", text: "Day ごとの枠に戻す", onclick: () => setCreditMode(c, "day") }));
+    } else if (rows.length) {
+      out.push(el("button", { type: "button", className: "btn", text: "前の段階の設定で、段階ごとの枠にする", onclick: () => setCreditMode(c, "stage") }));
+    }
+  }
+  return el("section", { className: "box" }, el("div", { className: "box-head" }, el("h3", { text: "段階（ワークショップごとの上限）" }), stageMode ? el("span", { className: "badge stage", text: "段階ごと" }) : null), ...out);
+}
+
+async function applyTemplate(c, templateId) {
+  clearNotice();
+  const full = cohortFull(c);
+  const items = templateItemsOf(templateId);
+  const problem = templateApplyProblem(items, full);
+  if (problem) {
+    notify(`当てられません。${problem}`, "error");
+    return;
+  }
+  const t = templateName(templateId);
+  const already = isStageCohort(c.id);
+  const lines = [`${c.id} に、テンプレート「${t}」を当てますか？`];
+  lines.push(already ? "・いまの段階を全部、テンプレートの内容に入れ替えます（段階の名前・クレジットを変えていた分は消えます）。" : "・この回の枠が、Day ごとではなく、ワークショップごとの段階になります。");
+  lines.push("・Day1 が始まる前なら、「Day ごとの枠に戻す」で戻せます。始まったあとは戻せません。");
+  if (Number(c.member_count ?? 0) > 0) lines.push(`・所属している受講者 ${c.member_count} 人全員に効きます。`);
+  if (!confirm(lines.join(String.fromCharCode(10)))) return;
+  const { error } = await supabase.rpc("admin_apply_stage_template", { p_cohort_id: c.id, p_template_id: templateId });
+  if (error) notify(explainError(error), "error");
+  else notify(`${c.id} にテンプレート「${t}」を当てました。`);
+  await refresh();
+  if (!error && isStageCohort(c.id)) {
+    await loadCohortStageStatus(c.id);
+    renderAll();
+  }
+}
+
+async function setCreditMode(c, mode) {
+  clearNotice();
+  const text = mode === "day"
+    ? `${c.id} を Day ごとの枠に戻しますか？（Day1 が始まる前だけ戻せます。段階の設定は残ります）`
+    : `${c.id} を、前に設定した段階ごとの枠にしますか？`;
+  if (!confirm(text)) return;
+  const { error } = await supabase.rpc("admin_set_cohort_credit_mode", { p_cohort_id: c.id, p_mode: mode });
+  if (error) notify(explainError(error), "error");
+  else notify(mode === "day" ? `${c.id} を Day ごとの枠に戻しました。` : `${c.id} を段階ごとの枠にしました。`);
+  await refresh();
+}
+
+/** 段階の編集（回の段階の名前・題名・クレジット。順番と数は、その日が始まる前だけ） */
+function openStageEditor(cid) {
+  const c = state.cohorts.find((x) => x.id === cid);
+  if (!c) return;
+  const full = cohortFull(c);
+  const groups = groupStagesByDay(stagesOfCohort(cid));
+  const editors = {};
+  const body = [];
+  for (const kind of DAY_KINDS) {
+    if (kind === "bridge" && !dayKindStartDate(full, "bridge")) continue;
+    const started = dayKindStarted(full, kind);
+    editors[kind] = rowsEditor(kind, groups[kind], { canStructure: !started });
+    body.push(
+      el(
+        "section",
+        { className: "box" },
+        el("h3", { text: DAY_KIND_LABELS[kind] }),
+        started ? el("p", { className: "hint", text: "この日はもう始まっているため、名前・題名・クレジットだけ変えられます（順番と数は変えられません）。" }) : null,
+        editors[kind].node,
+      ),
+    );
+  }
+  openSheet("stage-editor", () =>
+    setSheet({
+      title: `${cid} の段階`,
+      body: [
+        el("p", { className: "muted", text: "1 つの段階の上限は 0〜10,000、1 日の合計は 10,000 までです。変えると、所属している受講者全員に効きます。" }),
+        ...body,
+      ],
+      foot: [
+        el("button", { type: "button", className: "btn primary big", text: "保存", onclick: () => saveStages(cid, groups, editors) }),
+        cancelButton(),
+      ],
+    })
+  );
+}
+
+async function saveStages(cid, groups, editors) {
+  clearNotice();
+  const problems = [];
+  const plans = [];
+  for (const [kind, editor] of Object.entries(editors)) {
+    const rows = editor.read();
+    const parsed = parseStageRows(kind, rows);
+    problems.push(...parsed.problems);
+    const orig = groups[kind];
+    const same = rows.length === orig.length && rows.every((r, i) => r.id === orig[i].id);
+    if (!same) {
+      plans.push({
+        kind: "replace",
+        day: kind,
+        stages: parsed.rows.map((r, i) => ({ ...(rows[i].id ? { id: rows[i].id } : {}), seq: i + 1, label: r.label, title: r.title, credits: r.credits })),
+      });
+    } else {
+      rows.forEach((r, i) => {
+        const p = parsed.rows[i];
+        const o = orig[i];
+        if (p.label !== o.label || (p.title ?? null) !== (o.title ?? null) || p.credits !== Number(o.credits)) {
+          plans.push({ kind: "update", id: o.id, label: p.label, title: p.title, credits: p.credits, delta: (p.credits ?? 0) - Number(o.credits ?? 0) });
+        }
+      });
+    }
+  }
+  if (problems.length) {
+    notify("保存できません。次の項目を確認してください。", "error", problems);
+    return;
+  }
+  if (!plans.length) {
+    notify("変更はありません。");
+    return;
+  }
+  if (!confirm(`${cid} の段階を保存しますか？${String.fromCharCode(10)}（所属している受講者全員の上限が変わります）`)) return;
+  // 1 日の合計が途中で 10,000 を超えないよう、クレジットを下げる更新を先に行う
+  plans.sort((a, b) => (a.kind === "update" ? a.delta : -Infinity) - (b.kind === "update" ? b.delta : -Infinity));
+  for (const p of plans) {
+    const { error } = p.kind === "replace"
+      ? await supabase.rpc("admin_replace_day_stages", { p_cohort_id: cid, p_day_kind: p.day, p_stages: p.stages })
+      : await supabase.rpc("admin_update_cohort_stage", { p_stage_id: p.id, p_label: p.label, p_title: p.title, p_credits: p.credits });
+    if (error) {
+      notify(`保存の途中で止まりました。${explainError(error)}`, "error");
+      await refresh();
+      return;
+    }
+  }
+  notify(`${cid} の段階を保存しました。`);
+  closeSheet();
+  await refresh();
+}
+
+// ---- 講師の担当 ----
+
+function instructorsSection(c) {
+  const S = state.stages;
+  const candidates = state.rows.filter((r) => r.role === "instructor" && r.status === "active");
+  const assigned = new Set(S.instructors.filter((x) => x.cohort_id === c.id).map((x) => x.email));
+  const boxes = candidates.map((r) => {
+    const cb = el("input", { type: "checkbox", value: r.email, checked: assigned.has(r.email) });
+    return el("label", { className: "check" }, cb, `${displayName(r)}${r.display_name?.trim() ? `（${r.email}）` : ""}`);
+  });
+  // 担当に入っているが、いま講師でない・停止中の人（保存すると外れる）
+  const stale = [...assigned].filter((e) => !candidates.some((r) => r.email === e));
+  return el(
+    "section",
+    { className: "box" },
+    el("h3", { text: "担当の講師" }),
+    boxes.length
+      ? el("div", { className: "stack" }, ...boxes)
+      : el("p", { className: "hint", text: "講師がいません。名簿で、講師にする人の区分を「講師」にします。" }),
+    stale.length ? el("p", { className: "warn-text small", text: `次の人は講師でないか停止中です（保存すると担当から外れます）：${stale.join("、")}` }) : null,
+    el("button", {
+      type: "button",
+      className: "btn",
+      text: "担当を保存",
+      disabled: !boxes.length && !assigned.size,
+      onclick: (e) => saveInstructors(c, e.currentTarget.closest("section")),
+    }),
+    el("p", { className: "hint", text: "担当の講師は、講師の画面で、この回の段階を進める・戻す・クレジットを追加できます。" }),
+  );
+}
+
+async function saveInstructors(c, section) {
+  clearNotice();
+  const emails = [...section.querySelectorAll('input[type="checkbox"]:checked')].map((i) => i.value);
+  const { error } = await supabase.rpc("admin_set_cohort_instructors", { p_cohort_id: c.id, p_emails: emails });
+  if (error) notify(explainError(error), "error");
+  else notify(emails.length ? `${c.id} の担当を ${emails.length} 人にしました。` : `${c.id} の担当を、なしにしました。`);
+  await refresh();
+}
+
+// ---- テンプレート（設定の画面） ----
+
+function templatesBox() {
+  const S = state.stages;
+  const items = S.templates.map((t) => {
+    const its = templateItemsOf(t.id);
+    const count = (k) => its.filter((i) => i.day_kind === k).length;
+    return el(
+      "li",
+      { className: "template-item" },
+      el(
+        "div",
+        { className: "template-text" },
+        el("span", { className: "strong ellipsis", text: t.name }, t.active ? null : el("span", { className: "small muted", text: "（使わない）" })),
+        el("span", { className: "small muted num", text: `Day1 ${count("day1")} 段階・ブリッジワーク ${count("bridge")} 段階・Day2 ${count("day2")} 段階` }),
+        t.note ? el("span", { className: "small muted ellipsis", text: t.note, title: t.note }) : null,
+      ),
+      el("button", { type: "button", className: "btn small-btn", text: "編集", onclick: () => openTemplateEditor(t) }),
+    );
+  });
+  return el(
+    "section",
+    { className: "box", "aria-labelledby": "templates-h" },
+    el("div", { className: "box-head baseline" }, el("h3", { id: "templates-h", text: "段階のテンプレート" }), el("button", { type: "button", className: "btn small-btn", text: "テンプレートを作る", onclick: () => openTemplateEditor(null) })),
+    items.length ? el("ul", { className: "templates" }, ...items) : el("p", { className: "muted small", text: "テンプレートがまだありません。" }),
+    el("p", { className: "hint", text: "テンプレートは、回の「段階」から当てます。当てると、段階の内容が回に写されます（そのあとテンプレートを直しても、すでに当てた回は変わりません）。" }),
+  );
+}
+
+function openTemplateEditor(t) {
+  const items = t ? templateItemsOf(t.id) : [];
+  const name = textInput({ maxlength: "60", placeholder: "例：標準（Day1 に 3 つ・Day2 に 2 つ）" });
+  name.value = t?.name ?? "";
+  const note = textInput({ placeholder: "例：2 日間の標準の型" });
+  note.value = t?.note ?? "";
+  const active = el("input", { type: "checkbox", checked: t ? t.active : true });
+  const g = groupStagesByDay(items);
+  const editors = Object.fromEntries(DAY_KINDS.map((k) => [k, rowsEditor(k, g[k], { canStructure: true })]));
+  openSheet("template-editor", () =>
+    setSheet({
+      title: t ? "テンプレートを編集" : "テンプレートを作る",
+      body: [
+        field("テンプレートの名前", name),
+        field("メモ（任意）", note),
+        el("label", { className: "check" }, active, "回に当てるテンプレートの候補に出す"),
+        ...DAY_KINDS.map((kind) =>
+          el(
+            "section",
+            { className: "box" },
+            el("h3", { text: DAY_KIND_LABELS[kind] }),
+            kind === "bridge" ? el("p", { className: "hint", text: "ブリッジワーク期間がある回だけで使います。段階は 1 つだけです。" }) : null,
+            editors[kind].node,
+          )
+        ),
+        el("p", { className: "hint", text: "1 つの段階の上限は 0〜10,000、1 日の合計は 10,000 までです。" }),
+      ],
+      foot: [
+        el("button", { type: "button", className: "btn primary big", text: "保存", onclick: () => saveTemplate(t, { name, note, active, editors }) }),
+        t ? el("button", { type: "button", className: "btn big danger-btn", text: "削除", onclick: () => deleteTemplate(t) }) : null,
+        cancelButton(),
+      ],
+    })
+  );
+}
+
+async function saveTemplate(t, f) {
+  clearNotice();
+  const { value, problems } = parseTemplateForm({
+    name: f.name.value,
+    note: f.note.value,
+    active: f.active.checked,
+    days: Object.fromEntries(DAY_KINDS.map((k) => [k, f.editors[k].read()])),
+  });
+  if (problems.length) {
+    notify("保存できません。次の項目を確認してください。", "error", problems);
+    return;
+  }
+  const { error } = await supabase.rpc("admin_save_stage_template", {
+    p_template_id: t?.id ?? null,
+    p_name: value.name,
+    p_note: value.note,
+    p_active: value.active,
+    p_items: value.items,
+  });
+  if (error) {
+    notify(explainError(error), "error");
+    return;
+  }
+  notify(`テンプレート「${value.name}」を保存しました。`);
+  closeSheet();
+  await refresh();
+}
+
+async function deleteTemplate(t) {
+  if (!confirm(`テンプレート「${t.name}」を削除しますか？${String.fromCharCode(10)}（すでに当てた回は、段階の内容を持っているので変わりません）`)) return;
+  const { error } = await supabase.rpc("admin_delete_stage_template", { p_template_id: t.id });
+  if (error) {
+    notify(explainError(error), "error");
+    return;
+  }
+  notify(`テンプレート「${t.name}」を削除しました。`);
+  closeSheet();
+  await refresh();
+}
+
 // ---- アカウント（スマホ） ----
 
 function openAccount() {
@@ -3683,7 +4446,7 @@ async function main() {
   $("account-btn").setAttribute("aria-label", `アカウント（${myEmail}）`);
   show("app");
   renderAll();
-  await Promise.all([loadUsage(), loadCohorts()]);
+  await Promise.all([loadUsage(), loadCohorts(), loadStageInfo()]);
   renderAll();
 }
 
