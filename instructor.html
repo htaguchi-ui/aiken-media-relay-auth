@@ -168,6 +168,9 @@
   ul.my-grants li { display: grid; grid-template-columns: minmax(0, 1fr) auto; gap: 8px 12px; align-items: center; padding: 10px 0; border-top: 1px solid var(--line-soft); }
   ul.my-grants li:first-child { border-top: 0; }
   ul.my-grants .what { overflow-wrap: anywhere; }
+  ul.my-grants.revoked { color: var(--muted); }
+  ul.my-grants.revoked li { grid-template-columns: minmax(0, 1fr); }
+  .stack { display: flex; flex-direction: column; gap: 8px; }
 
   /* ---- 確認のダイアログ ---- */
   dialog.confirm { border: 1px solid var(--line-2); border-radius: 16px; padding: 24px; width: min(440px, calc(100vw - 32px)); background: var(--surface); color: var(--text); }

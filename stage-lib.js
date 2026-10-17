@@ -257,12 +257,17 @@ function normGrant(g) {
     grantedAs: str(g?.granted_as),
     revokedAt: str(g?.revoked_at),
     revokedByEmail: str(g?.revoked_by_email),
+    revokedNote: str(g?.revoked_note),
     isMine: g?.is_mine === true ? true : g?.is_mine === false ? false : null,
   };
 }
 
-/** cohort_stage_status の jsonb を読む。形が違う・欠けている項目は null にして、画面が「分からない」として扱えるようにする */
-export function normalizeStageStatus(raw) {
+/**
+ * cohort_stage_status の jsonb を読む。形が違う・欠けている項目は null にして、画面が「分からない」として扱えるようにする。
+ * receivedAt は読み込んだ時点の手元の時刻（ミリ秒）。server_now との差を clockOffset に記録し、時間が進んだあとの判定
+ * （undoView）で「手元の今の時刻 ＋ 差」をサーバーの今の時刻として使う
+ */
+export function normalizeStageStatus(raw, receivedAt = Date.now()) {
   const r = raw && typeof raw === "object" ? raw : {};
   const stagesToday = (Array.isArray(r.stages_today) ? r.stages_today : [])
     .map(normStage)
@@ -278,6 +283,7 @@ export function normalizeStageStatus(raw) {
     creditMode: str(r.credit_mode),
     period: str(r.period),
     serverNow: r.server_now ? toMs(r.server_now) : null,
+    clockOffset: r.server_now && Number.isFinite(toMs(r.server_now)) ? toMs(r.server_now) - receivedAt : 0,
     current,
     stagesToday,
     lastMove: lm
@@ -378,14 +384,24 @@ export function undoView(status, nowMs = Date.now(), windowMs = UNDO_WINDOW_MS) 
   if (lm.toStageId && lm.toStageId !== currentId) return none;
   const from = (status.stagesToday ?? []).find((s) => s.id === lm.fromStageId);
   if (!from || from.id === currentId) return none;
-  // 時計のずれに備え、サーバーの時刻が分かればそれを使う
-  const now = status.serverNow ?? nowMs;
+  // 時計のずれに備え、読み込んだときの「サーバーの時刻 − 手元の時刻」の差を足して、サーバーの今の時刻にする（読み込んだ時刻のままにしない）
+  const now = nowMs + (status.clockOffset ?? 0);
   const elapsed = now - toMs(lm.enteredAt);
   if (!Number.isFinite(elapsed) || elapsed < 0 || elapsed >= windowMs) return none;
   return { available: true, remainingSec: Math.ceil((windowMs - elapsed) / 1000), toStage: from, jobsSince: lm.jobsSince };
 }
 
 // ---- 一時追加（講師の画面・管理コンソール） ----
+
+/** 追加できる状態か（今の段階があり、Day1〜Day2 の期間内）。できなければ理由（日本語） */
+export function grantAvailability(status) {
+  if (status?.creditMode !== "stage") return { ok: false, why: "この回は、段階ごとの枠になっていません。" };
+  if (!IN_COURSE.includes(status?.period)) {
+    return { ok: false, why: status?.period === "before" ? "Day1 の前は、クレジットを追加できません。" : "Day2 が終わったため、クレジットを追加できません。" };
+  }
+  if (!status?.current) return { ok: false, why: "今の段階がありません（この日の段階がありません）。クレジットを追加できません。" };
+  return { ok: true, why: "" };
+}
 
 /** 追加するクレジットの入力を解釈する。1 以上の整数でなければ undefined（上限は DB が断る。ここでは大きすぎる値だけ止める） */
 export function parseStageGrantCredits(value, max = 50000) {
@@ -409,11 +425,15 @@ export function stageGrantTotalProblem({ granted, limit }, credits) {
 /**
  * 講師が追加する前の確かめ（目安。DB の 3 つの上限・回の合計と同じ見方で、先に知らせる）。
  * emails：追加する相手、students：status.students（名前・追加済みの合計を引く）、limits：status.limits、
- * isInstructor：管理者は講師の 3 つの上限の外なので false。
+ * isInstructor：管理者は講師の 3 つの上限の外なので false。status：渡すと、今の段階がない・期間外のときは断る（grantAvailability）。
  * 返り値：{ ok, problems }（problems は日本語。分からない値は確かめない）
  */
-export function instructorGrantPlan({ emails, credits, students, limits, isInstructor = true }) {
+export function instructorGrantPlan({ emails, credits, students, limits, isInstructor = true, status = /** @type {any} */ (undefined) }) {
   const problems = [];
+  if (status !== undefined) {
+    const a = grantAvailability(status);
+    if (!a.ok) return { ok: false, problems: [a.why] };
+  }
   const list = Array.isArray(emails) ? emails : [];
   const nameOf = (email) => {
     const s = (students ?? []).find((x) => x.email === email);
@@ -476,14 +496,25 @@ export function grantConfirmText(names, credits, stage) {
 /** 取り消しの確認の文（講師の画面） */
 export const REVOKE_CONFIRM_TEXT = "取り消すと、この段階の上限からは外れますが、回の合計の枠は戻りません。";
 
-/** 講師の画面で取り消せる追加（今の段階の、まだ取り消していない、自分の追加。管理者は今の段階のすべて） */
+/**
+ * 講師の画面で取り消せる追加（今の段階の、まだ取り消していない行）。
+ * 講師は「自分が講師として追加した行」（granted_as が instructor）だけ（DB と同じ）。管理者は今の段階のすべて
+ */
 export function revocableGrants(status, myEmail, isAdmin = false) {
   const currentId = status?.current?.id;
   if (!currentId) return [];
   const me = String(myEmail ?? "").toLowerCase();
   return (status.grants ?? []).filter((g) =>
-    g.stageId === currentId && !g.revokedAt && (isAdmin || g.isMine === true || (g.isMine === null && !!me && g.createdByEmail === me))
+    g.stageId === currentId && !g.revokedAt &&
+    (isAdmin || (g.grantedAs === "instructor" && (g.isMine === true || (g.isMine === null && !!me && g.createdByEmail === me))))
   );
+}
+
+/** 今の段階で取り消した追加（取り消しのメモつき。一覧に「取り消し済み」として出す） */
+export function revokedGrants(status) {
+  const currentId = status?.current?.id;
+  if (!currentId) return [];
+  return (status.grants ?? []).filter((g) => g.stageId === currentId && !!g.revokedAt);
 }
 
 /**
@@ -511,6 +542,7 @@ export function adminGrantGroups(rows, stages) {
       grantedAs: g.granted_as ?? null,
       revoked: !!g.revoked_at,
       revokedByEmail: g.revoked_by_email ?? null,
+      revokedNote: g.revoked_note ?? null,
     };
     if (!g.stage_id) {
       plain.push(row);

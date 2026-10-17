@@ -229,6 +229,12 @@ export function explainError(error) {
   }
   if (message.includes("admin_only")) return "管理者の権限がありません。";
   if (message.includes("grant_outside_window")) {
+    // 段階の回（detail の credit_mode が stage）や、DB が日本語の hint を付けたときは、DB の説明を出す（Day ごと・月額の文を出さない）
+    const hint = String(error.hint ?? "");
+    if (/[^\x00-\x7F]/.test(hint)) return hint;
+    if (parseErrorDetail(error).credit_mode === "stage") {
+      return "今の段階が無いため、クレジットを追加できません（段階の回は、Day1〜Day2 の期間内で、その日の段階があるときだけ追加できます）。";
+    }
     return "今の枠が無いため、クレジットを追加できません（受講者は Day1〜Day2 の期間内でクレジットが設定されているとき、AIKENメンバーは月額が設定されているときだけ追加できます）。";
   }
   if (message.includes("grant_immutable")) return "追加したクレジットは変更できません。削除して追加し直してください。";
@@ -244,11 +250,12 @@ export function explainError(error) {
     const parts = [];
     if (Number.isFinite(Number(d.granted)) && d.granted !== null) parts.push(`追加済み ${formatCredits(d.granted)}`);
     if (Number.isFinite(Number(d.request)) && d.request !== null) parts.push(`今回 ${formatCredits(d.request)}`);
-    // 段階の回（scope が cohort）：上限は「今の枠」ではなく「この回での合計」。取り消した追加も数える
+    // 段階の回（scope が cohort）：上限は「今の枠」ではなく「この回での合計」。取り消した追加も数える。
+    // detail に email があれば（まとめての追加で誰が超えたかが分かる）、その人の名前の代わりに入れる
     if (d.scope === "cohort") {
-      return `この人への追加は、この回の合計で ${formatCredits(limit)} クレジットまでです（取り消した追加も数えます）${
-        parts.length ? `（${parts.join("、")}）` : ""
-      }。`;
+      const who = typeof d.email === "string" && d.email ? `${d.email} ` : "この人";
+      const detail = parts.length ? `${parts.join("、")}（取り消した追加も数えます）。` : "取り消した追加も数えます。";
+      return `${who}への追加は、この回の合計で ${formatCredits(limit)} クレジットまでです。${detail}`;
     }
     return `この人の今の枠への追加は、合計で ${formatCredits(limit)} までです${parts.length ? `（${parts.join("、")}）` : ""}。`;
   }
@@ -260,6 +267,8 @@ export function explainError(error) {
   // DB が日本語の説明を返したとき（天井を超える追加など）は、そのまま出す
   const japanese = [message, error.hint].find((t) => /[^\x00-\x7F]/.test(String(t ?? "")));
   if (japanese && code !== "42501") return String(japanese);
+  // 42501 の instructor_only は、DB が日本語の hint を付けていれば、それを出す（admin_only は上で今のまま）
+  if (rejectionName(error) === "instructor_only" && /[^\x00-\x7F]/.test(String(error.hint ?? ""))) return String(error.hint);
   // 016 の拒否（名前だけの message。42501 の instructor_only は hint が日本語でも上で出さないので、ここで文にする）
   const stageText = stageRejectionText(error);
   if (stageText) return stageText;

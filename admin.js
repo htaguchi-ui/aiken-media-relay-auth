@@ -1198,6 +1198,8 @@ async function openMember(email) {
     return;
   }
   applyRows(fresh.rows);
+  if (fresh.row) await loadMemberFlag(email);
+  if (seq !== detailSeq) return;
   if (!fresh.row) {
     closeMember();
     notify(`${email} は名簿に見つからなかったため、一覧を読み込み直しました。`, "error");
@@ -1463,6 +1465,9 @@ function grantItem(r, g, isStageRow) {
       `${formatShortDateTime(g.createdAt)} · ${g.createdByEmail ?? "付与した人は不明"}${g.grantedAs === "instructor" ? "（講師）" : ""}`,
     ),
   );
+  if (g.revoked && g.revokedNote) {
+    text.append(el("span", { className: "small muted ellipsis", text: `取り消しのメモ：${g.revokedNote}`, title: g.revokedNote }));
+  }
   let tail = null;
   if (action.kind === "revoke") {
     tail = el("button", { type: "button", className: "btn small-btn", text: action.label, "aria-label": `この追加（+${formatCredits(g.credits)}）を取り消す`, onclick: () => revokeStageGrant(r, g) });
@@ -1475,7 +1480,7 @@ function grantItem(r, g, isStageRow) {
 }
 
 const GRANT_COLUMNS = "id, credits, note, created_at, created_by_email";
-const STAGE_GRANT_COLUMNS = `${GRANT_COLUMNS}, stage_id, revoked_at, revoked_by_email, granted_as`;
+const STAGE_GRANT_COLUMNS = `${GRANT_COLUMNS}, stage_id, revoked_at, revoked_by_email, revoked_note, granted_as`;
 
 /** 今の枠の一時追加（Day ごと・月額）を読む。RLS で管理者だけが読める */
 function queryWindowGrants(r, columns) {
@@ -1502,7 +1507,7 @@ async function loadGrants(r, list) {
   const [win, stg] = await Promise.all([
     hasWindowNow ? queryWindowGrants(r, columns) : { data: [] },
     stageStudent
-      ? supabase.from("credit_grants").select(columns).eq("email", r.email).not("stage_id", "is", null).order("created_at", { ascending: false })
+      ? supabase.from("credit_grants").select(columns).eq("email", r.email).in("stage_id", stagesOfCohort(r.cohort_id).map((s) => s.id)).order("created_at", { ascending: false })
       : { data: [] },
   ]);
   const error = win.error || stg.error;
@@ -1558,7 +1563,7 @@ function manageSection(r) {
     );
   }
   // 段階の回の追加がある受講者は削除できない（追加は記録として残す）。利用を止めるのは「停止」
-  const deleteBlock = memberDeleteBlock({ hasStageGrants: state.stages.grantEmails.has(r.email) });
+  const deleteBlock = memberDeleteBlock({ hasStageGrants: memberHasStageGrants(r.email) });
   rows.push(
     el("button", {
       type: "button",
@@ -1678,7 +1683,10 @@ async function saveMonthly(r, value) {
 
 /** 段階の回の受講者の、この回の追加の合計（G。取り消した追加も数える）を、追加の行から求める。読めなければ null */
 async function stageGrantedTotal(r) {
-  const { data, error } = await supabase.from("credit_grants").select("credits, stage_id").eq("email", r.email).not("stage_id", "is", null);
+  // この回の段階に付いた追加だけ数える（ほかの回の追加は、この回の合計に入れない）
+  const ids = stagesOfCohort(r.cohort_id).map((s) => s.id);
+  if (!ids.length) return null;
+  const { data, error } = await supabase.from("credit_grants").select("credits, stage_id").eq("email", r.email).in("stage_id", ids);
   if (error) return null;
   return (data ?? []).reduce((n, g) => n + Number(g.credits ?? 0), 0);
 }
@@ -1764,7 +1772,7 @@ async function removeMember(r) {
     notify("自分自身は削除できません。", "error");
     return;
   }
-  const block = memberDeleteBlock({ hasStageGrants: state.stages.grantEmails.has(r.email) });
+  const block = memberDeleteBlock({ hasStageGrants: await loadMemberFlag(r.email) });
   if (block) {
     notify(block, "error");
     return;
@@ -2470,7 +2478,7 @@ async function openCohort(id) {
   }
   // 編集の前に読み直す（人数・使用・日付を最新に）
   await Promise.all([loadCohorts(), loadUsage(), loadStageInfo()]);
-  if (stagesAvailable() && isStageCohort(id)) await loadCohortStageStatus(id);
+  if (stagesAvailable()) await Promise.all([loadCohortFlags(id), isStageCohort(id) ? loadCohortStageStatus(id) : null]);
   if (seq !== cohortSeq) return;
   state.cohortLoading = false;
   if (!isDesktop() && sheetKind !== "cohort") return;
@@ -2970,6 +2978,7 @@ async function saveCohort(c, f) {
 }
 
 async function removeCohort(c) {
+  await loadCohortFlags(c.id);
   const block = cohortDeleteBlock({ memberCount: c.member_count, ...cohortStageData(c.id) });
   if (block) {
     notify(block, "error");
@@ -3824,11 +3833,9 @@ function emptyStageState() {
     templateItems: [],
     /** 回の講師の担当：{ cohort_id, email } */
     instructors: [],
-    /** 段階を動かした記録がある回の id */
-    entryCohorts: new Set(),
-    /** 段階の回の追加がある段階の id・受講者の email */
-    grantStageIds: new Set(),
-    grantEmails: new Set(),
+    /** 回・受講者を開いたときに確かめた、削除できない理由の元（回の id → { hasEntries, hasGrants }・email → 段階の回の追加があるか） */
+    cohortFlags: new Map(),
+    memberFlags: new Map(),
     /** 1 人あたり・この回の追加の合計の上限（T）。分からなければ null（DB が判定する） */
     limitT: null,
     /** 回ごとの cohort_stage_status（normalizeStageStatus した値） */
@@ -3848,12 +3855,29 @@ const stagesOfCohort = (id) => state.stages.stages.filter((s) => s.cohort_id ===
 
 /** 回の段階の記録・追加の有無（回は、あると削除できない） */
 function cohortStageData(id) {
-  const S = state.stages;
-  return {
-    hasEntries: S.entryCohorts.has(id),
-    hasGrants: S.stages.some((s) => s.cohort_id === id && S.grantStageIds.has(s.id)),
-  };
+  return state.stages.cohortFlags.get(id) ?? { hasEntries: false, hasGrants: false };
 }
+
+/** その回に、段階を動かした記録・段階の回の追加があるかを、その回だけ確かめる（全体を読まない）。読めなければ前の値のまま */
+async function loadCohortFlags(id) {
+  if (!stagesAvailable()) return;
+  const ids = stagesOfCohort(id).map((s) => s.id);
+  const [en, gr] = await Promise.all([
+    supabase.from("cohort_stage_entries").select("cohort_id").eq("cohort_id", id).limit(1),
+    ids.length ? supabase.from("credit_grants").select("id").in("stage_id", ids).limit(1) : { data: [] },
+  ]);
+  if (en.error || gr.error) return;
+  state.stages.cohortFlags.set(id, { hasEntries: (en.data ?? []).length > 0, hasGrants: (gr.data ?? []).length > 0 });
+}
+
+/** その人に、段階の回の追加があるかを、その人だけ確かめる */
+async function loadMemberFlag(email) {
+  if (!stagesAvailable()) return false;
+  const { data, error } = await supabase.from("credit_grants").select("id").eq("email", email).not("stage_id", "is", null).limit(1);
+  if (!error) state.stages.memberFlags.set(email, (data ?? []).length > 0);
+  return state.stages.memberFlags.get(email) ?? false;
+}
+const memberHasStageGrants = (email) => state.stages.memberFlags.get(email) ?? false;
 
 /**
  * 段階の情報を読む。cohorts に新しい列（credit_mode など）が無ければ 016 の前の DB：available を false にして、何も出さない。
@@ -3866,27 +3890,20 @@ async function loadStageInfo() {
     if (isMissingSchemaError(c.error)) Object.assign(S, emptyStageState(), { loaded: true });
     return false;
   }
-  const [st, en, tp, ti, ins, gr, set] = await Promise.all([
+  const [st, tp, ti, ins, set] = await Promise.all([
     supabase.from("cohort_stages").select("id, cohort_id, day_kind, seq, label, title, credits").order("seq"),
-    supabase.from("cohort_stage_entries").select("cohort_id").limit(1000),
     supabase.from("stage_templates").select("id, name, note, active, updated_at").order("name"),
     supabase.from("stage_template_items").select("id, template_id, day_kind, seq, label, title, credits").order("seq"),
     supabase.from("cohort_instructors").select("cohort_id, email"),
-    supabase.from("credit_grants").select("email, stage_id").not("stage_id", "is", null).limit(1000),
     supabase.rpc("admin_get_settings"),
   ]);
   S.available = true;
   S.loaded = true;
   S.cohortInfo = new Map((c.data ?? []).map((x) => [x.id, x]));
   if (!st.error) S.stages = st.data ?? [];
-  if (!en.error) S.entryCohorts = new Set((en.data ?? []).map((x) => x.cohort_id));
   if (!tp.error) S.templates = tp.data ?? [];
   if (!ti.error) S.templateItems = ti.data ?? [];
   if (!ins.error) S.instructors = ins.data ?? [];
-  if (!gr.error) {
-    S.grantStageIds = new Set((gr.data ?? []).map((x) => x.stage_id));
-    S.grantEmails = new Set((gr.data ?? []).map((x) => x.email));
-  }
   if (!set.error) S.limitT = set.data?.settings?.stage_grant_total_limit ?? 10000;
   return true;
 }

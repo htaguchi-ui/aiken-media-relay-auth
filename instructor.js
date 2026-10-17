@@ -36,6 +36,7 @@ import {
   isLow,
 } from "./admin-lib.js";
 import {
+  grantAvailability,
   grantConfirmText,
   instructorCohortLabel,
   instructorGrantPlan,
@@ -44,6 +45,7 @@ import {
   normalizeStageStatus,
   parseStageGrantCredits,
   revocableGrants,
+  revokedGrants,
   REVOKE_CONFIRM_TEXT,
   stageMoveView,
   stageName,
@@ -600,7 +602,14 @@ function undoText(undo) {
   }`;
 }
 
-/** 1 秒ごとに、取り消せる残りの秒数の文だけを書き換える（取り消せる間だけ。入力中の欄を作り直さない）。過ぎたら描き直して消す */
+/** 取り消せる間に、段階と「この間の生成」の件数を読み直す間隔（秒） */
+const UNDO_POLL_SEC = 10;
+
+/**
+ * 取り消せる間だけ、1 秒ごとに残りの秒数の文を書き換える（入力中の欄を作り直さない）。
+ * 時間は、読み込んだときのサーバーとの時刻の差を足した今の時刻で数え（undoView）、60 秒を過ぎたら描き直してボタンを消す。
+ * 10 秒ごとに cohort_stage_status を読み直し、「この間の生成」の件数も新しくする
+ */
 function updateUndoTimer() {
   const s = state.status;
   if (!s || !undoView(s, Date.now()).available) {
@@ -608,7 +617,17 @@ function updateUndoTimer() {
     return;
   }
   if (undoTimer) return;
-  undoTimer = setInterval(() => {
+  let ticks = 0;
+  undoTimer = setInterval(async () => {
+    ticks++;
+    if (ticks % UNDO_POLL_SEC === 0 && !state.busy) {
+      await loadStatus();
+      if (!state.status || !undoView(state.status, Date.now()).available) {
+        stopUndoTimer();
+        render();
+        return;
+      }
+    }
     const undo = state.status ? undoView(state.status, Date.now()) : { available: false };
     if (!undo.available) {
       stopUndoTimer();
@@ -711,6 +730,8 @@ function grantCard(s) {
   note.addEventListener("input", () => (state.noteText = note.value));
   const limits = limitItems(s);
   const mine = revocableGrants(s, state.myEmail, state.isAdmin);
+  const revoked = revokedGrants(s);
+  const avail = grantAvailability(s);
   const nameOf = (email) => s.students.find((x) => x.email === email)?.name ?? email;
   return el(
     "section",
@@ -724,8 +745,9 @@ function grantCard(s) {
       el("div", {}, el("label", { className: "field-label", for: "grant-credits", text: "1 人あたりのクレジット" }), credits),
       el("div", {}, el("label", { className: "field-label", for: "grant-note", text: "メモ（任意。理由など）" }), note),
     ),
+    avail.ok ? null : el("p", { className: "note-box", id: "grant-why", text: avail.why }),
     el("button", { type: "button", className: "btn primary big", id: "grant-btn", onclick: () => addGrant(s) }),
-    el("h3", { text: "今の段階のあなたの追加" }),
+    el("h3", { text: state.isAdmin ? "今の段階の追加（取り消せるもの）" : "今の段階のあなたの追加" }),
     mine.length
       ? el(
         "ul",
@@ -747,6 +769,27 @@ function grantCard(s) {
         ),
       )
       : el("p", { className: "muted", text: "今の段階で、取り消せる追加はありません。" }),
+    revoked.length
+      ? el(
+        "div",
+        { className: "stack" },
+        el("h3", { text: "今の段階で取り消した追加（回の合計には数えます）" }),
+        el(
+          "ul",
+          { className: "my-grants revoked", "aria-label": "取り消した追加" },
+          ...revoked.map((g) =>
+            el(
+              "li",
+              {},
+              el("span", {
+                className: "what",
+                text: `${nameOf(g.email)} への +${formatCredits(g.credits)}${g.note ? `「${g.note}」` : ""}・取り消し済み${g.revokedNote ? `（取り消しのメモ：${g.revokedNote}）` : ""}`,
+              }),
+            )
+          ),
+        ),
+      )
+      : null,
   );
 }
 
@@ -756,7 +799,9 @@ function updateGrantButton() {
   if (!btn) return;
   const n = state.selected.size;
   btn.textContent = n ? `選んだ ${n} 人に追加する` : "追加する人を選んでください";
-  btn.disabled = state.busy || n === 0;
+  const avail = state.status ? grantAvailability(state.status) : { ok: true };
+  btn.disabled = state.busy || n === 0 || !avail.ok;
+  if (!avail.ok) btn.title = avail.why;
 }
 
 // ---- 操作 ----
@@ -833,7 +878,7 @@ async function addGrant(s) {
     notify("追加するクレジットは 1 以上の整数で入力してください。", "error");
     return;
   }
-  const plan = instructorGrantPlan({ emails, credits, students: s.students, limits: s.limits, isInstructor: !state.isAdmin });
+  const plan = instructorGrantPlan({ emails, credits, students: s.students, limits: s.limits, isInstructor: !state.isAdmin, status: s });
   if (!plan.ok) {
     notify("追加できません。", "error", plan.problems);
     return;
