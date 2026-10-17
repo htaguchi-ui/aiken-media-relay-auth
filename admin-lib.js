@@ -1414,10 +1414,18 @@ export function buildModelSave(body, drafts, roles = true, resets = {}) {
   const models = body?.models ?? [];
   const entries = [];
   const counts = { all: 0, student: 0, member: 0 };
+  // 「制限なしに戻す」を押した区分（保存されている一覧が明示のときだけ有効）は null で保存する。null では明示が要るモデル（opt_in）は
+  // 無効になる（J2）ので、その区分の下書きから opt_in を外した形で、件数・変更・空になる警告を数える
+  const optIn = optInModelIds(models);
+  const resetOf = (key) => !!resets[key] && Array.isArray(scopeList(body, key));
+  const eff = { ...drafts };
+  for (const sc of activeScopes(roles)) {
+    if (resetOf(sc.key)) eff[sc.key] = new Set([...drafts[sc.key]].filter((id) => !optIn.has(id)));
+  }
+  drafts = eff;
   for (const sc of activeScopes(roles)) {
     const ch = modelChanges(models, scopeSelection(models, sc.key), drafts[sc.key]);
-    // 「制限なしに戻す」を押した区分（保存されている一覧が明示のときだけ有効）：下書きが今と同じ（全部オンに見える）でも null で保存する
-    const reset = !!resets[sc.key] && Array.isArray(scopeList(body, sc.key));
+    const reset = resetOf(sc.key);
     counts[sc.key] = reset && ch.count === 0 ? 1 : ch.count;
     const unknown = unknownList(body, sc.key);
     if (ch.count === 0 && unknown.length === 0 && !reset) continue;
@@ -1481,6 +1489,7 @@ export function resetCarry(prevBody, nextBody, resets = {}) {
 /**
  * 「制限なしに戻す」を押したあとの区分の下書き：読み込んだときの基準（scopeSelection）に、押せるモード
  * （サーバー側で無効でない・全体の下書き allDraft でもオン）をすべてオンにしたもの。押せないモードは基準のまま（件数・確認の文に入れない）。
+ * ただし明示が要るモデル（opt_in）はオフ（null の保存では無効になるため）。
  * 保存する値は null（制限なし）で、下書きの中身には依らない（buildModelSave の resets）
  */
 export function restoreNullDraft(models, scope, allDraft) {
@@ -1488,6 +1497,8 @@ export function restoreNullDraft(models, scope, allDraft) {
   for (const { model, mode } of catalogModes(models)) {
     if (!scopeModeStatus(model, mode, false, scope, allDraft).locked) next.add(mode.model_id);
   }
+  // null で保存すると、明示が要るモデル（opt_in。口パク）は中継サーバーで無効になる（J2）。保存後の状態に合わせてオフにする
+  for (const id of optInModelIds(models)) next.delete(id);
   return next;
 }
 
@@ -1520,7 +1531,7 @@ export function saveConfirmLines(plan, labelOf = (id) => id) {
       lines.push(
         e.key === "all"
           ? "・すべてオンのため「制限なし」（サーバーで許可されたモデルすべて）として保存します。"
-          : `・${e.label}は制限なし（全体と同じ。これから足すモデルも使える）として保存します。`,
+          : `・${e.label}は制限なし（全体と同じ。これから足すモデルも使える）として保存します。${(plan.optIn ?? []).length ? "口パクなど明示が要るモデルは使えなくなります。" : ""}`,
       );
     }
   }

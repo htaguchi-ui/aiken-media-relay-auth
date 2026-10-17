@@ -3499,7 +3499,7 @@ function modelsBox() {
           }),
         );
         if (scopeList(S.models, scope) === null) {
-          panel.push(el("p", { className: "note-box", text: `今は制限なしです（全体でオンのモデルは、これから足すモデルも含めて、${sLabel}もすべて使えます）。` }));
+          panel.push(el("p", { className: "note-box", text: `今は制限なしです（全体でオンのモデルは、これから足すモデルも含めて、${sLabel}もすべて使えます。口パクなど明示が要るモデルは、このタブでオンにしたものだけ）。` }));
         }
         // 保存されている一覧が明示（null でない）のときは、全部オンに見えても出す（古い ID を外すだけの保存は明示の一覧のまま残るため）。
         // 一覧が null で未保存のオフがあるだけなら「元に戻す」で足りる
@@ -3511,7 +3511,7 @@ function modelsBox() {
               className: "btn restore-null",
               text: "制限なしに戻す",
               onclick: () => {
-                if (!confirm(`${sLabel}の制限をなくしますか？\n全体でオンのモデルは、これから足すモデルも含めて、${sLabel}もすべて使えるようになります。\n（保存するまで反映されません）`)) return;
+                if (!confirm(`${sLabel}の制限をなくしますか？\n全体でオンのモデルは、これから足すモデルも含めて、${sLabel}もすべて使えるようになります。\n口パクなど、明示が要るモデルは使えなくなります（使わせるには、このタブでオンにして保存します）。\n（保存するまで反映されません）`)) return;
                 // 印だけを持つ。この区分の下書きは、表示・件数・確認の文・保存のたびに、今の全体の下書きから作る（effectiveDrafts）
                 S.resetNull[scope] = true;
                 renderModelsBox();
