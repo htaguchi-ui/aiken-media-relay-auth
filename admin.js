@@ -98,6 +98,7 @@ import {
   resetCarry,
   effectiveDrafts,
   isMissingSchemaError,
+  setStageDbReady,
   isMonthlyRole,
   isWindowRole,
   rosterFilters,
@@ -1506,7 +1507,8 @@ async function loadGrants(r, list) {
   const columns = stagesAvailable() ? STAGE_GRANT_COLUMNS : GRANT_COLUMNS;
   const [win, stg] = await Promise.all([
     hasWindowNow ? queryWindowGrants(r, columns) : { data: [] },
-    stageStudent
+    // 段階が 0 件の回は、問い合わせない（空の in は送らない）
+    stageStudent && stagesOfCohort(r.cohort_id).length
       ? supabase.from("credit_grants").select(columns).eq("email", r.email).in("stage_id", stagesOfCohort(r.cohort_id).map((s) => s.id)).order("created_at", { ascending: false })
       : { data: [] },
   ]);
@@ -3887,7 +3889,10 @@ async function loadStageInfo() {
   const S = state.stages;
   const c = await supabase.from("cohorts").select("id, credit_mode, stage_template_id, stages_applied_at");
   if (c.error) {
-    if (isMissingSchemaError(c.error)) Object.assign(S, emptyStageState(), { loaded: true });
+    if (isMissingSchemaError(c.error)) {
+      Object.assign(S, emptyStageState(), { loaded: true });
+      setStageDbReady(false);
+    }
     return false;
   }
   const [st, tp, ti, ins, set] = await Promise.all([
@@ -3899,6 +3904,7 @@ async function loadStageInfo() {
   ]);
   S.available = true;
   S.loaded = true;
+  setStageDbReady(true);
   S.cohortInfo = new Map((c.data ?? []).map((x) => [x.id, x]));
   if (!st.error) S.stages = st.data ?? [];
   if (!tp.error) S.templates = tp.data ?? [];

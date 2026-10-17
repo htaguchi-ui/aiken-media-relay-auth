@@ -150,6 +150,15 @@ export function isMissingFunctionError(error, name) {
   return !name || String(error?.message ?? "").includes(name);
 }
 
+/**
+ * 016 の DB が当たっているか（画面が知っている判定を、admin.js・instructor.js が入れる）。
+ * false の間（016 の前の DB）は、今までの画面の文をそのまま出し、DB の hint に置き換えない
+ */
+let stageDbReady = false;
+export function setStageDbReady(value) {
+  stageDbReady = !!value;
+}
+
 /** 016 の DB が当たっていないときの文（「まだ使えません」と分かる形） */
 export const MSG_STAGE_NOT_READY = "DB の更新（セミナーの段階：016）がまだ適用されていないため、この操作はまだ使えません。";
 
@@ -174,6 +183,7 @@ export const STAGE_REJECTIONS = {
   grant_target_not_in_cohort: "追加できるのは、担当する回の有効な受講者だけです。",
   grant_instructor_limit_exceeded: "講師が追加できる上限を超えています。",
   job_transition_not_allowed: "ジョブの状態を、この向きには変えられません。",
+  stage_input_invalid: "入力の内容を受け付けられませんでした。値を確かめてください。",
 };
 
 /** 講師の追加の上限を超えたときの、どの上限かの呼び名（detail の scope。DB の値の名前が違っても、文は崩れない） */
@@ -205,6 +215,10 @@ function parseErrorDetail(error) {
 export function stageRejectionText(error) {
   const name = rejectionName(error);
   if (!name || !Object.hasOwn(STAGE_REJECTIONS, name)) return null;
+  if (name === "stage_input_invalid") {
+    const field = parseErrorDetail(error).field;
+    if (typeof field === "string" && field) return `入力の内容を受け付けられませんでした（${field}）。値を確かめてください。`;
+  }
   if (name === "grant_instructor_limit_exceeded") {
     const d = parseErrorDetail(error);
     const known = (v) => v !== null && v !== undefined && Number.isFinite(Number(v));
@@ -229,10 +243,12 @@ export function explainError(error) {
   }
   if (message.includes("admin_only")) return "管理者の権限がありません。";
   if (message.includes("grant_outside_window")) {
-    // 段階の回（detail の credit_mode が stage）や、DB が日本語の hint を付けたときは、DB の説明を出す（Day ごと・月額の文を出さない）
+    // 016 の DB（画面が 016 を当たっていると知っている、または detail の credit_mode が stage）で、DB が日本語の hint を付けたときは、
+    // DB の説明を出す。016 の前の DB では、今までの文のまま（本番の表示を変えない）
     const hint = String(error.hint ?? "");
-    if (/[^\x00-\x7F]/.test(hint)) return hint;
-    if (parseErrorDetail(error).credit_mode === "stage") {
+    const stageMode = parseErrorDetail(error).credit_mode === "stage";
+    if ((stageDbReady || stageMode) && /[^\x00-\x7F]/.test(hint)) return hint;
+    if (stageMode) {
       return "今の段階が無いため、クレジットを追加できません（段階の回は、Day1〜Day2 の期間内で、その日の段階があるときだけ追加できます）。";
     }
     return "今の枠が無いため、クレジットを追加できません（受講者は Day1〜Day2 の期間内でクレジットが設定されているとき、AIKENメンバーは月額が設定されているときだけ追加できます）。";

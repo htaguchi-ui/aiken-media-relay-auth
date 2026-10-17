@@ -332,6 +332,11 @@ export function instructorCohortLabel(c) {
 
 const IN_COURSE = ["day1", "bridge", "day2"];
 
+/** 期間が Day1〜Day2 の外のときの理由。period が null（回の日付が決まっていない）のときは、終わったとは言わない */
+function periodOffText(period, texts) {
+  return period === "before" ? texts.before : period === "after" ? texts.after : texts.unknown;
+}
+
 /**
  * 段階の操作のボタンの状態。移る先は今日の段階の中だけ（DB の stage_not_today）。
  * 返り値：{ current, prev, next, canPrev, canNext, prevWhy, nextWhy, enabled, whyOff }
@@ -343,9 +348,11 @@ export function stageMoveView(status) {
   let whyOff = "";
   if (status?.creditMode !== "stage") whyOff = "この回は、段階ごとの枠になっていません。";
   else if (!IN_COURSE.includes(status?.period)) {
-    whyOff = status?.period === "before"
-      ? "Day1 の前は、段階を動かせません。Day1 の 0:00 に、最初の段階に自動で入ります。"
-      : "Day2 が終わったため、段階を動かせません。";
+    whyOff = periodOffText(status?.period, {
+      before: "Day1 の前は、段階を動かせません。Day1 の 0:00 に、最初の段階に自動で入ります。",
+      after: "Day2 が終わったため、段階を動かせません。",
+      unknown: "回の日付が決まっていないため、段階を動かせません。",
+    });
   } else if (idx < 0) whyOff = "今の段階が分かりません。読み込み直してください。";
   const enabled = !whyOff;
   const prev = idx > 0 ? list[idx - 1] : null;
@@ -397,7 +404,14 @@ export function undoView(status, nowMs = Date.now(), windowMs = UNDO_WINDOW_MS) 
 export function grantAvailability(status) {
   if (status?.creditMode !== "stage") return { ok: false, why: "この回は、段階ごとの枠になっていません。" };
   if (!IN_COURSE.includes(status?.period)) {
-    return { ok: false, why: status?.period === "before" ? "Day1 の前は、クレジットを追加できません。" : "Day2 が終わったため、クレジットを追加できません。" };
+    return {
+      ok: false,
+      why: periodOffText(status?.period, {
+        before: "Day1 の前は、クレジットを追加できません。",
+        after: "Day2 が終わったため、クレジットを追加できません。",
+        unknown: "回の日付が決まっていないため、クレジットを追加できません。",
+      }),
+    };
   }
   if (!status?.current) return { ok: false, why: "今の段階がありません（この日の段階がありません）。クレジットを追加できません。" };
   return { ok: true, why: "" };

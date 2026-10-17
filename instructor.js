@@ -30,6 +30,7 @@ import {
   formatShortDateTime,
   isStageSchemaMissing,
   MSG_STAGE_NOT_READY,
+  setStageDbReady,
   normalizeEmail,
   rejectionName,
   usagePct,
@@ -145,6 +146,9 @@ function el(tag, props = {}, ...children) {
   for (const c of children.flat()) if (c !== null && c !== undefined && c !== false) node.append(c);
   return node;
 }
+
+// 講師の画面は 016 の DB でだけ働く（016 の前は「まだ使えません」）。DB の日本語の hint をそのまま出す
+setStageDbReady(true);
 
 /** 画面の状態 */
 const state = {
@@ -364,6 +368,9 @@ async function loadCohorts() {
   return {};
 }
 
+/** cohort_stage_status の読み込みの通し番号。古い応答（あとから始めた読み込み・操作のあとに返ってきたもの）は捨てる */
+let statusSeq = 0;
+
 async function loadStatus() {
   if (!state.cohortId) {
     state.status = null;
@@ -371,8 +378,10 @@ async function loadStatus() {
     return true;
   }
   const requested = state.cohortId;
+  const seq = ++statusSeq;
   const { data, error } = await rpc("cohort_stage_status", { p_cohort_id: requested });
   if (requested !== state.cohortId) return true; // 読み込み中に回を切り替えた
+  if (seq !== statusSeq) return true; // 古い応答（その間に、もっと新しい読み込みか操作があった）
   if (error) {
     state.statusError = explainError(error);
     return false;
@@ -621,17 +630,19 @@ function updateUndoTimer() {
   undoTimer = setInterval(async () => {
     ticks++;
     if (ticks % UNDO_POLL_SEC === 0 && !state.busy) {
+      const before = { current: state.status?.current?.id ?? null, selected: state.selected.size };
       await loadStatus();
-      if (!state.status || !undoView(state.status, Date.now()).available) {
-        stopUndoTimer();
+      // 今の段階が変わった（ほかの人が動かした）・選んだ人が記録から外れたときだけ、画面を描き直す（チェックと人数を合わせる）
+      if ((state.status?.current?.id ?? null) !== before.current || state.selected.size !== before.selected) {
         render();
         return;
       }
     }
     const undo = state.status ? undoView(state.status, Date.now()) : { available: false };
     if (!undo.available) {
+      // 60 秒が過ぎた：画面全体は描き直さず、取り消しの箱だけを消す（入力中の欄のフォーカスを外さない）
       stopUndoTimer();
-      render();
+      document.getElementById("undo-box")?.remove();
       return;
     }
     const text = document.querySelector("#undo-box > span");
@@ -810,6 +821,7 @@ function updateGrantButton() {
 async function withBusy(fn) {
   if (state.busy) return;
   state.busy = true;
+  statusSeq++; // 操作の前に始まった読み込みの応答は、操作のあとの状態を上書きしないよう捨てる
   render();
   try {
     await fn();
