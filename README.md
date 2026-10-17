@@ -41,6 +41,12 @@ ChatGPT・Codex・Claude Code の接続の操作から開かれ、Google アカ�
     - ログアウト・30 分切れでは、通信を待つ前に画面の中身を消す。
   - 状態：ログイン前／読み込み中／名簿に無い・停止中（「利用登録が確認できません。管理者にお問い合わせください。」）／通信の失敗（「もう一度試す」）
   - CSP・supabase-js（2.117.2 の UMD・SRI）・フレームへの埋め込み防止は `admin.html` と同じ。`<meta name="referrer" content="no-referrer">` を付けている
+- `instructor.html` / `instructor.js` / `stage-lib.js`：講師の画面（DB の変更 016「セミナーの段階」。設計 `docs/design-seminar-stages.md` の 9.1）。担当する回の段階を「前へ戻す」「次へ進める」（確認のダイアログの既定は「やめる」。移した直後の 60 秒は「取り消す（前の段階に戻す）」）、受講者の名前・メール・段階の使用 / 上限・残り・最終生成、一時追加と今の段階の自分の追加の取り消し、講師の 3 つの上限と回の合計の上限。管理者も使える。書き込みは RPC（`cohort_stage_move`・`instructor_grant`・`revoke_stage_grant`）だけで、判定の最後は DB。**016 が DB に無い間は「まだ使えません」と出る。**
+  - ログインの守りはマイページと同じ作り（sessionStorage の鍵 `aiken-instructor-auth`・30 分でログアウト・画面を離れたらログアウト・再読み込みは自動でログインし直す・手がかりの鍵 `aiken-instructor-reload-hint`）。**Supabase Auth の Redirect URLs に `…/instructor.html` を入れる**（`/**` が入っていれば不要）。
+  - `stage-lib.js` は画面に依存しない処理（段階の読み取り・ボタンの可否・日付の規則・追加の事前の確かめ・一覧の分け方）。DB の返し方のうち設計書に形が無いもの（`cohort_stage_status`・`instructor_cohorts` の jsonb）の前提は `stage-lib.js` の先頭に書いてある。
+- 管理コンソールの 016 対応：回の詳細に「段階」（テンプレートを当てる・当て直す・Day ごとに戻す〔Day1 の前だけ〕・段階の名前/題名/クレジットの編集）と「担当の講師」、設定にテンプレートの作成・保存・削除と 4 項目（段階の回の追加の合計・講師の 3 つの上限）、名簿に区分「講師」（月額はメンバーと同じ）、一時追加の一覧は段階ごと（取り消した行はボタンなし）。書き込みは 016 の DB では RPC、**016 の前の DB では今までどおり直接の insert・update・delete**（`cohorts` に `credit_mode` の列があるかで切り替える。無ければ新しい欄・操作を出さない）。
+  - 016 の DB が返す拒否（`stage_grant_via_rpc`・`stage_grant_not_deletable`・`stage_cohort_dates_via_rpc` など。P0001 と日本語の hint）は `explainError` が hint をそのまま出す。hint が無いときは名前（message と完全に同じときだけ）ごとの文を出す。
+- マイページの 016 対応：段階の回では、今の段階の名前と今日の段階の一覧（`user-api` の `credits.stage`・`credits.stages_today`）を出す。区分「講師」のバッジ。
 - `auth-storage.js`：3 つの画面のログインの保存先と時間切れ。どれも sessionStorage で、鍵を分けてセッションを共有しない（許可の画面 `aiken-consent-auth`、管理コンソール `aiken-admin-auth`、マイページ `aiken-mypage-auth`）。以前の版が localStorage に残したセッション（`sb-<ref>-auth-token`）は、3 つのどの画面を開いた時点でも消す
 - supabase-js は版を固定（2.117.2 の UMD）し、`integrity`（SRI）と `crossorigin` を付けて読み込む（`admin.html`・`consent.html`・`mypage.html`）。版を上げるときは、配信されるファイルの sha384 を計算し直して 3 つの `integrity` と `admin.html`・`mypage.html` の CSP（`script-src` のファイルの URL）を合わせて直す
 - ページ内の Supabase キーは公開用（publishable）で、秘密情報は含みません。
