@@ -1337,6 +1337,31 @@ export function unknownList(body, scope) {
   return (scope === "all" ? body?.unknown_console_models : body?.unknown_role_models?.[scope]) ?? [];
 }
 
+/**
+ * GET /models の応答の、明示が要る行（opt_in。口パク・のちに参照）のオン・オフを、保存されている一覧だけから決め直す（読み込み直後に 1 回。新しい body を返す）。
+ * 明示が要るモードは「その一覧が配列で、model_id が入っている」ときだけオン（一覧が null ならオフ。区分のタブでは全体と同じ、ではない）。
+ * admin-api が一覧 null のとき true を返す版（J2 の前）でも、false を返す版（J2 のあと）でも同じ結果になる。
+ * opt_in が無い行・古い admin-api では何も変えない
+ */
+export function normalizeOptInModes(body) {
+  if (!Array.isArray(body?.models)) return body;
+  const listed = (scope, id) => Array.isArray(scopeList(body, scope)) && scopeList(body, scope).includes(id);
+  return {
+    ...body,
+    models: body.models.map((m) => {
+      if (m.opt_in !== true) return m;
+      return {
+        ...m,
+        modes: (m.modes ?? []).map((mode) => ({
+          ...mode,
+          console_enabled: listed("all", mode.model_id),
+          role_enabled: { ...(mode.role_enabled ?? {}), student: listed("student", mode.model_id), member: listed("member", mode.model_id) },
+        })),
+      };
+    }),
+  };
+}
+
 /** 読み込んだ時点で、その区分の一覧でオンのモード（admin-api の console_enabled・role_enabled。一覧が null なら全部オン） */
 export function modeBaseOn(mode, scope) {
   return scope === "all" ? !!mode.console_enabled : mode.role_enabled?.[scope] !== false;
@@ -1402,8 +1427,8 @@ export function buildModelSave(body, drafts, roles = true, resets = {}) {
     const payload = reset
       ? null
       : ch.count === 0 && Array.isArray(saved)
-      ? catalogModes(models).map(({ mode }) => mode.model_id).filter((id) => saved.includes(id))
-      : enabledModelsPayload(models, drafts[sc.key], sc.key);
+      ? catalogModes(models).map(({ mode }) => mode.model_id).filter((id) => saved.includes(id) && !(sc.key !== "all" && optInModelIds(models).has(id) && !drafts.all.has(id)))
+      : enabledModelsPayload(models, drafts[sc.key], sc.key, drafts.all);
     entries.push({
       key: sc.key,
       label: sc.label,
@@ -1430,6 +1455,7 @@ export function buildModelSave(body, drafts, roles = true, resets = {}) {
     counts,
     count: counts.all + counts.student + counts.member,
     roles,
+    optIn: [...optInModelIds(models)],
   };
 }
 
@@ -1487,6 +1513,9 @@ export function saveConfirmLines(plan, labelOf = (id) => id) {
     if (e.on.length) lines.push(`・オンにする：${listText(e.on.map(labelOf), 6)}`);
     if (e.off.length) lines.push(`・オフにする：${listText(e.off.map(labelOf), 6)}`);
     if (e.unknown.length) lines.push(`・今のカタログに無い ID ${e.unknown.length} 件を外します。`);
+    if (e.key !== "all" && Array.isArray(e.payload) && e.on.some((id) => (plan.optIn ?? []).includes(id))) {
+      lines.push(`・${e.label}の一覧は全体と同じ（制限なし）に戻らず、これから足すモデルもこのタブでオンにしないと使えません。`);
+    }
     if (e.payload === null) {
       lines.push(
         e.key === "all"
@@ -1519,17 +1548,18 @@ export function changedScopes(row, body, roles = true) {
  * 保存する enabled_models。カタログのすべての model_id がオンなら null（制限なし＝環境変数の範囲すべて）、
  * それ以外はオンの model_id の配列（カタログ順）。カタログに無い ID（古い ID）は含めない。
  * 環境変数の外のモードは押せないので、selected には読み込んだ時点のコンソールの値が残る。
- * 例外：全体の一覧（scope "all"）では、opt_in のモデル（口パク）がオンのときは null にまとめず、
- * オンの全部の配列を送る（中継サーバーは opt_in のモデルを、全体の一覧に明示されたときだけ有効にする）。
- * opt_in がオフのときは、それ以外がすべてオンなら null。区分（受講者・メンバー）の一覧は、null なら全体と同じなので、まとめてよい
+ * 明示が要るモデル（opt_in。口パク）の例外（中継サーバーは、全体の一覧に明示されたときだけ有効にし、
+ * 受講者・メンバーでは区分の一覧にも明示が要る。区分の一覧が null なら出さない）：
+ *   ・どの区分でも、opt_in のモデルがオンのときは null にまとめず、オンの全部の配列を送る。
+ *   ・区分のタブでは、全体の下書き（allSelected）でオフの opt_in の ID を配列から除く。
+ *   ・opt_in がどれもオフのときは、それ以外がすべてオンなら null（opt_in のモデルは無効のまま）。
+ * @param {Set<string> | null} [allSelected] 全体のタブの下書き（区分のタブの保存で使う）
  */
-export function enabledModelsPayload(models, selected, scope = "all") {
+export function enabledModelsPayload(models, selected, scope = "all", allSelected = null) {
   const ids = catalogModes(models).map(({ mode }) => mode.model_id);
-  const on = ids.filter((id) => selected.has(id));
-  if (scope !== "all") return ids.length > 0 && on.length === ids.length ? null : on;
   const optIn = optInModelIds(models);
+  const on = ids.filter((id) => selected.has(id) && !(scope !== "all" && allSelected && optIn.has(id) && !allSelected.has(id)));
   if (on.some((id) => optIn.has(id))) return on;
-  // opt_in のモデルがオフのときは、それ以外がすべてオンなら null（opt_in のモデルは null では有効にならず、無効のまま）
   const rest = ids.filter((id) => !optIn.has(id));
   return rest.length > 0 && rest.every((id) => selected.has(id)) ? null : on;
 }

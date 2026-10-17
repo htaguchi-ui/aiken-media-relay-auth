@@ -60,6 +60,7 @@ import {
   catalogModes,
   DEFAULT_SETTING_TEXT,
   enabledModelsPayload,
+  normalizeOptInModes,
   explainApiError,
   formatSettingValue,
   formatUsdShort,
@@ -3148,6 +3149,8 @@ async function loadModels({ resetDraft = false } = {}) {
     if (S.modelsStatus !== "ok") S.modelsStatus = "error";
     return false;
   }
+  // 明示が要る行（口パクなど）のオン・オフは、保存されている一覧だけから決め直す（admin-api の版に依らず同じ見え方にする）
+  body = normalizeOptInModes(body);
   const prev = S.models;
   // 保存しないまま読み直した（1 回の上限の保存・「最新にする」など）とき、「制限なしに戻す」の印は、その区分の一覧が変わっていなければ残す。変わっていれば消して、下書きも基準に戻す
   const carry = resetCarry(prev, body, resetDraft ? {} : S.resetNull);
@@ -3713,7 +3716,12 @@ function modelItem(m, scope) {
     m.provider_available ? null : el("p", { className: "small warn-text", text: "提供元が使えません（API キーが未設定など）。オンにしても生成できません。" }),
     modes.length ? null : el("p", { className: "small muted", text: "振り分け先の経路が無いため使えません。" }),
     m.opt_in === true
-      ? el("p", { className: "small muted", text: "全体のタブでオンにして保存したときだけ使えます（「全部オン」の保存では有効になりません）。" })
+      ? el("p", {
+        className: "small muted",
+        text: scope === "all"
+          ? "全体のタブでオンにして保存したときだけ使えます（「全部オン」の保存では有効になりません）。"
+          : "この区分で使わせるには、全体のタブとこのタブの両方でオンにします。オンにすると、この区分の一覧は全体と同じ（制限なし）には戻らず、これから足すモデルもこのタブでオンにしないと使えません。",
+      })
       : null,
     wrap,
   );
