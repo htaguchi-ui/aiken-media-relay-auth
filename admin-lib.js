@@ -6,6 +6,24 @@ export const ALLOWED_DOMAINS = ["a-i-ken.jp", "a-i-ken.com"];
 export const EMAIL_RE = /^[^@\s]+@(a-i-ken\.jp|a-i-ken\.com)$/;
 
 export const ROLE_LABELS = { student: "受講者", member: "AIKENメンバー", admin: "管理者" };
+/** 講師の区分（016）。016 が DB に当たるまでは選べないので、ROLE_LABELS には入れず、roleLabelsFor で足す */
+export const INSTRUCTOR_ROLE_LABEL = "講師";
+
+/** 画面で選べる区分の表示名。stagesAvailable が false（016 がまだ DB に無い）なら、講師を出さない */
+export function roleLabelsFor(stagesAvailable) {
+  return stagesAvailable ? { ...ROLE_LABELS, instructor: INSTRUCTOR_ROLE_LABEL } : { ...ROLE_LABELS };
+}
+
+/** 月額の枠を持つ区分（AIKENメンバーと講師。講師の月額は 016 でメンバーと同じ扱い） */
+export function isMonthlyRole(role) {
+  return role === "member" || role === "instructor";
+}
+
+/** クレジットの枠を持つ区分（受講者・AIKENメンバー・講師） */
+export function isWindowRole(role) {
+  return role === "student" || isMonthlyRole(role);
+}
+
 export const STATUS_LABELS = { active: "有効", disabled: "停止中" };
 
 /** 小文字にして前後の空白を取る */
@@ -106,6 +124,101 @@ export function cohortsSchemaMissing(cohortsError, rows) {
   return Array.isArray(rows) && rows.length > 0 && !rows.some((r) => r && "cohort_id" in r);
 }
 
+// ---- 016（セミナーの段階）：DB の拒否の名前と、DB がまだ 016 でないときの判定 ----
+
+/** 016 の DB の物（関数・表・列）の名前。「見つからない」誤りの文にこれが入っていれば、DB の更新（016）がまだ適用されていない */
+const STAGE_DB_OBJECTS_RE = new RegExp(
+  [
+    "cohort_stage_move", "cohort_stage_status", "cohort_stages", "cohort_stage_entries", "cohort_instructors", "instructor_cohorts",
+    "instructor_grant", "revoke_stage_grant", "admin_grant_credits", "admin_delete_grant", "admin_update_cohort",
+    "admin_save_stage_template", "admin_delete_stage_template", "admin_apply_stage_template", "admin_set_cohort_credit_mode",
+    "admin_update_cohort_stage", "admin_replace_day_stages", "admin_set_cohort_instructors", "stage_templates", "stage_template_items",
+    "stage_template_id", "stages_applied_at", "credit_mode", "stage_id", "revoked_at", "granted_as", "stage_grant_total_limit",
+    "instructor_grant_max_",
+  ].join("|"),
+);
+
+/** 016 の物が無いための「見つからない」誤りか（関数・表・列が無い、かつ文に 016 の名前が入っている） */
+export function isStageSchemaMissing(error) {
+  if (!isMissingSchemaError(error)) return false;
+  return STAGE_DB_OBJECTS_RE.test([error?.message, error?.details, error?.hint].map((t) => String(t ?? "")).join(" "));
+}
+
+/** 名前の関数（RPC）が DB に無い誤りか（PostgREST の PGRST202、または Postgres の 42883） */
+export function isMissingFunctionError(error, name) {
+  if (!["PGRST202", "42883"].includes(String(error?.code ?? ""))) return false;
+  return !name || String(error?.message ?? "").includes(name);
+}
+
+/** 016 の DB が当たっていないときの文（「まだ使えません」と分かる形） */
+export const MSG_STAGE_NOT_READY = "DB の更新（セミナーの段階：016）がまだ適用されていないため、この操作はまだ使えません。";
+
+/**
+ * 016 の DB が返す拒否の名前（message が名前だけのとき）と、日本語の hint が無いときに出す文。
+ * hint があれば DB の文をそのまま出す（explainError）。名前は message と「完全に同じ」ときだけ拾う
+ * （部分一致で拾うと、ほかの誤りの文や将来の名前を取り違える）
+ */
+export const STAGE_REJECTIONS = {
+  instructor_only: "講師または管理者の権限がありません。担当する回の講師として登録されているか、管理者に確かめてください。",
+  stage_changed: "ほかの人が先に段階を動かしていました。最新の状態を読み込み直したので、確かめてからもう一度操作してください。",
+  stage_not_today: "移れるのは、今日の段階だけです。別の日の段階へは移せません。",
+  stage_outside_course: "Day1 より前、または Day2 が終わったあとは、段階を動かせません。",
+  stage_mode_off: "この回は、段階ごとの枠になっていません（Day ごとの枠です）。",
+  stage_cohort_locked: "この日の段階は、もう始まっているため、順番や数を変えられません（名前・題名・クレジットは変えられます）。",
+  stage_cohort_dates_via_rpc:
+    "テンプレートを当てた回の日付は、この画面では変えられません。新しい管理コンソールの回の画面で変えてください（Day1 が始まったあとは、Day1 と枠の種類は変えられません）。",
+  stage_grant_via_rpc:
+    "段階の回の受講者への一時追加は、この画面からはできません。新しい管理コンソール（または講師の画面）から追加してください。",
+  stage_grant_not_deletable:
+    "段階の回の一時追加は記録として残すため、削除できません。追加を無効にするときは新しい管理コンソールの「取り消す」を、受講者を外すときは名簿の「停止」を使ってください。",
+  grant_target_not_in_cohort: "追加できるのは、担当する回の有効な受講者だけです。",
+  grant_instructor_limit_exceeded: "講師が追加できる上限を超えています。",
+  job_transition_not_allowed: "ジョブの状態を、この向きには変えられません。",
+};
+
+/** 講師の追加の上限を超えたときの、どの上限かの呼び名（detail の scope。DB の値の名前が違っても、文は崩れない） */
+const INSTRUCTOR_LIMIT_SCOPES = {
+  per_grant: "1 回の追加",
+  grant: "1 回の追加",
+  per_student_stage: "1 人・1 段階への追加の合計",
+  student_stage: "1 人・1 段階への追加の合計",
+  per_cohort_day: "1 回の授業（回・1 日）への追加の合計",
+  cohort_day: "1 回の授業（回・1 日）への追加の合計",
+};
+
+/** 拒否の名前（message が小文字・数字・下線だけの名前そのもののとき）。そうでなければ "" */
+export function rejectionName(error) {
+  const m = String(error?.message ?? "").trim();
+  return /^[a-z][a-z0-9_]*$/.test(m) ? m : "";
+}
+
+function parseErrorDetail(error) {
+  try {
+    const d = JSON.parse(error?.details ?? error?.detail ?? "{}");
+    return d && typeof d === "object" ? d : {};
+  } catch {
+    return {};
+  }
+}
+
+/** 016 の拒否の名前に対する、hint が無いときの文。名前が一致しなければ null */
+export function stageRejectionText(error) {
+  const name = rejectionName(error);
+  if (!name || !Object.hasOwn(STAGE_REJECTIONS, name)) return null;
+  if (name === "grant_instructor_limit_exceeded") {
+    const d = parseErrorDetail(error);
+    const known = (v) => v !== null && v !== undefined && Number.isFinite(Number(v));
+    if (known(d.limit)) {
+      const parts = [];
+      if (known(d.current)) parts.push(`これまで ${formatCredits(d.current)}`);
+      if (known(d.request)) parts.push(`今回 ${formatCredits(d.request)}`);
+      const scope = INSTRUCTOR_LIMIT_SCOPES[d.scope] ?? "講師の追加";
+      return `${scope}の上限は ${formatCredits(d.limit)} クレジットです${parts.length ? `（${parts.join("、")}）` : ""}。`;
+    }
+  }
+  return STAGE_REJECTIONS[name];
+}
+
 /** Supabase（PostgREST）のエラーを日本語の説明にする */
 export function explainError(error) {
   if (!error) return "";
@@ -131,6 +244,12 @@ export function explainError(error) {
     const parts = [];
     if (Number.isFinite(Number(d.granted)) && d.granted !== null) parts.push(`追加済み ${formatCredits(d.granted)}`);
     if (Number.isFinite(Number(d.request)) && d.request !== null) parts.push(`今回 ${formatCredits(d.request)}`);
+    // 段階の回（scope が cohort）：上限は「今の枠」ではなく「この回での合計」。取り消した追加も数える
+    if (d.scope === "cohort") {
+      return `この人への追加は、この回の合計で ${formatCredits(limit)} クレジットまでです（取り消した追加も数えます）${
+        parts.length ? `（${parts.join("、")}）` : ""
+      }。`;
+    }
     return `この人の今の枠への追加は、合計で ${formatCredits(limit)} までです${parts.length ? `（${parts.join("、")}）` : ""}。`;
   }
   if (message.includes("cohort_id_mismatch")) {
@@ -141,7 +260,11 @@ export function explainError(error) {
   // DB が日本語の説明を返したとき（天井を超える追加など）は、そのまま出す
   const japanese = [message, error.hint].find((t) => /[^\x00-\x7F]/.test(String(t ?? "")));
   if (japanese && code !== "42501") return String(japanese);
-  // DB の更新がまだ適用されていない：関数・テーブル・列が見つからない（設定は 014、回と会場は 013）
+  // 016 の拒否（名前だけの message。42501 の instructor_only は hint が日本語でも上で出さないので、ここで文にする）
+  const stageText = stageRejectionText(error);
+  if (stageText) return stageText;
+  // DB の更新がまだ適用されていない：関数・テーブル・列が見つからない（段階は 016、設定は 014、回と会場は 013）
+  if (isStageSchemaMissing(error)) return MSG_STAGE_NOT_READY;
   if (isMissingSchemaError(error)) {
     if (/admin_get_settings|admin_update_settings|admin_settings_history|app_settings/.test(message)) {
       return "DB の更新（設定：014）がまだ適用されていないため、この操作はできません。";
@@ -388,7 +511,7 @@ function usedOfLimit(used, limit, base, granted) {
  * 返り値：{ period, text, warn, yen }（warn = true は生成できない・使い切った状態として目立たせる。yen は円の目安）
  */
 export function currentPeriodSummary(row, now = new Date()) {
-  if (row.role === "member") {
+  if (isMonthlyRole(row.role)) {
     const limit = row.current_limit_credits ?? null;
     if (limit === null) return { period: "month", text: "今月：未設定（生成できません）", warn: true, yen: null };
     const used = Number(row.current_used_credits ?? 0);
@@ -423,7 +546,7 @@ export function currentPeriodSummary(row, now = new Date()) {
 
 /** 今の枠に一時追加できるか（受講者は期間内で基本枠あり、メンバーは月額あり。DB でも検査する） */
 export function canGrant(row) {
-  return (row.role === "student" || row.role === "member") && row.current_base_credits !== null &&
+  return isWindowRole(row.role) && row.current_base_credits !== null &&
     row.current_base_credits !== undefined && !!row.current_window_start;
 }
 
@@ -445,7 +568,7 @@ export function grantText(g) {
 
 /** 一覧の「Day1 / Day2」の表示（AIKENメンバーは月額制、管理者は対象外） */
 export function courseDatesText(row) {
-  if (row.role === "member") return "月額制";
+  if (isMonthlyRole(row.role)) return "月額制";
   if (row.role !== "student") return "対象外";
   if (!row.day1_date && !row.day2_date) return "未設定";
   return `${formatMonthDay(row.day1_date)} / ${formatMonthDay(row.day2_date)}`;
@@ -454,7 +577,7 @@ export function courseDatesText(row) {
 // ---- 名簿の表示（今の枠・要対応・絞り込み） ----
 
 /** 区分の短い表示名（バッジ・絞り込み） */
-export const ROLE_SHORT_LABELS = { student: "受講者", member: "メンバー", admin: "管理者" };
+export const ROLE_SHORT_LABELS = { student: "受講者", member: "メンバー", instructor: "講師", admin: "管理者" };
 
 /** 残りがこの割合以下なら「残り少ない」として目立たせる */
 export const LOW_REMAINING_RATIO = 0.2;
@@ -489,7 +612,7 @@ export function isLow(remaining, limit) {
  *   limit?: number, used?: number, remaining?: number, base?: number | null, granted?: number, pct?: number, low?: boolean }}
  */
 export function windowView(row) {
-  if (row?.role !== "student" && row?.role !== "member") {
+  if (!isWindowRole(row?.role)) {
     return { state: "none", text: "クレジットの枠は対象外（直近 24 時間の上限のみ）", noCohort: false, legacy: false };
   }
   const isStudent = row.role === "student";
@@ -563,6 +686,7 @@ export function matchesFilter(row, filter) {
       return needsAttention(row);
     case "student":
     case "member":
+    case "instructor":
     case "admin":
       return row.role === filter;
     case "stopped":
@@ -811,6 +935,48 @@ export const SETTING_LIMITS = [
     confirm: true,
     desc: "すべての人（管理者を含む）の 1 回の生成に効きます。講師・メンバーの通常の生成（例：Seedance 2.0 の 1080p・15 秒は約 1,023 クレジット）が止まらない値にしてください。空欄で保存すると「上限なし」になります。",
   },
+  // 016（セミナーの段階）で足された 4 項目。null は既定の値（defaultValue。DB の stage_grant_limits と同じ。講師の 3 つは仮の値）。
+  // 古いサーバー（016 の前）には列が無いので、行に無ければ出さない
+  ...[
+    {
+      key: "stage_grant_total_limit",
+      label: "段階の回：1 人あたりの追加の合計",
+      max: 50000,
+      defaultValue: 10000,
+      desc: "段階の回の受講者 1 人につき、その回で追加できるクレジットの合計です。講師の追加も含み、取り消した追加も数えます。",
+    },
+    {
+      key: "instructor_grant_max_credits",
+      label: "講師：1 回の追加の上限",
+      max: 10000,
+      defaultValue: 300,
+      desc: "講師が 1 回の操作で、1 人に追加できるクレジットです。0 にすると、講師は追加できません。",
+    },
+    {
+      key: "instructor_grant_max_per_student_stage",
+      label: "講師：1 人・1 段階への追加の合計",
+      max: 50000,
+      defaultValue: 600,
+      desc: "講師が、1 人に対して 1 つの段階で追加できるクレジットの合計です（取り消した追加も数えます）。",
+    },
+    {
+      key: "instructor_grant_max_per_cohort_day",
+      label: "講師：1 回の授業への追加の合計",
+      max: 100000,
+      defaultValue: 3000,
+      desc: "講師が、1 つの回の 1 日（日本時間）で追加できるクレジットの合計です（取り消した追加も数えます）。",
+    },
+  ].map((s) => ({
+    min: 0,
+    integer: true,
+    usd: false,
+    credits: true,
+    optional: true,
+    confirm: false,
+    nullText: `既定（${formatCredits(s.defaultValue)} クレジット）`,
+    resetLabel: "既定に戻す",
+    ...s,
+  })),
 ];
 
 /** 画面に出す上限の項目（optional の項目は、サーバーの設定の行にその列があるときだけ） */
@@ -903,6 +1069,16 @@ export function limitChangeCheck(key, current, next, info) {
       confirm: lowering,
       warnings,
       note: `目安が ${formatCredits(next)} クレジットを超える生成（長い動画・高い解像度）は、管理者を含む全員が受け付けられなくなります。`,
+    };
+  }
+  if (settingSpec(key)?.defaultValue !== undefined) {
+    // 016 の 4 項目：下げるとき（今が既定のときは既定の値と比べる）だけ確認する。追加済みの分は変わらない
+    const effective = current === null || current === undefined ? settingSpec(key).defaultValue : Number(current);
+    const lowering = next === null || next === undefined ? false : next < effective;
+    return {
+      confirm: lowering,
+      warnings,
+      note: "すでに追加した分は変わりません。下げると、この値を超える追加は、次の操作から断られます。",
     };
   }
   if (key === "daily_job_limit") {
