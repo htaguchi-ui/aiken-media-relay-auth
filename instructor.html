@@ -102,7 +102,7 @@
   /* --topbar-h ＝ 固定したヘッダーの高さ（ノッチ分を含む）。ヘッダーの下に隠れてはいけない部品（お知らせ・移動先）はこの 1 か所の値で下げる */
   :root { --topbar-h: calc(82px + env(safe-area-inset-top)); } /* 561〜899px。実測 82px */
   html { scroll-padding-top: var(--topbar-h); }
-  .sticky-top { position: sticky; top: 0; z-index: 20; } /* ヘッダーとお知らせを 1 つの箱にして貼り付ける（お知らせが増えても、ヘッダーの高さの変数に頼らない） */
+  .sticky-top { position: sticky; top: 0; z-index: 20; background: var(--bg); } /* お知らせの余白から後ろの本文が透けないよう、背景は画面の地の色 */ /* ヘッダーとお知らせを 1 つの箱にして貼り付ける（お知らせが増えても、ヘッダーの高さの変数に頼らない） */
   .topbar { background: var(--surface); border-bottom: 1px solid var(--line); padding-top: env(safe-area-inset-top); line-height: 1.5; }
   .topbar-inner { max-width: 960px; margin: 0 auto; display: flex; flex-wrap: wrap; align-items: center; justify-content: space-between; gap: 8px 16px; padding: 14px 20px; }
   .brand { display: flex; flex-direction: column; gap: 2px; min-width: 0; }
@@ -152,6 +152,7 @@
   .note-box { background: var(--warn-bg); color: var(--warn-fg); border-radius: 12px; padding: 10px 14px; font-size: 14px; }
 
   /* ---- お知らせ ---- */
+  #notice:has(.toast) { padding-bottom: 12px; }
   #notice { display: flex; flex-direction: column; gap: 8px; max-width: 960px; margin: 0 auto; padding: 0 20px; }
   #notice .toast { margin-top: 12px; padding: 12px 16px; border-radius: 12px; border: 1px solid var(--line-2); background: var(--surface); box-shadow: 0 4px 16px rgba(0, 0, 0, 0.12); display: flex; gap: 12px; align-items: flex-start; justify-content: space-between; }
   #notice .toast.error { border-color: var(--danger); }
