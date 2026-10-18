@@ -61,7 +61,6 @@ import {
   DEFAULT_SETTING_TEXT,
   enabledModelsPayload,
   applyMasterOptIn,
-  isOptInMode,
   masterView,
   optInModelIds,
   modeStatus,
@@ -3613,11 +3612,12 @@ function modelItem(m, scope) {
   // 説明（全体のタブでオンにして保存したときだけ使える）は、使える経路の行だけ（別の提供元に振り分け中の参照には出さない）
   const noteModes = optModes.filter((mode) => modeStatus(m, mode, false).kind !== "route_off");
   const statusOf = (mode, on) => scopeModeStatus(m, mode, on, scope, drafts.all);
-  const lockedFn = (mode) => statusOf(mode, false).locked;
+  // 押せないか：使えない行（別の提供元の参照など）は、保存済みの一覧に残っているとき（オン）だけ、オフにできる
+  const lockedFn = (mode) => statusOf(mode, draft.has(mode.model_id)).locked;
   // 一括スイッチは、明示が要る行（参照から動画）を含めない（「まとめてオン」で参照が有効にならない。参照は行のスイッチで個別に）。
   // 明示が要る行しか無いモデル（口パク）は、そのまま全体を対象にする
   // 見出し：一括スイッチの対象（core）が全部オフでも、明示が要る行（参照）がオンなら「一部」（参照のオンが見出しで分かる）
-  const { core, coreState, state: ms } = masterView(modes, draft, lockedFn, optIds);
+  const { core, state: ms } = masterView(modes, draft, lockedFn, optIds);
   // 数える行（「○ つのうち ○ つ」）：押せる行すべて（参照を含む）
   const free = modes.filter((mode) => !lockedFn(mode));
   const single = modes.length === 1 ? modes[0] : null;
@@ -3649,7 +3649,7 @@ function modelItem(m, scope) {
     stateKind = "off";
     stateText = "オフ";
   }
-  const changed = modes.filter((mode) => !lockedFn(mode)).some((mode) => draft.has(mode.model_id) !== modeBaseOn(mode, scope));
+  const changed = modes.some((mode) => draft.has(mode.model_id) !== modeBaseOn(mode, scope) && (!lockedFn(mode) || statusOf(mode, draft.has(mode.model_id)).kind === "route_off"));
 
   const input = el("input", {
     type: "checkbox",
@@ -3753,7 +3753,7 @@ function modeToggle(m, mode, scope) {
   const input = el("input", {
     type: "checkbox",
     role: "switch",
-    checked: on && st.kind !== "route_off", // 使えない行（別の提供元・使えません）は、保存済みの値が残っていてもオンに見せない
+    checked: on, // 使えない行でも、保存済みの一覧に残っていればチェックのまま（文言で「一覧には残っています」と示し、オフにはできる）
     disabled: st.locked,
     "aria-label": `${m.label}：${mode.label}`,
   });
@@ -3774,7 +3774,7 @@ function modeToggle(m, mode, scope) {
       title: st.locked ? lockedTitle(st.kind, scope) : null,
     },
     el("span", { className: "tlabel" }, el("span", { className: "mode-name", text: mode.label }), el("span", { className: "small muted ellipsis", text: mode.model_id })),
-    el("span", { className: `tstate ${st.kind}` }, st.text, on !== modeBaseOn(mode, scope) && !st.locked ? el("span", { className: "changed", text: "（未保存）" }) : null),
+    el("span", { className: `tstate ${st.kind}` }, st.text, on !== modeBaseOn(mode, scope) && (!st.locked || st.kind === "route_off") ? el("span", { className: "changed", text: "（未保存）" }) : null),
     input,
   );
 }

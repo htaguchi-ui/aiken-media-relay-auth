@@ -1205,18 +1205,21 @@ export function groupModels(models) {
   return [...groups.values()].sort((a, b) => rank(a.kind) - rank(b.kind));
 }
 
-/** カタログのすべてのモード（model_id の重複は最初だけ。カタログ順） */
+/**
+ * カタログのすべてのモード（model_id の重複は 1 つだけ。カタログ順）。
+ * 同じ ID の行が複数あるとき（ID の重なり。設定の誤り）は、通常の行（opt_in でない行）を代表にする。
+ * 通常の行が無ければ最初の行（中継サーバーの consoleOptInModelIds と同じ：重なった ID は通常の ID として扱う）
+ */
 export function catalogModes(models) {
-  const seen = new Set();
-  const out = [];
+  const picked = new Map();
   for (const m of models ?? []) {
     for (const mode of m.modes ?? []) {
-      if (seen.has(mode.model_id)) continue;
-      seen.add(mode.model_id);
-      out.push({ model: m, mode });
+      const cur = picked.get(mode.model_id);
+      if (!cur) picked.set(mode.model_id, { model: m, mode });
+      else if (isOptInMode(cur.model, cur.mode) && !isOptInMode(m, mode)) picked.set(mode.model_id, { model: m, mode });
     }
   }
-  return out;
+  return [...picked.values()];
 }
 
 /** model_id → 表示名「Kling 2.1（テキストから動画）」の関数（カタログに無い ID はそのまま） */
@@ -1236,16 +1239,22 @@ export function consoleSelection(models) {
  */
 export function modeStatus(model, mode, on) {
   if (!mode.env_allowed) return { kind: "server_off", text: "サーバー側で無効", locked: true };
-  // 参照から動画は fal の経路だけにある。BytePlus など別の提供元に振り分けている間は、行は出るが使えない（押せない）
+  // 通常の行と ID が重なった行：その ID は通常の行として使われている。この行は使えない（押せない）
+  if (mode.collided === true) return { kind: "route_off", text: "使えません", locked: true };
+  // 参照から動画は fal の経路だけにある。BytePlus など別の提供元に振り分けている間は、行は出るが使えない。
+  // オンにはできない。ただし保存済みの一覧に残っているとき（on）は、残っていることを示し、オフにはできる（一覧から外せる）
   if (mode.mode === "reference" && model.provider && model.provider !== "fal") {
-    return { kind: "route_off", text: "この経路では使えません", locked: true };
+    return { kind: "route_off", text: on ? "この経路では使えません（一覧には残っています）" : "この経路では使えません", locked: !on };
   }
   if (!model.provider_available) {
     // 理由（提供元が使えない）はモデルの見出しの下に出すので、ここは短く
     return { kind: "provider_off", text: on ? "オン（提供元が使えない）" : "オフ", locked: false };
   }
   // 保存済みでオンのはずなのに、サーバーが使えないと返す行（ID の重なりなど。理由は分からない）：「オン」と出さず、押せない
-  if (mode.enabled === false && mode.console_enabled === true) return { kind: "route_off", text: "使えません", locked: true };
+  // （保存済みの一覧に残っているときは、残っていることを示し、オフにはできる）
+  if (mode.unusable === true || (mode.enabled === false && mode.console_enabled === true)) {
+    return { kind: "route_off", text: on ? "使えません（一覧には残っています）" : "使えません", locked: !on };
+  }
   return on ? { kind: "on", text: "オン", locked: false } : { kind: "off", text: "オフ", locked: false };
 }
 
@@ -1389,6 +1398,9 @@ export function normalizeOptInModes(body) {
   const regular = new Map();
   for (const m of body.models) for (const mode of m.modes ?? []) if (!isOptInMode(m, mode) && !regular.has(mode.model_id)) regular.set(mode.model_id, mode);
   const isCollided = (m, mode) => isOptInMode(m, mode) && regular.has(mode.model_id);
+  // 明示が要る行どうしで ID が重なった（参照どうしなど）：サーバーはどちらも使えない扱いにする
+  const optCount = new Map();
+  for (const m of body.models) for (const mode of m.modes ?? []) if (optIn.has(mode.model_id)) optCount.set(mode.model_id, (optCount.get(mode.model_id) ?? 0) + 1);
   return {
     ...body,
     models: body.models.map((m) => {
@@ -1397,8 +1409,9 @@ export function normalizeOptInModes(body) {
         ...m,
         modes: m.modes.map((mode) =>
           isCollided(m, mode)
-            ? { ...mode, console_enabled: regular.get(mode.model_id).console_enabled, role_enabled: regular.get(mode.model_id).role_enabled }
+            ? { ...mode, collided: true, console_enabled: regular.get(mode.model_id).console_enabled, role_enabled: regular.get(mode.model_id).role_enabled }
             : !optIn.has(mode.model_id) ? mode : {
+            ...(optCount.get(mode.model_id) > 1 ? { unusable: true } : {}),
             ...mode,
             console_enabled: listed("all", mode.model_id),
             role_enabled: { ...(mode.role_enabled ?? {}), student: listed("student", mode.model_id), member: listed("member", mode.model_id) },
