@@ -70,6 +70,8 @@ import {
   formatUsdShort,
   globalUsageView,
   availableLimits,
+  settingDesc,
+  settingLabel,
   buildModelSave,
   changedScopes,
   emptyScopeWarnings,
@@ -3328,7 +3330,7 @@ function canvasLimitsBoxes() {
       el("div", {}, ...limits.map((spec) => limitRow(spec, row[spec.key] ?? null))),
       el("p", {
         className: "hint",
-        text: "2 分の上限は、短い時間に大量に使うのを止めます。Canvas の生成と、ChatGPT・Codex からの生成の両方に効きます。" +
+        text: "短い時間の上限は、短い時間に大量に使うのを止めます。Canvas の生成と、ChatGPT・Codex からの生成の両方に効きます。" +
           "空欄で保存すると、既定の値（括弧の中）に戻ります。変更は次の生成からすぐに効きます。",
       }),
     ]),
@@ -3336,6 +3338,7 @@ function canvasLimitsBoxes() {
 }
 
 function limitRow(spec, current) {
+  const label = settingLabel(spec.key, state.settings.info?.settings);
   const src = settingSource(current, spec.key);
   const input = textInput({
     id: `f-${++fieldSeq}`,
@@ -3349,7 +3352,7 @@ function limitRow(spec, current) {
     type: "button",
     className: "btn primary",
     text: "保存",
-    "aria-label": `${spec.label}を保存`,
+    "aria-label": `${label}を保存`,
     onclick: () => saveLimit(spec, input.value, current),
   });
   input.addEventListener("keydown", (e) => {
@@ -3358,9 +3361,9 @@ function limitRow(spec, current) {
   return el(
     "div",
     { className: "set-row", "data-setting": spec.key },
-    el("div", { className: "set-head" }, el("h4", { text: spec.label }), el("span", { className: `badge ${src.kind}`, text: src.label })),
+    el("div", { className: "set-head" }, el("h4", { text: label }), el("span", { className: `badge ${src.kind}`, text: src.label })),
     el("p", { className: "set-now num" }, "今の値：", el("b", { text: formatSettingValue(spec.key, current) })),
-    el("p", { className: "hint", text: `${spec.desc}範囲：${settingRangeText(spec.key)}。` }),
+    el("p", { className: "hint", text: `${settingDesc(spec.key, state.settings.info?.settings)}範囲：${settingRangeText(spec.key)}。` }),
     el("label", { for: input.id, className: "field-label", text: `新しい値（${settingRangeText(spec.key)}）` }),
     el(
       "div",
@@ -3371,7 +3374,7 @@ function limitRow(spec, current) {
         type: "button",
         className: "link-btn reset",
         text: current === null ? (spec.nullText ? `${spec.nullText}のまま` : "既定のまま") : (spec.resetLabel ?? "既定に戻す"),
-        "aria-label": `${spec.label}を${spec.resetLabel ?? "既定に戻す"}`,
+        "aria-label": `${label}を${spec.resetLabel ?? "既定に戻す"}`,
         disabled: current === null,
         onclick: () => resetLimit(spec, current),
       }),
@@ -3381,13 +3384,14 @@ function limitRow(spec, current) {
 
 async function saveLimit(spec, text, current) {
   clearNotice();
-  const r = parseSettingInput(spec.key, text);
+  const label = settingLabel(spec.key, state.settings.info?.settings);
+  const r = parseSettingInput(spec.key, text, label);
   if (r.problem) {
     notify(`保存できません。${r.problem}。`, "error");
     return;
   }
   if (sameSettingValue(r.value, current)) {
-    notify(`${spec.label}は既に ${formatSettingValue(spec.key, r.value)} です。`);
+    notify(`${label}は既に ${formatSettingValue(spec.key, r.value)} です。`);
     return;
   }
   const to = formatSettingValue(spec.key, r.value);
@@ -3395,27 +3399,28 @@ async function saveLimit(spec, text, current) {
   const check = limitChangeCheck(spec.key, current, r.value, state.settings.info);
   if (check.confirm) {
     const lines = [
-      `${spec.label}を ${formatSettingValue(spec.key, current)} → ${to} にしますか？`,
+      `${label}を ${formatSettingValue(spec.key, current)} → ${to} にしますか？`,
       ...(check.note ? [check.note] : []),
       ...check.warnings.map((w) => `注意：${w}`),
       "（次の生成から、すぐに効きます）",
     ];
     if (!confirm(lines.join("\n"))) return;
   }
-  await updateSettings({ [spec.key]: r.value }, `${spec.label}を ${to} にしました。`);
+  await updateSettings({ [spec.key]: r.value }, `${label}を ${to} にしました。`);
 }
 
 async function resetLimit(spec, current) {
   clearNotice();
+  const label = settingLabel(spec.key, state.settings.info?.settings);
   // 既定の数値はコンソールから見えない（今より下がるかもしれない）ので、どの項目も確認する
   if (spec.nullText) {
     // 環境変数の既定が無い項目（null は「上限なし」）
-    if (!confirm(`${spec.label}を「${spec.nullText}」に戻しますか？\n今の値：${formatSettingValue(spec.key, current)}\n（次の生成から、すぐに効きます）`)) return;
-    await updateSettings({ [spec.key]: null }, `${spec.label}を「${spec.nullText}」に戻しました。`);
+    if (!confirm(`${label}を「${spec.nullText}」に戻しますか？\n今の値：${formatSettingValue(spec.key, current)}\n（次の生成から、すぐに効きます）`)) return;
+    await updateSettings({ [spec.key]: null }, `${label}を「${spec.nullText}」に戻しました。`);
     return;
   }
-  if (!confirm(`${spec.label}を既定（サーバーの環境変数の値）に戻しますか？\n今の値：${formatSettingValue(spec.key, current)}\n（既定の数値はこのコンソールからは見えません）`)) return;
-  await updateSettings({ [spec.key]: null }, `${spec.label}を既定に戻しました。`);
+  if (!confirm(`${label}を既定（サーバーの環境変数の値）に戻しますか？\n今の値：${formatSettingValue(spec.key, current)}\n（既定の数値はこのコンソールからは見えません）`)) return;
+  await updateSettings({ [spec.key]: null }, `${label}を既定に戻しました。`);
 }
 
 async function updateSettings(changes, doneMessage) {

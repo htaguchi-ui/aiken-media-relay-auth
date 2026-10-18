@@ -1048,16 +1048,18 @@ export const SETTING_LIMITS = [
     {
       key: CANVAS_COLUMNS.burstStudent,
       label: "2 分の上限（受講者）",
+      burst: "受講者",
       defaultValue: 800,
       lowerNote: "短い時間に大量に使う受講者は、次の生成から止まります（Canvas・ChatGPT・Codex のどこからでも）。",
-      desc: "受講者 1 人が、上限を数える時間（下の欄。既定 120 秒）の間に使えるクレジットの上限です。短い時間に大量に使うのを止めます。Canvas と、ChatGPT・Codex からの生成の両方に効きます。",
+      desc: "受講者 1 人が、{time}の間に使えるクレジットの上限です。短い時間に大量に使うのを止めます。Canvas と、ChatGPT・Codex からの生成の両方に効きます。",
     },
     {
       key: CANVAS_COLUMNS.burstMember,
       label: "2 分の上限（メンバー・講師・管理者）",
+      burst: "メンバー・講師・管理者",
       defaultValue: 3000,
       lowerNote: "短い時間に大量に使うメンバー・講師・管理者は、次の生成から止まります（Canvas・ChatGPT・Codex のどこからでも）。",
-      desc: "メンバー・講師・管理者 1 人が、上限を数える時間（下の欄。既定 120 秒）の間に使えるクレジットの上限です。Canvas と、ChatGPT・Codex からの生成の両方に効きます。",
+      desc: "メンバー・講師・管理者 1 人が、{time}の間に使えるクレジットの上限です。Canvas と、ChatGPT・Codex からの生成の両方に効きます。",
     },
     {
       key: CANVAS_COLUMNS.burstWindow,
@@ -1069,8 +1071,8 @@ export const SETTING_LIMITS = [
       unit: "秒",
       credits: false,
       higherIsStricter: true,
-      lowerNote: "時間を長くすると、2 分の上限は長い時間分の合計で数えるので、止まりやすくなります。",
-      desc: "「2 分の上限」で使った量を数える時間（秒）です。",
+      lowerNote: "時間を長くすると、短い時間の上限は長い時間分の合計で数えるので、止まりやすくなります。",
+      desc: "短い時間の上限（上の 2 欄）で、使った量を数える時間（秒）です。",
       defaultText: (d) => `${d} 秒`,
     },
     {
@@ -1116,6 +1118,34 @@ export function settingSpec(key) {
   return SETTING_LIMITS.find((s) => s.key === key) ?? null;
 }
 
+/** 秒の読み方：120 → 「2 分」、90 → 「1 分 30 秒」、45 → 「45 秒」 */
+export function burstTimeText(seconds) {
+  const n = Number(seconds);
+  if (!Number.isInteger(n) || n <= 0) return burstTimeText(settingSpec(CANVAS_COLUMNS.burstWindow).defaultValue);
+  const m = Math.floor(n / 60);
+  const r = n % 60;
+  if (m === 0) return `${r} 秒`;
+  return r === 0 ? `${m} 分` : `${m} 分 ${r} 秒`;
+}
+
+/** 設定の行（admin_get_settings の settings）の「上限を数える時間」の秒。未設定・不正は既定 */
+function burstSeconds(row) {
+  const v = row?.[CANVAS_COLUMNS.burstWindow];
+  return Number.isInteger(v) && v > 0 ? v : settingSpec(CANVAS_COLUMNS.burstWindow).defaultValue;
+}
+
+/** 欄の見出し。短い時間の上限は「上限を数える時間」の値から作る（120 秒なら「2 分の上限（受講者）」。row は設定の行） */
+export function settingLabel(key, row) {
+  const spec = settingSpec(key);
+  return spec?.burst ? `${burstTimeText(burstSeconds(row))}の上限（${spec.burst}）` : (spec?.label ?? key);
+}
+
+/** 欄の説明。短い時間の上限は、説明の中の時間も同じ値から作る */
+export function settingDesc(key, row) {
+  const spec = settingSpec(key);
+  return (spec?.desc ?? "").replaceAll("{time}", `上限を数える時間（${burstTimeText(burstSeconds(row))}）`);
+}
+
 /** ドルの表示「$300」「$12.50」（null・不正は「—」） */
 export function formatUsdShort(value) {
   if (value === null || value === undefined || value === "") return "—";
@@ -1153,7 +1183,7 @@ export function settingSource(value, key = "") {
  * 上限の入力（文字列）を検査して、送る数値にする。全角数字・桁区切り・「$」「回」は許す。
  * 返り値：{ value } か { problem }（日本語）。空欄は problem（既定に戻すのは別の操作）
  */
-export function parseSettingInput(key, text) {
+export function parseSettingInput(key, text, label = settingSpec(key)?.label) {
   const spec = settingSpec(key);
   if (!spec) return { problem: "変更できる項目ではありません" };
   const s = String(text ?? "")
@@ -1161,15 +1191,15 @@ export function parseSettingInput(key, text) {
     .replace(/[,，\s$＄]|回|秒|ドル|USD|クレジット/gi, "");
   // 空欄が「上限なし」の項目は、空欄をそのまま null（上限なし）にする
   if (s === "" && spec.emptyIsNull) return { value: null };
-  if (s === "") return { problem: `${spec.label}を入力してください（既定に戻すときは「既定に戻す」を押します）` };
-  if (!/^\d+(\.\d+)?$/.test(s)) return { problem: `${spec.label}は数値で入力してください` };
+  if (s === "") return { problem: `${label}を入力してください（既定に戻すときは「既定に戻す」を押します）` };
+  if (!/^\d+(\.\d+)?$/.test(s)) return { problem: `${label}は数値で入力してください` };
   // 小数の末尾の 0 は落とす（1.500 → 1.5）
   const t = s.includes(".") ? s.replace(/0+$/, "").replace(/\.$/, "") : s;
-  if (spec.integer && t.includes(".")) return { problem: `${spec.label}は整数で入力してください` };
-  if (spec.usd && /\.\d{3,}$/.test(t)) return { problem: `${spec.label}は小数 2 桁（セント）までで入力してください` };
+  if (spec.integer && t.includes(".")) return { problem: `${label}は整数で入力してください` };
+  if (spec.usd && /\.\d{3,}$/.test(t)) return { problem: `${label}は小数 2 桁（セント）までで入力してください` };
   const value = Number(t);
   if (value < spec.min || value > spec.max) {
-    return { problem: `${spec.label}は ${settingRangeText(key)} の範囲で入力してください` };
+    return { problem: `${label}は ${settingRangeText(key)} の範囲で入力してください` };
   }
   return { value };
 }
@@ -1791,10 +1821,11 @@ export function settingsDiff(before, after, labelOf = (id) => id) {
   const lines = [];
   for (const s of SETTING_LIMITS) {
     const a = after?.[s.key] ?? null;
+    const label = settingLabel(s.key, after);
     if (created) {
-      if (a !== null) lines.push(`${s.label}：${formatSettingValue(s.key, a)}`);
+      if (a !== null) lines.push(`${label}：${formatSettingValue(s.key, a)}`);
     } else if (!sameSettingValue(before[s.key], a)) {
-      lines.push(`${s.label}：${formatSettingValue(s.key, before[s.key])} → ${formatSettingValue(s.key, a)}`);
+      lines.push(`${label}：${formatSettingValue(s.key, before[s.key])} → ${formatSettingValue(s.key, a)}`);
     }
   }
   const bm = created ? null : (before.enabled_models ?? null);
