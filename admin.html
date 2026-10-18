@@ -209,6 +209,17 @@
   .tabs > button { min-height: 44px; }
   .avatar { width: 44px; height: 44px; border-radius: 22px; border: 1px solid var(--line-2); background: var(--surface); color: var(--accent); font-weight: 700; }
   .account { display: none; }
+  /* スマホの幅（560px 以下）：詰めて常に表示する。小さい見出しは隠し、題名・アバター・タブを小さくする（押せる範囲は 40px 以上）。実測 109px */
+  @media (max-width: 560px) {
+    :root { --topbar-h: calc(109px + env(safe-area-inset-top)); }
+    :root:has(body.selecting) { --topbar-h: 0px; }
+    .topbar-inner { padding: 8px 16px; gap: 8px; }
+    .topbar .brand-sub { display: none; } /* ログイン画面のカードの見出しは残す */
+    .brand h1 { font-size: 18px; }
+    .tabs > button { min-height: 40px; }
+    .avatar { position: relative; width: 36px; height: 36px; border-radius: 18px; }
+    .avatar::after { content: ""; position: absolute; inset: -4px; } /* 見た目は 36px、押せる範囲は 44px */
+  }
 
   /* ---- お知らせ（浮かぶトースト。画面の上に固定。押し下げない） ---- */
   #notice {
@@ -288,6 +299,7 @@
   .box > .empty { margin: 0; }
 
   /* 選択モード */
+  #roster-selhead { display: contents; } /* .selhead が名簿の枠の中で貼り付くように、入れ物は箱にしない */
   .selhead { display: flex; align-items: center; justify-content: space-between; gap: 12px; padding: 12px 12px 12px 20px; background: var(--surface); border-bottom: 1px solid var(--line); position: sticky; top: var(--topbar-h); z-index: 5; }
   .selhead h2 { font-size: 18px; font-weight: 700; }
   .selhead .actions { display: flex; gap: 4px; }
@@ -524,7 +536,7 @@
     :root { --topbar-h: calc(81px + env(safe-area-inset-top)); } /* 900px 以上（1 段）。実測 81px（右の欄は折り返さない） */
     :root:has(body.selecting) { --topbar-h: 0px; }
     .topbar-inner { max-width: 1240px; margin: 0 auto; padding: 14px 24px; flex-wrap: nowrap; }
-    .brand { flex-direction: row-reverse; align-items: baseline; gap: 12px; white-space: nowrap; }
+    .brand { flex: none; flex-direction: row-reverse; align-items: baseline; gap: 12px; white-space: nowrap; } /* 縮むのは右のメールの欄だけ */
     .brand h1 { font-size: 20px; }
     .brand-sub { font-size: 13px; letter-spacing: 0; }
     .tabs { order: 0; flex: none; margin: 0 auto 0 8px; padding: 4px; border-radius: 10px; }
@@ -543,7 +555,7 @@
     .ov-value { font-size: 24px; }
     .ov-line { display: none; }
     .split { display: flex; gap: 16px; align-items: flex-start; }
-    .list-panel { flex: 999 1 560px; min-width: 0; background: var(--surface); border: 1px solid var(--line); border-radius: 16px; overflow: hidden; }
+    .list-panel { flex: 999 1 560px; min-width: 0; background: var(--surface); border: 1px solid var(--line); border-radius: 16px; overflow: hidden; overflow: clip; } /* clip：角を丸く切るが、中の .selhead は貼り付ける */
     .stack-panel { flex: 999 1 560px; min-width: 0; display: flex; flex-direction: column; gap: 16px; }
     .stack-panel > .list-panel { flex: none; }
     .stack-panel > .empty { margin: 0; }
@@ -585,7 +597,7 @@
     .cell > * { max-width: 100%; }
     .pick { border-radius: 0; border: 0; min-height: 56px; padding: 10px 16px; }
     .pick:has(input:checked) { border: 0; padding: 10px 16px; background: var(--accent-soft); box-shadow: inset 3px 0 0 var(--accent); }
-    .selhead { position: static; padding: 10px 16px; border-bottom: 1px solid var(--line-soft); }
+    .selhead { padding: 10px 16px; border-bottom: 1px solid var(--line-soft); }
     .selhead h2 { font-size: 16px; }
     .sel-hint { padding: 10px 16px; border-bottom: 1px solid var(--line-soft); }
     .selectbar-inner { flex-direction: row; align-items: center; justify-content: flex-end; }
@@ -617,6 +629,11 @@
     .sheet-foot .btn.big { min-height: 42px; font-size: 14px; border-radius: 10px; padding: 0 20px; }
     .sheet-foot .btn.cancel { border: 1px solid var(--line-2); color: var(--text); }
     .input, select.input { height: 42px; border-radius: 10px; font-size: 15px; }
+  }
+  /* 横向きのスマホ（高さが低い）：画面を圧迫するので固定しない */
+  @media (orientation: landscape) and (max-height: 500px) {
+    :root, :root:has(body.selecting) { --topbar-h: 0px; }
+    .topbar { position: static; }
   }
   @media (max-width: 899.98px) {
     .desk-only { display: none !important; }
@@ -716,6 +733,7 @@
 </div>
 
 <dialog id="sheet" class="sheet" aria-labelledby="sheet-title"></dialog>
+<script type="module" src="./topbar-height.js"></script>
 <script type="module" src="./admin.js"></script>
 </body>
 </html>

@@ -95,7 +95,7 @@
   .center-card { max-width: 440px; margin: 14vh auto 0; background: var(--surface); border: 1px solid var(--line); border-radius: 16px; padding: 32px 28px; display: flex; flex-direction: column; gap: 16px; }
   .center-card h1 { font-size: 22px; }
   .center-card .row { display: flex; flex-wrap: wrap; gap: 8px; }
-  @media (max-width: 480px) { .center-card { margin: 10vh 16px 0; padding: 28px 22px; } }
+  @media (max-width: 480px) { .center-card { margin: 10vh 16px 0; padding: 24px; } } /* スマホの幅の余白は管理コンソールと同じ */
 
   /* ---- 上部の帯（画面の上に固定。見た目は管理コンソール admin.html と同じ）---- */
   /* --topbar-h ＝ 固定したヘッダーの高さ（ノッチ分を含む）。ヘッダーの下に隠れてはいけない部品（お知らせ・移動先）はこの 1 か所の値で下げる */
@@ -113,18 +113,28 @@
   @media (min-width: 900px) {
     :root { --topbar-h: calc(69px + env(safe-area-inset-top)); } /* 900px 以上。実測 69px */
     .topbar-inner { flex-wrap: nowrap; }
-    .brand { flex-direction: row-reverse; align-items: baseline; gap: 12px; white-space: nowrap; }
+    .brand { flex: none; flex-direction: row-reverse; align-items: baseline; gap: 12px; white-space: nowrap; }
     .brand h1 { font-size: 20px; }
     .brand-sub { font-size: 13px; letter-spacing: 0; }
     .account { gap: 12px; }
     .account .btn { min-height: 40px; border-radius: 10px; font-weight: 600; }
   }
+  /* スマホの幅（560px 以下）：詰めて常に表示する。小さい見出しは隠し、1 行目は題名とログアウト、2 行目はメール・区分。実測 82px */
   @media (max-width: 560px) {
-    :root { --topbar-h: calc(118px + env(safe-area-inset-top)); } /* 3 段（名前・メール・ボタン）。実測 118px */
-    .topbar-inner { padding: 10px 16px; }
-    .account { width: 100%; justify-content: space-between; }
-    .account .who { flex: 1 1 auto; }
+    :root { --topbar-h: calc(82px + env(safe-area-inset-top)); }
+    .topbar-inner { padding: 8px 16px; gap: 4px 12px; }
+    .topbar .brand-sub { display: none; }
+    .brand { order: 1; }
+    .brand h1 { font-size: 18px; }
+    .account { display: contents; } /* メールの行（.who）とログアウトを、題名の行と並べ替えるため */
+    .account .btn { order: 2; min-height: 40px; }
+    .account .who { order: 3; flex: 1 1 100%; }
     #me-email { max-width: none; }
+  }
+  /* 横向きのスマホ（高さが低い）：画面を圧迫するので固定しない */
+  @media (orientation: landscape) and (max-height: 500px) {
+    :root { --topbar-h: 0px; }
+    .topbar { position: static; }
   }
 
   /* ---- 本体 ---- */
@@ -171,6 +181,7 @@
 <div id="status" class="center-card" role="status"><p class="muted">読み込み中…</p></div>
 
 <section id="login" class="center-card" hidden aria-labelledby="login-title">
+  <span class="brand-sub">A.I.KEN Studio</span>
   <h1 id="login-title">マイページ</h1>
   <p class="warn-text" id="login-note" role="status" hidden></p>
   <p>研修・A.I.KEN の Google アカウントでログインしてください。</p>
@@ -179,6 +190,7 @@
 </section>
 
 <section id="denied" class="center-card" hidden aria-labelledby="denied-title">
+  <span class="brand-sub">A.I.KEN Studio</span>
   <h1 id="denied-title">マイページ</h1>
   <p class="error-text" id="denied-message">利用登録が確認できません。管理者にお問い合わせください。</p>
   <p class="muted small"><span id="denied-email" class="tabular"></span></p>
@@ -186,6 +198,7 @@
 </section>
 
 <section id="failed" class="center-card" hidden aria-labelledby="failed-title">
+  <span class="brand-sub">A.I.KEN Studio</span>
   <h1 id="failed-title">マイページ</h1>
   <p class="error-text" id="failed-message">読み込めませんでした。</p>
   <div class="row">
@@ -244,6 +257,7 @@
     </section>
   </main>
 </div>
+<script type="module" src="./topbar-height.js"></script>
 <script type="module" src="./mypage.js"></script>
 </body>
 </html>

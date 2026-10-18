@@ -96,13 +96,14 @@
   .center-card { max-width: 440px; margin: 14vh auto 0; background: var(--surface); border: 1px solid var(--line); border-radius: 16px; padding: 32px 28px; display: flex; flex-direction: column; gap: 16px; }
   .center-card h1 { font-size: 22px; }
   .center-card .row { display: flex; flex-wrap: wrap; gap: 8px; }
-  @media (max-width: 480px) { .center-card { margin: 10vh 16px 0; padding: 28px 22px; } }
+  @media (max-width: 480px) { .center-card { margin: 10vh 16px 0; padding: 24px; } } /* スマホの幅の余白は管理コンソールと同じ */
 
   /* ---- 上部の帯（画面の上に固定。見た目は管理コンソール admin.html と同じ）---- */
   /* --topbar-h ＝ 固定したヘッダーの高さ（ノッチ分を含む）。ヘッダーの下に隠れてはいけない部品（お知らせ・移動先）はこの 1 か所の値で下げる */
   :root { --topbar-h: calc(82px + env(safe-area-inset-top)); } /* 561〜899px。実測 82px */
   html { scroll-padding-top: var(--topbar-h); }
-  .topbar { position: sticky; top: 0; z-index: 20; background: var(--surface); border-bottom: 1px solid var(--line); padding-top: env(safe-area-inset-top); line-height: 1.5; }
+  .sticky-top { position: sticky; top: 0; z-index: 20; } /* ヘッダーとお知らせを 1 つの箱にして貼り付ける（お知らせが増えても、ヘッダーの高さの変数に頼らない） */
+  .topbar { background: var(--surface); border-bottom: 1px solid var(--line); padding-top: env(safe-area-inset-top); line-height: 1.5; }
   .topbar-inner { max-width: 960px; margin: 0 auto; display: flex; flex-wrap: wrap; align-items: center; justify-content: space-between; gap: 8px 16px; padding: 14px 20px; }
   .brand { display: flex; flex-direction: column; gap: 2px; min-width: 0; }
   .brand-sub { font-size: 12px; color: var(--muted); letter-spacing: 0.04em; }
@@ -114,18 +115,28 @@
   @media (min-width: 900px) {
     :root { --topbar-h: calc(69px + env(safe-area-inset-top)); } /* 900px 以上。実測 69px */
     .topbar-inner { flex-wrap: nowrap; }
-    .brand { flex-direction: row-reverse; align-items: baseline; gap: 12px; white-space: nowrap; }
+    .brand { flex: none; flex-direction: row-reverse; align-items: baseline; gap: 12px; white-space: nowrap; }
     .brand h1 { font-size: 20px; }
     .brand-sub { font-size: 13px; letter-spacing: 0; }
     .account { gap: 12px; }
     .account .btn { min-height: 40px; border-radius: 10px; font-weight: 600; }
   }
+  /* スマホの幅（560px 以下）：詰めて常に表示する。小さい見出しは隠し、1 行目は題名とログアウト、2 行目はメール・区分。実測 82px */
   @media (max-width: 560px) {
-    :root { --topbar-h: calc(118px + env(safe-area-inset-top)); } /* 3 段（名前・メール・ボタン）。実測 118px */
-    .topbar-inner { padding: 10px 16px; }
-    .account { width: 100%; justify-content: space-between; }
-    .account .who { flex: 1 1 auto; }
+    :root { --topbar-h: calc(82px + env(safe-area-inset-top)); }
+    .topbar-inner { padding: 8px 16px; gap: 4px 12px; }
+    .topbar .brand-sub { display: none; }
+    .brand { order: 1; }
+    .brand h1 { font-size: 18px; }
+    .account { display: contents; } /* メールの行（.who）とログアウトを、題名の行と並べ替えるため */
+    .account .btn { order: 2; min-height: 40px; }
+    .account .who { order: 3; flex: 1 1 100%; }
     #me-email { max-width: none; }
+  }
+  /* 横向きのスマホ（高さが低い）：画面を圧迫するので固定しない */
+  @media (orientation: landscape) and (max-height: 500px) {
+    :root { --topbar-h: 0px; }
+    .sticky-top { position: static; }
   }
 
   /* ---- 本体 ---- */
@@ -141,7 +152,7 @@
   .note-box { background: var(--warn-bg); color: var(--warn-fg); border-radius: 12px; padding: 10px 14px; font-size: 14px; }
 
   /* ---- お知らせ ---- */
-  #notice { position: sticky; top: var(--topbar-h); z-index: 5; display: flex; flex-direction: column; gap: 8px; max-width: 960px; margin: 0 auto; padding: 0 20px; }
+  #notice { display: flex; flex-direction: column; gap: 8px; max-width: 960px; margin: 0 auto; padding: 0 20px; }
   #notice .toast { margin-top: 12px; padding: 12px 16px; border-radius: 12px; border: 1px solid var(--line-2); background: var(--surface); box-shadow: 0 4px 16px rgba(0, 0, 0, 0.12); display: flex; gap: 12px; align-items: flex-start; justify-content: space-between; }
   #notice .toast.error { border-color: var(--danger); }
   #notice .toast.ok { border-color: var(--ok-fg); }
@@ -201,6 +212,7 @@
 <div id="status" class="center-card" role="status"><p class="muted">読み込み中…</p></div>
 
 <section id="login" class="center-card" hidden aria-labelledby="login-title">
+  <span class="brand-sub">A.I.KEN Studio</span>
   <h1 id="login-title">講師の画面</h1>
   <p class="warn-text" id="login-note" role="status" hidden></p>
   <p>講師・管理者の Google アカウントでログインしてください。</p>
@@ -209,6 +221,7 @@
 </section>
 
 <section id="denied" class="center-card" hidden aria-labelledby="denied-title">
+  <span class="brand-sub">A.I.KEN Studio</span>
   <h1 id="denied-title">講師の画面</h1>
   <p class="error-text" id="denied-message">講師の画面は、担当する回の講師と管理者だけが使えます。担当の登録は管理者に確かめてください。</p>
   <p class="muted small"><span id="denied-email" class="tabular"></span></p>
@@ -216,6 +229,7 @@
 </section>
 
 <section id="failed" class="center-card" hidden aria-labelledby="failed-title">
+  <span class="brand-sub">A.I.KEN Studio</span>
   <h1 id="failed-title">講師の画面</h1>
   <p class="error-text" id="failed-message">読み込めませんでした。</p>
   <div class="row">
@@ -225,6 +239,7 @@
 </section>
 
 <div id="app" hidden>
+  <div class="sticky-top">
   <header class="topbar">
     <div class="topbar-inner">
       <div class="brand">
@@ -241,10 +256,12 @@
     </div>
   </header>
   <div id="notice" role="region" aria-label="お知らせ" aria-live="polite"></div>
+  </div>
   <main class="content" id="view"></main>
 </div>
 
 <dialog id="confirm" class="confirm" aria-labelledby="confirm-title"></dialog>
+<script type="module" src="./topbar-height.js"></script>
 <script type="module" src="./instructor.js"></script>
 </body>
 </html>
