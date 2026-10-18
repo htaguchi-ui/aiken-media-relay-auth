@@ -60,20 +60,22 @@ import {
   catalogModes,
   DEFAULT_SETTING_TEXT,
   enabledModelsPayload,
+  applyMasterOptIn,
   isOptInMode,
+  masterView,
+  optInModelIds,
+  modeStatus,
   normalizeOptInModes,
   explainApiError,
   formatSettingValue,
   formatUsdShort,
   globalUsageView,
-  applyMaster,
   availableLimits,
   buildModelSave,
   changedScopes,
   emptyScopeWarnings,
   groupModels,
   listText,
-  masterState,
   toastOverflow,
   MODEL_SCOPES,
   modelChanges,
@@ -3593,7 +3595,7 @@ const LOCKED_TITLE = "サーバーの環境変数（ENABLED_PROVIDER_MODELS）�
 function lockedTitle(kind, scope) {
   if (kind === "global_off") return `全体でオフのため、${scopeLabel(scope)}のタブでは変えられません。全体のタブでオンにしてください`;
   if (kind === "server_off") return LOCKED_TITLE;
-  if (kind === "route_off") return "「参照から動画」は fal の経路だけで使えます。今は別の提供元に振り分けているため、オンにできません";
+  if (kind === "route_off") return "今の振り分け・設定では使えないため、オンにできません（「参照から動画」は fal の経路だけで使えます）";
   return "サーバー側で無効、または全体でオフのため、ここでは変えられません";
 }
 
@@ -3606,14 +3608,18 @@ function modelItem(m, scope) {
   const drafts = effectiveDrafts(S.models, S.drafts, S.resetNull);
   const draft = drafts[scope];
   const modes = m.modes ?? [];
-  const optModes = modes.filter((mode) => isOptInMode(m, mode));
+  const optIds = optInModelIds(S.models?.models);
+  const optModes = modes.filter((mode) => optIds.has(mode.model_id));
+  // 説明（全体のタブでオンにして保存したときだけ使える）は、使える経路の行だけ（別の提供元に振り分け中の参照には出さない）
+  const noteModes = optModes.filter((mode) => modeStatus(m, mode, false).kind !== "route_off");
   const statusOf = (mode, on) => scopeModeStatus(m, mode, on, scope, drafts.all);
   const lockedFn = (mode) => statusOf(mode, false).locked;
   // 一括スイッチは、明示が要る行（参照から動画）を含めない（「まとめてオン」で参照が有効にならない。参照は行のスイッチで個別に）。
   // 明示が要る行しか無いモデル（口パク）は、そのまま全体を対象にする
-  const core = optModes.length && optModes.length < modes.length ? modes.filter((mode) => !optModes.includes(mode)) : modes;
-  const ms = masterState(core, draft, lockedFn);
-  const free = core.filter((mode) => !lockedFn(mode));
+  // 見出し：一括スイッチの対象（core）が全部オフでも、明示が要る行（参照）がオンなら「一部」（参照のオンが見出しで分かる）
+  const { core, coreState, state: ms } = masterView(modes, draft, lockedFn, optIds);
+  // 数える行（「○ つのうち ○ つ」）：押せる行すべて（参照を含む）
+  const free = modes.filter((mode) => !lockedFn(mode));
   const single = modes.length === 1 ? modes[0] : null;
   const sub = [single?.label, m.provider, m.price?.text, single?.model_id].filter(Boolean).join(" · ");
   const lockKinds = [...new Set(core.map((mode) => statusOf(mode, false)).filter((st) => st.locked).map((st) => st.kind))];
@@ -3629,7 +3635,10 @@ function modelItem(m, scope) {
     stateText = "経路なし";
   } else if (ms === "locked") {
     stateKind = lockKinds.length === 1 ? lockKinds[0] : "server_off";
-    stateText = lockKinds.length === 1 ? (lockKinds[0] === "global_off" ? "全体でオフ" : "サーバー側で無効") : "変更できません";
+    stateText = lockKinds.length === 1 ? (lockKinds[0] === "global_off" ? "全体でオフ" : lockKinds[0] === "route_off" ? "この経路では使えません" : "サーバー側で無効") : "変更できません";
+    // 一括スイッチの対象は押せないが、参照の行は押せる（またはオンのまま）ときは、その状態を添える
+    const optNow = optModes.filter((mode) => core !== modes && draft.has(mode.model_id) && !lockedFn(mode));
+    if (core !== modes && optModes.some((mode) => !lockedFn(mode))) stateText += optNow.length ? "（参照はオン）" : "（参照はオフ）";
   } else if (ms === "mixed") {
     stateKind = "mixed";
     stateText = "一部";
@@ -3653,14 +3662,15 @@ function modelItem(m, scope) {
   input.setAttribute("aria-checked", ms === "mixed" ? "mixed" : String(input.checked));
   input.dataset.focusKey = `master:${m.key ?? m.label}`;
   input.addEventListener("change", () => {
-    S.drafts[scope] = applyMaster(core, draft, lockedFn); // draft は印のある区分では「今の形」。ここで下書きとして持ち、印を外す
+    // オンは参照の行を入れない（明示が要る行は個別に）。オフは参照の行もオフにする（安全側）
+    S.drafts[scope] = applyMasterOptIn(modes, draft, lockedFn, optIds); // draft は印のある区分では「今の形」。ここで下書きとして持ち、印を外す
     S.resetNull[scope] = false;
     renderModelsBox();
   });
 
   let title = null;
   if (ms === "locked") title = modes.length ? lockedTitle(lockKinds.length === 1 ? lockKinds[0] : "", scope) : "振り分け先の経路が無いため、切り替えられません";
-  else if (free.length < core.length) title = "押せないモード（サーバー側で無効・全体でオフ）は変わりません";
+  else if (free.length < modes.length) title = "押せないモード（サーバー側で無効・全体でオフ）は変わりません";
 
   // 一部だけオンのとき、閉じていても分かるよう「2 つのうち 1 つ」を添える
   const onCount = free.filter((mode) => draft.has(mode.model_id)).length;
@@ -3721,10 +3731,10 @@ function modelItem(m, scope) {
     row,
     m.provider_available ? null : el("p", { className: "small warn-text", text: "提供元が使えません（API キーが未設定など）。オンにしても生成できません。" }),
     modes.length ? null : el("p", { className: "small muted", text: "振り分け先の経路が無いため使えません。" }),
-    optModes.length
+    noteModes.length
       ? el("p", {
         className: "small muted",
-        text: (optModes.length < modes.length ? `「${optModes.map((mode) => mode.label).join("」「")}」は` : "") +
+        text: (noteModes.length < modes.length ? `「${noteModes.map((mode) => mode.label).join("」「")}」は` : "") +
           (scope === "all"
             ? "全体のタブでオンにして保存したときだけ使えます（「全部オン」の保存では有効になりません）。"
             : "この区分で使わせるには、全体のタブとこのタブの両方でオンにします。オンにすると、この区分の一覧は全体と同じ（制限なし）には戻らず、これから足すモデルもこのタブでオンにしないと使えません。"),
@@ -3743,7 +3753,7 @@ function modeToggle(m, mode, scope) {
   const input = el("input", {
     type: "checkbox",
     role: "switch",
-    checked: on,
+    checked: on && st.kind !== "route_off", // 使えない行（別の提供元・使えません）は、保存済みの値が残っていてもオンに見せない
     disabled: st.locked,
     "aria-label": `${m.label}：${mode.label}`,
   });

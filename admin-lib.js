@@ -1244,6 +1244,8 @@ export function modeStatus(model, mode, on) {
     // 理由（提供元が使えない）はモデルの見出しの下に出すので、ここは短く
     return { kind: "provider_off", text: on ? "オン（提供元が使えない）" : "オフ", locked: false };
   }
+  // 保存済みでオンのはずなのに、サーバーが使えないと返す行（ID の重なりなど。理由は分からない）：「オン」と出さず、押せない
+  if (mode.enabled === false && mode.console_enabled === true) return { kind: "route_off", text: "使えません", locked: true };
   return on ? { kind: "on", text: "オン", locked: false } : { kind: "off", text: "オフ", locked: false };
 }
 
@@ -1306,6 +1308,38 @@ export function applyMaster(modes, draft, lockedFn = () => false) {
   return next;
 }
 
+/**
+ * 一括スイッチの対象（core）：明示が要る行（optIds の ID。参照から動画）を含めない。一部の行だけ明示が要るモデルだけ。
+ * 明示が要る行しか無いモデル（口パク）は全体が対象（modes と同じ配列を返す）
+ */
+export function masterCore(modes, optIds) {
+  const opt = (modes ?? []).filter((mode) => optIds.has(mode.model_id));
+  return opt.length && opt.length < modes.length ? modes.filter((mode) => !opt.includes(mode)) : modes;
+}
+
+/**
+ * 一括スイッチの見え方。coreState は対象（core）の状態。state は見出しの状態：対象が全部オフでも、明示が要る行（参照）がオンなら "mixed"
+ * （参照のオンが見出しで分かる）。modes が core と別（一部の行だけ明示が要るモデル）のときだけ
+ */
+export function masterView(modes, draft, lockedFn, optIds) {
+  const core = masterCore(modes, optIds);
+  const coreState = masterState(core, draft, lockedFn);
+  const optOn = core === modes ? [] : modes.filter((mode) => optIds.has(mode.model_id) && draft.has(mode.model_id));
+  return { core, coreState, state: coreState === "off" && optOn.length ? "mixed" : coreState };
+}
+
+/**
+ * 一括スイッチを押したあとの draft。オンは対象（core）だけオンにし、明示が要る行（参照）は入れない。
+ * オフ（対象が全部オンのとき）は、押せる行すべて（参照を含む）をオフにする（オフは安全側）
+ */
+export function applyMasterOptIn(modes, draft, lockedFn, optIds) {
+  const { core, coreState } = masterView(modes, draft, lockedFn, optIds);
+  if (coreState !== "on") return applyMaster(core, draft, lockedFn);
+  const next = new Set(draft);
+  for (const mode of modes) if (!lockedFn(mode)) next.delete(mode.model_id);
+  return next;
+}
+
 // ---- モデルの設定の区分（全体・受講者・AIKENメンバー。DB の 015 role_models）----
 
 /** 区分のタブ。field は admin_update_settings・admin_get_settings の列名（全体は enabled_models） */
@@ -1350,14 +1384,21 @@ export function unknownList(body, scope) {
 export function normalizeOptInModes(body) {
   if (!Array.isArray(body?.models)) return body;
   const listed = (scope, id) => Array.isArray(scopeList(body, scope)) && scopeList(body, scope).includes(id);
+  const optIn = optInModelIds(body.models);
+  // 参照の ID が通常の ID と重なった行：その ID は通常の ID として扱う。通常の行の値（オン・オフ）に合わせる（先に出る参照の行が基準にならないように）
+  const regular = new Map();
+  for (const m of body.models) for (const mode of m.modes ?? []) if (!isOptInMode(m, mode) && !regular.has(mode.model_id)) regular.set(mode.model_id, mode);
+  const isCollided = (m, mode) => isOptInMode(m, mode) && regular.has(mode.model_id);
   return {
     ...body,
     models: body.models.map((m) => {
-      if (!(m.modes ?? []).some((mode) => isOptInMode(m, mode))) return m;
+      if (!(m.modes ?? []).some((mode) => optIn.has(mode.model_id) || isCollided(m, mode))) return m;
       return {
         ...m,
         modes: m.modes.map((mode) =>
-          !isOptInMode(m, mode) ? mode : {
+          isCollided(m, mode)
+            ? { ...mode, console_enabled: regular.get(mode.model_id).console_enabled, role_enabled: regular.get(mode.model_id).role_enabled }
+            : !optIn.has(mode.model_id) ? mode : {
             ...mode,
             console_enabled: listed("all", mode.model_id),
             role_enabled: { ...(mode.role_enabled ?? {}), student: listed("student", mode.model_id), member: listed("member", mode.model_id) },
@@ -1400,7 +1441,8 @@ export function scopeModeStatus(model, mode, on, scope, allDraft) {
 /** その区分が今使えるモードの数（環境変数で許可・提供元が使える・その区分でオン・区分のタブでは全体でもオン） */
 export function scopeUsable(models, scope, drafts) {
   return catalogModes(models).filter(({ model, mode }) =>
-    mode.env_allowed && model.provider_available && drafts[scope].has(mode.model_id) && (scope === "all" || drafts.all.has(mode.model_id))
+    mode.env_allowed && model.provider_available && drafts[scope].has(mode.model_id) && (scope === "all" || drafts.all.has(mode.model_id)) &&
+    modeStatus(model, mode, true).kind !== "route_off" // 使えない行（別の提供元に振り分け中の参照・ID の重なり）は数えない
   ).length;
 }
 
@@ -1589,10 +1631,15 @@ export function enabledModelsPayload(models, selected, scope = "all", allSelecte
   return rest.length > 0 && rest.every((id) => selected.has(id)) ? null : on;
 }
 
-/** 全体の一覧に明示されたときだけ有効になる行（口パク・参照から動画。行ごとの opt_in）の model_id */
+/**
+ * 全体の一覧に明示されたときだけ有効になる ID（口パク・参照から動画。行ごとの opt_in）。
+ * 中継サーバーの consoleOptInModelIds と同じ規則：通常の行（opt_in でない行）と ID が重なるものは、通常の ID として扱い、含めない
+ */
 export function optInModelIds(models) {
   const out = new Set();
-  for (const m of models ?? []) for (const mode of m.modes ?? []) if (isOptInMode(m, mode)) out.add(mode.model_id);
+  const regular = new Set();
+  for (const m of models ?? []) for (const mode of m.modes ?? []) (isOptInMode(m, mode) ? out : regular).add(mode.model_id);
+  for (const id of regular) out.delete(id);
   return out;
 }
 
