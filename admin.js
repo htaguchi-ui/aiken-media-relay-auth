@@ -3753,7 +3753,7 @@ function modeToggle(m, mode, scope) {
   const input = el("input", {
     type: "checkbox",
     role: "switch",
-    checked: on, // 使えない行でも、保存済みの一覧に残っていればチェックのまま（文言で「一覧には残っています」と示し、オフにはできる）
+    checked: on && mode.collided !== true, // 重なって使えない行は、同じ ID の行の状態を映さない（チェックなし）。使えない行でも、保存済みの一覧に残っていればチェックのまま（文言で「一覧には残っています」と示し、オフにはできる）
     disabled: st.locked,
     "aria-label": `${m.label}：${mode.label}`,
   });

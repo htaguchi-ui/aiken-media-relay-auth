@@ -1207,16 +1207,17 @@ export function groupModels(models) {
 
 /**
  * カタログのすべてのモード（model_id の重複は 1 つだけ。カタログ順）。
- * 同じ ID の行が複数あるとき（ID の重なり。設定の誤り）は、通常の行（opt_in でない行）を代表にする。
- * 通常の行が無ければ最初の行（中継サーバーの consoleOptInModelIds と同じ：重なった ID は通常の ID として扱う）
+ * 同じ ID の行が複数あるとき（ID の重なり。設定の誤り）の代表は、中継サーバーで有効になる行：
+ * 通常の行（opt_in でない行）→ 口パクの行（opt_in で参照でない行）→ 参照の行の順に優先し、同じ順位なら最初の行
+ * （サーバーは、参照だけを使えない扱いにする。口パクは通常の ID と重なったときだけ使えない扱い：referenceCollisions・consoleOptInCollisions）
  */
 export function catalogModes(models) {
+  const rank = (m, mode) => (!isOptInMode(m, mode) ? 0 : mode.mode === "reference" ? 2 : 1);
   const picked = new Map();
   for (const m of models ?? []) {
     for (const mode of m.modes ?? []) {
       const cur = picked.get(mode.model_id);
-      if (!cur) picked.set(mode.model_id, { model: m, mode });
-      else if (isOptInMode(cur.model, cur.mode) && !isOptInMode(m, mode)) picked.set(mode.model_id, { model: m, mode });
+      if (!cur || rank(m, mode) < rank(cur.model, cur.mode)) picked.set(mode.model_id, { model: m, mode });
     }
   }
   return [...picked.values()];
@@ -1397,10 +1398,15 @@ export function normalizeOptInModes(body) {
   // 参照の ID が通常の ID と重なった行：その ID は通常の ID として扱う。通常の行の値（オン・オフ）に合わせる（先に出る参照の行が基準にならないように）
   const regular = new Map();
   for (const m of body.models) for (const mode of m.modes ?? []) if (!isOptInMode(m, mode) && !regular.has(mode.model_id)) regular.set(mode.model_id, mode);
-  const isCollided = (m, mode) => isOptInMode(m, mode) && regular.has(mode.model_id);
-  // 明示が要る行どうしで ID が重なった（参照どうしなど）：サーバーはどちらも使えない扱いにする
+  // 口パクの行の ID（参照でない opt_in の行）。参照の ID が口パクの ID と重なると、サーバーは参照だけを使えない扱いにする
+  const lipIds = new Set();
+  for (const m of body.models) for (const mode of m.modes ?? []) if (isOptInMode(m, mode) && mode.mode !== "reference") lipIds.add(mode.model_id);
+  // 使えない扱いの行（常に押せない）：通常の行と ID が重なった明示が要る行（口パク・参照）、口パクの ID と重なった参照の行
+  const isCollided = (m, mode) =>
+    isOptInMode(m, mode) && (regular.has(mode.model_id) || (mode.mode === "reference" && lipIds.has(mode.model_id)));
+  // 参照どうしで ID が重なった：サーバーはどちらも使えない扱いにする（口パクは数えない）
   const optCount = new Map();
-  for (const m of body.models) for (const mode of m.modes ?? []) if (optIn.has(mode.model_id)) optCount.set(mode.model_id, (optCount.get(mode.model_id) ?? 0) + 1);
+  for (const m of body.models) for (const mode of m.modes ?? []) if (optIn.has(mode.model_id) && mode.mode === "reference") optCount.set(mode.model_id, (optCount.get(mode.model_id) ?? 0) + 1);
   return {
     ...body,
     models: body.models.map((m) => {
@@ -1409,9 +1415,16 @@ export function normalizeOptInModes(body) {
         ...m,
         modes: m.modes.map((mode) =>
           isCollided(m, mode)
-            ? { ...mode, collided: true, console_enabled: regular.get(mode.model_id).console_enabled, role_enabled: regular.get(mode.model_id).role_enabled }
+            ? regular.has(mode.model_id)
+              ? { ...mode, collided: true, console_enabled: regular.get(mode.model_id).console_enabled, role_enabled: regular.get(mode.model_id).role_enabled }
+              : {
+                ...mode,
+                collided: true,
+                console_enabled: listed("all", mode.model_id),
+                role_enabled: { ...(mode.role_enabled ?? {}), student: listed("student", mode.model_id), member: listed("member", mode.model_id) },
+              }
             : !optIn.has(mode.model_id) ? mode : {
-            ...(optCount.get(mode.model_id) > 1 ? { unusable: true } : {}),
+            ...(mode.mode === "reference" && optCount.get(mode.model_id) > 1 ? { unusable: true } : {}),
             ...mode,
             console_enabled: listed("all", mode.model_id),
             role_enabled: { ...(mode.role_enabled ?? {}), student: listed("student", mode.model_id), member: listed("member", mode.model_id) },
