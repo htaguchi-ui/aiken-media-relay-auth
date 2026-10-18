@@ -3210,7 +3210,7 @@ async function loadSettingsAll(options = {}) {
 
 function renderSettings() {
   if (state.tab !== "settings") return;
-  $("settings-main").replaceChildren(usageBox(), limitsBox(), ...(stagesAvailable() ? [templatesBox()] : []));
+  $("settings-main").replaceChildren(usageBox(), limitsBox(), ...canvasLimitsBoxes(), ...(stagesAvailable() ? [templatesBox()] : []));
   renderModelsBox();
   $("settings-history").replaceChildren(historyBox());
 }
@@ -3293,8 +3293,9 @@ function limitsBox() {
     updated ? el("span", { className: "small muted num", text: `最終変更 ${formatShortDateTime(updated)}` }) : null,
     () => {
       const row = S.info?.settings ?? {};
-      // 015 より前のサーバー（設定の行に新しい列が無い）では、1 回の生成の上限の欄を出さない
-      const limits = availableLimits(row);
+      // 015 より前のサーバー（設定の行に新しい列が無い）では、1 回の生成の上限の欄を出さない。
+      // 019 の項目（canvas）は、次の「短い時間と Canvas の上限」の枠に出す
+      const limits = availableLimits(row).filter((l) => !l.canvas);
       return [
         el("div", {}, ...limits.map((spec) => limitRow(spec, row[spec.key] ?? null))),
         el("p", {
@@ -3310,6 +3311,28 @@ function limitsBox() {
       ];
     },
   );
+}
+
+/**
+ * 019 の項目（2 分の上限・上限を数える時間・Canvas の 1 回の実行の上限）の枠。019 の前の DB（設定の行に列が無い）・読み込み前・失敗のときは枠ごと出さない
+ * （読み込みの失敗は「利用の上限」の枠が出す）
+ */
+function canvasLimitsBoxes() {
+  const S = state.settings;
+  if (S.status !== "ok") return [];
+  const row = S.info?.settings ?? {};
+  const limits = availableLimits(row).filter((l) => l.canvas);
+  if (!limits.length) return [];
+  return [
+    settingsBox("canvas-limits-h", "短い時間と Canvas の上限", S.status, S.error, null, () => [
+      el("div", {}, ...limits.map((spec) => limitRow(spec, row[spec.key] ?? null))),
+      el("p", {
+        className: "hint",
+        text: "2 分の上限は、短い時間に大量に使うのを止めます。Canvas の生成と、ChatGPT・Codex からの生成の両方に効きます。" +
+          "空欄で保存すると、既定の値（括弧の中）に戻ります。変更は次の生成からすぐに効きます。",
+      }),
+    ]),
+  ];
 }
 
 function limitRow(spec, current) {

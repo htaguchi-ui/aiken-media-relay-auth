@@ -921,6 +921,18 @@ export function parseVenueForm(raw) {
 /** 既定（null）の表示。既定の数値そのものはサーバーの環境変数にあり、コンソールからは読めない */
 export const DEFAULT_SETTING_TEXT = "既定（サーバーの設定）";
 
+/**
+ * 019（Canvas）の設定の列の名前（app_settings・admin_update_settings の p_changes のキー）。
+ * 短い時間の上限（burst）は、1 時間の上限（hour_limit_credits_*。2026-10-18 に廃止）の代わり
+ */
+export const CANVAS_COLUMNS = {
+  burstStudent: "burst_limit_credits_student",
+  burstMember: "burst_limit_credits_member",
+  burstWindow: "burst_window_seconds",
+  runStudent: "canvas_run_max_credits_student",
+  runMember: "canvas_run_max_credits_member",
+};
+
 /** 上限の項目（範囲は DB の CHECK・admin_update_settings と同じ） */
 export const SETTING_LIMITS = [
   {
@@ -1028,6 +1040,71 @@ export const SETTING_LIMITS = [
     confirm: false,
     desc: "口パクの動画に使える音声の長さ（秒）です。これより長い音声は、次の生成から断られます。空欄で保存すると既定の 60 秒になります。",
   },
+  // 019（Canvas）で足された 5 項目（短い時間の上限・その時間の長さ・Canvas の 1 回の実行の上限）。null は既定の値
+  // （defaultValue。DB の effective_limits と同じ）。列が無い 019 の前の DB では、行に無いので出さない。
+  // canvas: true の項目は、設定の画面では「短い時間と Canvas の上限」の枠に出す（利用の上限の枠には出さない）。
+  // 列の名前は CANVAS_COLUMNS の 1 か所だけに書く（DB の 019 の形が変わったらここだけ直す）
+  ...[
+    {
+      key: CANVAS_COLUMNS.burstStudent,
+      label: "2 分の上限（受講者）",
+      defaultValue: 800,
+      lowerNote: "短い時間に大量に使う受講者は、次の生成から止まります（Canvas・ChatGPT・Codex のどこからでも）。",
+      desc: "受講者 1 人が、上限を数える時間（下の欄。既定 120 秒）の間に使えるクレジットの上限です。短い時間に大量に使うのを止めます。Canvas と、ChatGPT・Codex からの生成の両方に効きます。",
+    },
+    {
+      key: CANVAS_COLUMNS.burstMember,
+      label: "2 分の上限（メンバー・講師・管理者）",
+      defaultValue: 3000,
+      lowerNote: "短い時間に大量に使うメンバー・講師・管理者は、次の生成から止まります（Canvas・ChatGPT・Codex のどこからでも）。",
+      desc: "メンバー・講師・管理者 1 人が、上限を数える時間（下の欄。既定 120 秒）の間に使えるクレジットの上限です。Canvas と、ChatGPT・Codex からの生成の両方に効きます。",
+    },
+    {
+      key: CANVAS_COLUMNS.burstWindow,
+      label: "上限を数える時間（秒）",
+      defaultValue: 120,
+      // 範囲は DB の 019 の確定待ち（仮）
+      min: 10,
+      max: 3600,
+      unit: "秒",
+      credits: false,
+      higherIsStricter: true,
+      lowerNote: "時間を長くすると、2 分の上限は長い時間分の合計で数えるので、止まりやすくなります。",
+      desc: "「2 分の上限」で使った量を数える時間（秒）です。",
+      defaultText: (d) => `${d} 秒`,
+    },
+    {
+      key: CANVAS_COLUMNS.runStudent,
+      label: "Canvas の 1 回の実行の上限（受講者）",
+      defaultValue: 500,
+      lowerNote: "この値を超える受講者の Canvas の実行は、次の操作から断られます。",
+      desc: "受講者が Canvas で 1 回の実行に使えるクレジットの上限です。",
+    },
+    {
+      key: CANVAS_COLUMNS.runMember,
+      label: "Canvas の 1 回の実行の上限（メンバー・講師・管理者）",
+      defaultValue: 2000,
+      lowerNote: "この値を超えるメンバー・講師・管理者の Canvas の実行は、次の操作から断られます。",
+      desc: "メンバー・講師・管理者が Canvas で 1 回の実行に使えるクレジットの上限です。",
+    },
+  ].map(({ defaultText: toText, ...s }) => {
+    const defaultText = toText ? toText(s.defaultValue) : `${formatCredits(s.defaultValue)} クレジット`;
+    return {
+      min: 1,
+      max: 100000,
+      integer: true,
+      usd: false,
+      credits: true,
+      optional: true,
+      canvas: true,
+      emptyIsNull: true,
+      resetLabel: "既定に戻す",
+      confirm: false,
+      ...s,
+      nullText: `既定（${defaultText}）`,
+      desc: `${s.desc}空欄で保存すると、既定の ${defaultText} になります。`,
+    };
+  }),
 ];
 
 /** 画面に出す上限の項目（optional の項目は、サーバーの設定の行にその列があるときだけ） */
@@ -1132,6 +1209,14 @@ export function limitChangeCheck(key, current, next, info) {
       warnings,
       note: `${next === null || next === undefined ? settingSpec(key).defaultValue : formatCredits(next)} 秒より長い音声の口パクは、次の生成から断られます。`,
     };
+  }
+  if (settingSpec(key)?.canvas) {
+    // 019 の項目：厳しくなる向きのとき（今が既定のときは既定の値と比べる）だけ確認する。生成中・保存済みの分は変わらない
+    const spec = settingSpec(key);
+    const effective = current === null || current === undefined ? spec.defaultValue : Number(current);
+    const nextValue = next === null || next === undefined ? spec.defaultValue : next;
+    // 厳しくなる向きのとき確認する（上限は下げるとき、時間の長さは長くするとき）
+    return { confirm: spec.higherIsStricter ? nextValue > effective : nextValue < effective, warnings, note: spec.lowerNote };
   }
   if (settingSpec(key)?.defaultValue !== undefined) {
     // 016 の 4 項目：下げるとき（今が既定のときは既定の値と比べる）だけ確認する。追加済みの分は変わらない
