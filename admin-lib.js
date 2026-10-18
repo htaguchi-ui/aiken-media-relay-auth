@@ -1065,9 +1065,9 @@ export const SETTING_LIMITS = [
       key: CANVAS_COLUMNS.burstWindow,
       label: "上限を数える時間（秒）",
       defaultValue: 120,
-      // 範囲は DB の 019 の確定待ち（仮）
-      min: 10,
-      max: 3600,
+      // 範囲は DB（admin_update_settings。019）と同じ 30〜600 秒
+      min: 30,
+      max: 600,
       unit: "秒",
       credits: false,
       higherIsStricter: true,
