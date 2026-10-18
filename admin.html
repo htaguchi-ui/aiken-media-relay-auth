@@ -195,7 +195,12 @@
   .center-card h1 { font-size: 22px; }
   @media (max-width: 480px) { .center-card { margin: 10vh 16px 0; } }
 
-  /* ---- 上部 ---- */
+  /* ---- 上部（画面の上に固定。講師の画面・マイページのヘッダーもこれと同じ見た目）---- */
+  /* --topbar-h ＝ 固定したヘッダーの高さ（ノッチ分を含む）。ヘッダーの下に隠れてはいけない部品（右の詳細・お知らせ・移動先）はこの 1 か所の値で下げる */
+  :root { --topbar-h: calc(150px + env(safe-area-inset-top)); } /* 900px 未満（名前・タブ・アバターの 2 段）。実測 150px */
+  :root:has(body.selecting) { --topbar-h: 0px; } /* 選択中はヘッダーを隠す */
+  html { scroll-padding-top: var(--topbar-h); }
+  .topbar { position: sticky; top: 0; z-index: 20; background: var(--surface); border-bottom: 1px solid var(--line); padding-top: env(safe-area-inset-top); }
   .topbar-inner { display: flex; flex-wrap: wrap; align-items: center; justify-content: space-between; gap: 12px; padding: 20px 20px 12px; }
   .brand { display: flex; flex-direction: column; gap: 2px; min-width: 0; }
   .brand-sub { font-size: 12px; color: var(--muted); letter-spacing: 0.04em; }
@@ -225,7 +230,7 @@
   #notice ul { margin: 6px 0 0; padding-left: 18px; font-size: 13px; }
   /* PC 幅：上の帯（タブ・最終更新）にかからないよう、帯の下の右寄せに出す */
   @media (min-width: 900px) {
-    #notice { top: calc(88px + env(safe-area-inset-top)); left: auto; right: 24px; transform: none; width: min(480px, calc(100% - 48px)); max-height: calc(100dvh - 104px); }
+    #notice { top: calc(var(--topbar-h) + 8px); left: auto; right: 24px; transform: none; width: min(480px, calc(100% - 48px)); max-height: calc(100dvh - var(--topbar-h) - 24px); }
   }
   @media (prefers-reduced-motion: no-preference) {
     #notice .toast { animation: toast-in 0.18s ease-out; }
@@ -283,7 +288,7 @@
   .box > .empty { margin: 0; }
 
   /* 選択モード */
-  .selhead { display: flex; align-items: center; justify-content: space-between; gap: 12px; padding: 12px 12px 12px 20px; background: var(--surface); border-bottom: 1px solid var(--line); position: sticky; top: 0; z-index: 5; }
+  .selhead { display: flex; align-items: center; justify-content: space-between; gap: 12px; padding: 12px 12px 12px 20px; background: var(--surface); border-bottom: 1px solid var(--line); position: sticky; top: var(--topbar-h); z-index: 5; }
   .selhead h2 { font-size: 18px; font-weight: 700; }
   .selhead .actions { display: flex; gap: 4px; }
   .sel-hint { padding: 12px 20px 4px; font-size: 12px; color: var(--muted); }
@@ -516,15 +521,16 @@
   /* ---- PC（900px 以上）：表＋右のパネル／中央のダイアログ ---- */
   @media (min-width: 900px) {
     .mobile-only { display: none !important; }
-    .topbar { background: var(--surface); border-bottom: 1px solid var(--line); }
+    :root { --topbar-h: calc(81px + env(safe-area-inset-top)); } /* 900px 以上（1 段）。実測 81px（右の欄は折り返さない） */
+    :root:has(body.selecting) { --topbar-h: 0px; }
     .topbar-inner { max-width: 1240px; margin: 0 auto; padding: 14px 24px; flex-wrap: nowrap; }
-    .brand { flex-direction: row-reverse; align-items: baseline; gap: 12px; }
+    .brand { flex-direction: row-reverse; align-items: baseline; gap: 12px; white-space: nowrap; }
     .brand h1 { font-size: 20px; }
     .brand-sub { font-size: 13px; letter-spacing: 0; }
     .tabs { order: 0; flex: none; margin: 0 auto 0 8px; padding: 4px; border-radius: 10px; }
     .tabs > button { min-height: 44px; padding: 0 18px; border-radius: 7px; }
     .avatar { display: none; }
-    .account { display: flex; align-items: center; gap: 12px; font-size: 13px; color: var(--muted); min-width: 0; }
+    .account { display: flex; align-items: center; gap: 12px; font-size: 13px; color: var(--muted); min-width: 0; white-space: nowrap; }
     .account .btn { min-height: 40px; border-radius: 10px; font-weight: 600; }
     .content { max-width: 1240px; margin: 0 auto; padding: 20px 24px 40px; display: flex; flex-direction: column; gap: 16px; }
     body.selecting .content { padding-bottom: 120px; }
@@ -547,7 +553,7 @@
     .save-bar { margin: 0 -20px -18px; padding: 12px 20px; }
     .side-panel {
       display: flex; flex-direction: column; gap: 14px; flex: 1 1 360px; min-width: 0; max-width: 440px; background: var(--surface); border: 1px solid var(--line);
-      border-radius: 16px; padding: 18px; position: sticky; top: 16px; max-height: calc(100vh - 32px); overflow: auto;
+      border-radius: 16px; padding: 18px; position: sticky; top: calc(var(--topbar-h) + 16px); max-height: calc(100vh - var(--topbar-h) - 32px); overflow: auto;
     }
     .side-panel .box, .side-panel .menu { background: var(--surface-2); border-color: transparent; }
     .side-panel .stat { background: var(--surface); }
