@@ -407,7 +407,7 @@
   .tstate.on { color: var(--ok-fg); }
   .tstate.mixed { color: var(--text-2); }
   .tstate.provider_off { color: var(--warn-fg); }
-  .tstate.server_off, .tstate.global_off { color: var(--faint); }
+  .tstate.server_off, .tstate.global_off, .tstate.route_off { color: var(--faint); }
   .tstate .changed, .toggle .changed { color: var(--low-text); font-weight: 700; }
   .toggle.master { min-height: 40px; }
   .model-tabs { margin: 2px 0 10px; }
@@ -431,12 +431,12 @@
     .toggle.switch-only { padding: 0 3px; }
     .model-main, .model-main.clickable { min-width: 0; }
     .model-row .tstate.mstate { white-space: normal; max-width: 42%; flex: 0 1 auto; min-width: 3.5em; }
-    .model-row .tstate.mstate.clickable:not(.provider_off):not(.server_off):not(.global_off) { white-space: normal; max-width: 42%; }
+    .model-row .tstate.mstate.clickable:not(.provider_off):not(.server_off):not(.global_off):not(.route_off) { white-space: normal; max-width: 42%; }
   }
   .model-main .tlabel { flex: 1 1 auto; min-width: 0; display: flex; flex-direction: column; }
   /* 切り替えが 2 つ以上（押すと開閉する）の状態の文字は折り返さない。1 つのモデルは折り返してよい（名前の欄を 96px 以上に保つ） */
-  .tstate.mstate.clickable:not(.provider_off):not(.server_off):not(.global_off) { max-width: none; white-space: nowrap; }
-  .tstate.mstate:not(.clickable), .tstate.mstate.provider_off, .tstate.mstate.server_off, .tstate.mstate.global_off { flex: 0 1 auto; min-width: 4.5em; }
+  .tstate.mstate.clickable:not(.provider_off):not(.server_off):not(.global_off):not(.route_off) { max-width: none; white-space: nowrap; }
+  .tstate.mstate:not(.clickable), .tstate.mstate.provider_off, .tstate.mstate.server_off, .tstate.mstate.global_off, .tstate.mstate.route_off { flex: 0 1 auto; min-width: 4.5em; }
   .tstate.mstate.clickable, .model-main.clickable { cursor: pointer; }
   .toggle.switch-only { padding: 0 6px; }
   .chev-btn, .chev-space { flex: none; width: 32px; height: 36px; }

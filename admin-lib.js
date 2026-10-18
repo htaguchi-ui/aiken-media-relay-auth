@@ -1236,6 +1236,10 @@ export function consoleSelection(models) {
  */
 export function modeStatus(model, mode, on) {
   if (!mode.env_allowed) return { kind: "server_off", text: "サーバー側で無効", locked: true };
+  // 参照から動画は fal の経路だけにある。BytePlus など別の提供元に振り分けている間は、行は出るが使えない（押せない）
+  if (mode.mode === "reference" && model.provider && model.provider !== "fal") {
+    return { kind: "route_off", text: "この経路では使えません", locked: true };
+  }
   if (!model.provider_available) {
     // 理由（提供元が使えない）はモデルの見出しの下に出すので、ここは短く
     return { kind: "provider_off", text: on ? "オン（提供元が使えない）" : "オフ", locked: false };
@@ -1349,17 +1353,27 @@ export function normalizeOptInModes(body) {
   return {
     ...body,
     models: body.models.map((m) => {
-      if (m.opt_in !== true) return m;
+      if (!(m.modes ?? []).some((mode) => isOptInMode(m, mode))) return m;
       return {
         ...m,
-        modes: (m.modes ?? []).map((mode) => ({
-          ...mode,
-          console_enabled: listed("all", mode.model_id),
-          role_enabled: { ...(mode.role_enabled ?? {}), student: listed("student", mode.model_id), member: listed("member", mode.model_id) },
-        })),
+        modes: m.modes.map((mode) =>
+          !isOptInMode(m, mode) ? mode : {
+            ...mode,
+            console_enabled: listed("all", mode.model_id),
+            role_enabled: { ...(mode.role_enabled ?? {}), student: listed("student", mode.model_id), member: listed("member", mode.model_id) },
+          }
+        ),
       };
     }),
   };
+}
+
+/**
+ * この行が、全体の一覧（受講者・メンバーでは区分の一覧にも）に明示したときだけ有効になる行か。
+ * 行ごとの opt_in（admin-api 13 から。口パクの行・参照から動画の行）を見る。行に opt_in が無い（古い admin-api）ときは、モデル単位の opt_in に戻る
+ */
+export function isOptInMode(model, mode) {
+  return mode?.opt_in !== undefined && mode?.opt_in !== null ? mode.opt_in === true : model?.opt_in === true;
 }
 
 /** 読み込んだ時点で、その区分の一覧でオンのモード（admin-api の console_enabled・role_enabled。一覧が null なら全部オン） */
@@ -1575,10 +1589,10 @@ export function enabledModelsPayload(models, selected, scope = "all", allSelecte
   return rest.length > 0 && rest.every((id) => selected.has(id)) ? null : on;
 }
 
-/** 全体の一覧に明示されたときだけ有効になるモデル（admin-api の opt_in。今は口パクだけ）の model_id */
+/** 全体の一覧に明示されたときだけ有効になる行（口パク・参照から動画。行ごとの opt_in）の model_id */
 export function optInModelIds(models) {
   const out = new Set();
-  for (const m of models ?? []) if (m.opt_in === true) for (const mode of m.modes ?? []) out.add(mode.model_id);
+  for (const m of models ?? []) for (const mode of m.modes ?? []) if (isOptInMode(m, mode)) out.add(mode.model_id);
   return out;
 }
 
