@@ -27,6 +27,7 @@ import {
   deniedMessage,
   groupModels,
   hadActiveSession,
+  headerTools,
   lowNotice,
   MSG_CODE_FAILED,
   MSG_DENIED,
@@ -178,6 +179,7 @@ function hideContent(message = "ログアウトしています…") {
   lastSuccessAt = null;
   $("me-role").textContent = "";
   $("me-role").hidden = true;
+  renderTools(null);
   $("denied-message").textContent = MSG_DENIED;
   $("checked-at").textContent = "";
   $("checked-at").hidden = true;
@@ -461,8 +463,20 @@ function render(me) {
   role.textContent = me.role_label || "";
   role.className = `badge ${roleBadgeClass(me.role)}`;
   role.hidden = !me.role_label;
+  renderTools(me.role);
   renderCredits(me.credits, me.role);
   renderModels(me.models);
+}
+
+/** ヘッダーの講師の画面・管理コンソールのボタン（区分で出し分ける。見た目だけ） */
+function renderTools(role) {
+  const tools = headerTools(role);
+  $("instructor-link").hidden = !tools.instructor;
+  $("admin-link").hidden = !tools.admin;
+  // ボタンが増えると狭い幅で 1 行に収まらないので、そのときはログアウトをアイコンにする（CSS）
+  $("account").classList.toggle("with-tools", tools.instructor || tools.admin);
+  // 管理者（ボタンが 4 つ）だけ、とても狭い幅では題名の代わりに小さなマークを見せる（CSS）
+  $("account").classList.toggle("with-admin", tools.admin);
 }
 
 /** 文字を入れて、空なら隠す */

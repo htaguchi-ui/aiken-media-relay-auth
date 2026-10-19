@@ -51,17 +51,47 @@
   button:disabled { opacity: 0.5; cursor: default; }
   .link { background: none; border: none; padding: 0; color: var(--primary); font-weight: 400; text-decoration: underline; }
   [hidden] { display: none !important; }
+
+  /* ---- ログイン前（#login が出ているとき）だけの見た目：トップ（studio.css の .welcome）と同じ並び。
+     main:has(...) の中だけに当てるので、読み込み中・許可の画面・使えない画面の見た目は変わらない ---- */
+  .brand-logo { display: none; }
+  main:has(> #login:not([hidden])) { text-align: center; padding-top: 40px; }
+  main:has(> #login:not([hidden])) .brand-logo { display: block; width: 120px; margin: 0 auto 24px; }
+  main:has(> #login:not([hidden])) .brand-logo img { display: block; width: 120px; height: auto; }
+  main:has(> #login:not([hidden])) h1 { font-size: 1.5rem; margin-bottom: 16px; }
+  /* ボタンはトップと同じ紺（ログイン前のボタンだけ。許可の画面のボタンの色は今のまま） */
+  #login { --brand: #26396E; --on-brand: #FFFFFF; }
+  @media (prefers-color-scheme: dark) { #login { --brand: #A9B9E9; --on-brand: #0E1322; } }
+  #login .actions { justify-content: center; }
+  #login .actions .primary {
+    width: 100%; min-height: 52px; border-radius: 14px; font-size: 1rem; font-weight: 700;
+    background: var(--brand); border-color: var(--brand); color: var(--on-brand);
+  }
+  #login .links { display: flex; flex-wrap: wrap; justify-content: center; gap: 0 16px; margin-top: 12px; }
+  #login .links a { min-height: 44px; display: inline-flex; align-items: center; font-weight: 600; color: var(--brand); }
+  #login .foot { font-size: 13px; letter-spacing: 0.08em; color: var(--muted); margin: 8px 0 0; }
+  @media (max-width: 480px) { main:has(> #login:not([hidden])) { padding-top: 32px; } }
 </style>
 </head>
 <body>
 <main>
+  <!-- ロゴはログイン前（#login）が出ているときだけ見せる（許可の画面・使えない画面の中身を押し下げない） -->
+  <picture class="brand-logo">
+    <source srcset="/img/aiken-logo-white.png" media="(prefers-color-scheme: dark)">
+    <img src="/img/aiken-logo.png" alt="A.I.KEN" width="120" height="84">
+  </picture>
   <h1>A.I.KEN Studio</h1>
   <div id="status"><p class="muted">読み込み中…</p></div>
 
+  <!-- ログイン前：トップ（index.html の #login）と同じ並び（ロゴ・名前は上の共通の部分。ここはボタン・方針と規約・小さな A.I.KEN） -->
   <section id="login" hidden>
     <p class="error" id="login-note" role="status" hidden></p>
-    <p>会社から配布された Google アカウントでログインしてください。</p>
     <div class="actions"><button class="primary" id="login-btn">Google でログイン</button></div>
+    <nav class="links" aria-label="方針と規約">
+      <a href="https://a-i-ken.com/privacy/">プライバシーポリシー</a>
+      <a href="/terms.html">利用規約</a>
+    </nav>
+    <p class="foot">A.I.KEN</p>
   </section>
 
   <section id="consent" hidden>

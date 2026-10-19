@@ -219,18 +219,42 @@
   dialog.confirm h2 { font-size: 17px; }
   dialog.confirm p { overflow-wrap: anywhere; }
   dialog.confirm .row { display: flex; flex-wrap: wrap; gap: 8px; justify-content: flex-end; }
+
+  /* ---- ログイン前（#login.welcome）だけの見た目：トップ（studio.css の .welcome）と同じ並び・大きさ。
+     講師の画面は studio.css を読まないので、ここに小さく置く。色はこのファイルの変数。ログイン後の画面には当たらない（.welcome の中だけ） ---- */
+  .center-card.welcome { align-items: center; text-align: center; gap: 16px; padding-top: 40px; }
+  .welcome .brand-logo { display: block; margin-bottom: 8px; }
+  .welcome .brand-logo img { display: block; width: 120px; height: auto; }
+  .welcome .welcome-title { display: flex; flex-direction: column; align-items: center; gap: 2px; }
+  .welcome h1 { font-size: 24px; letter-spacing: 0.01em; }
+  .welcome .welcome-sub { font-size: 14px; color: var(--muted); }
+  .welcome .btn { align-self: stretch; }
+  .welcome .links { display: flex; flex-wrap: wrap; justify-content: center; gap: 0 16px; }
+  .welcome .links a { min-height: 44px; display: inline-flex; align-items: center; font-weight: 600; color: var(--accent); }
+  .welcome .foot { font-size: 13px; letter-spacing: 0.08em; color: var(--muted); margin-top: 8px; }
+  @media (max-width: 480px) { .center-card.welcome { padding-top: 32px; } }
 </style>
 </head>
 <body>
 <div id="status" class="center-card" role="status"><p class="muted">読み込み中…</p></div>
 
-<section id="login" class="center-card" hidden aria-labelledby="login-title">
-  <span class="brand-sub">A.I.KEN Studio</span>
-  <h1 id="login-title">講師の画面</h1>
+<!-- ログイン前：トップ（index.html の #login）と同じ並び。名前の下に小さく「講師の画面」とだけ添える（どの画面か分かるように） -->
+<section id="login" class="center-card welcome" hidden aria-labelledby="login-title">
+  <picture class="brand-logo">
+    <source srcset="/img/aiken-logo-white.png" media="(prefers-color-scheme: dark)">
+    <img src="/img/aiken-logo.png" alt="A.I.KEN" width="120" height="84">
+  </picture>
+  <div class="welcome-title">
+    <h1 id="login-title">A.I.KEN Studio</h1>
+    <p class="welcome-sub">講師の画面</p>
+  </div>
   <p class="warn-text" id="login-note" role="status" hidden></p>
-  <p>講師・管理者の Google アカウントでログインしてください。</p>
   <button type="button" class="btn primary big" id="login-btn">Google でログイン</button>
-  <p class="muted small">このページを閉じたり、ほかのページへ移ったりすると、ログアウトします（再読み込みのときは自動でログインし直します）。</p>
+  <nav class="links" aria-label="方針と規約">
+    <a href="https://a-i-ken.com/privacy/">プライバシーポリシー</a>
+    <a href="/terms.html">利用規約</a>
+  </nav>
+  <p class="foot">A.I.KEN</p>
 </section>
 
 <section id="denied" class="center-card" hidden aria-labelledby="denied-title">

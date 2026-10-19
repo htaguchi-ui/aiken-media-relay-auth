@@ -16,6 +16,14 @@ export function formatCredits(value) {
   return Number.isFinite(n) ? n.toLocaleString("en-US") : "—";
 }
 
+/**
+ * ヘッダーに出すほかの画面へのボタン（/me の区分 role だけで決める）。講師は講師の画面、管理者は講師の画面と管理コンソールの両方
+ * （管理者は講師の画面も使えるため）。ボタンを出すかどうかだけに使い、守りには使わない（各画面が自分で権限を確かめる）
+ */
+export function headerTools(role) {
+  return { instructor: role === "instructor" || role === "admin", admin: role === "admin" };
+}
+
 /** 「使えるモデル」を並べる種類の順（list_models の順とは別に、動画を先頭にする） */
 export const KIND_ORDER = ["video", "image", "speech", "music", "lipsync"];
 
