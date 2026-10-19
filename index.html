@@ -202,36 +202,33 @@
                   <h3 class="guide-h">初めてつなぐ</h3>
                   <p>会社のワークスペースでは、追加や利用に管理者の許可が必要なことがあります。</p>
                   <ol class="steps">
-                    <li>ChatGPT の Web 版で <a href="https://chatgpt.com/plugins" target="_blank" rel="noopener noreferrer"><strong>「Plugins」</strong></a>を開きます（別のタブで開きます）。</li>
-                    <li><strong>「＋」</strong>を押します。</li>
-                    <li><strong>「Add custom MCP server」</strong>を選びます。</li>
-                    <li><strong>「Name」</strong>に、次の名前を入れます。
+                    <li>ChatGPT の Web 版で <a href="https://chatgpt.com/plugins" target="_blank" rel="noopener noreferrer"><strong>「プラグイン」</strong></a>を開きます（別のタブで開きます）。</li>
+                    <li><strong>「＋」</strong>を押し、<strong>「カスタム MCP」</strong>を選びます。</li>
+                    <li>名前を入れる欄があれば、次の名前を入れます。
                       <div class="copy-box">
                         <div class="copy-head">
-                          <span class="copy-label">Name</span>
-                          <button type="button" class="btn copy-btn" data-copy="cg-chatgpt-name" aria-label="ChatGPT の Name に入れる名前をコピー">コピー</button>
+                          <span class="copy-label">名前</span>
+                          <button type="button" class="btn copy-btn" data-copy="cg-chatgpt-name" aria-label="ChatGPT の名前の欄に入れる名前をコピー">コピー</button>
                         </div>
                         <pre class="copy-code"><code id="cg-chatgpt-name">A.I.KEN Studio</code></pre>
                         <p class="copy-status" role="status"></p>
                       </div>
                     </li>
-                    <li><strong>「Connection」</strong>の<strong>「Server URL」</strong>に、次の住所を入れます。
+                    <li><strong>「タイプ」</strong>を<strong>「ストリーミング可能な HTTP」</strong>に切り替えます（切り替えないと、URL を入れる欄が出ません）。</li>
+                    <li><strong>「URL」</strong>に、次の住所を入れます。
                       <div class="copy-box">
                         <div class="copy-head">
-                          <span class="copy-label">Server URL</span>
-                          <button type="button" class="btn copy-btn" data-copy="cg-chatgpt-url" aria-label="ChatGPT の Server URL をコピー">コピー</button>
+                          <span class="copy-label">URL</span>
+                          <button type="button" class="btn copy-btn" data-copy="cg-chatgpt-url" aria-label="ChatGPT の URL の欄に入れる住所をコピー">コピー</button>
                         </div>
                         <pre class="copy-code"><code id="cg-chatgpt-url">https://tnzwhwitgnzoehbjrmoy.supabase.co/functions/v1/mcp</code></pre>
                         <p class="copy-status" role="status"></p>
                       </div>
                     </li>
-                    <li><strong>「Authentication」</strong>で<strong>「OAuth」</strong>を選びます。</li>
-                    <li>警告の内容を読んでから、<strong>「I understand and want to continue」</strong>を選びます。</li>
-                    <li><strong>「Create as a plugin」</strong>を押します。</li>
-                    <li>表示されたツールの一覧を確かめます。</li>
-                    <li><strong>「Install」</strong>を押します。</li>
+                    <li><strong>「保存」</strong>を押します。</li>
+                    <li><strong>「認証する」</strong>を押します。</li>
                   </ol>
-                  <p>途中で Google のログイン画面や A.I.KEN Studio の許可画面が開いたときは、次の順に進めてください。</p>
+                  <p>「認証する」を押すと、Google のログイン画面や A.I.KEN Studio の許可画面が開きます。次の順に進めてください。</p>
                   <ol class="steps">
                     <li><strong>A.I.KEN の Google アカウント</strong>を選びます。</li>
                     <li>自分で始めた接続の流れであることを確かめ、<strong>「許可する」</strong>を押します。</li>
@@ -257,8 +254,8 @@
 
                   <h3 class="guide-h">7 日ほどたって切れたら</h3>
                   <ol class="steps">
-                    <li><strong>「Plugins」</strong>を開きます。</li>
-                    <li><strong>「A.I.KEN Studio」</strong>の接続をやり直します。</li>
+                    <li><strong>「プラグイン」</strong>を開き、<strong>「A.I.KEN Studio」</strong>を選びます。</li>
+                    <li><strong>「認証する」</strong>を押します（見当たらないときは、接続をやり直す項目を押します）。</li>
                     <li>ログイン画面が開いたら、A.I.KEN の Google アカウントでログインします。</li>
                     <li>自分で始めた接続の許可画面で、<strong>「許可する」</strong>を押します。</li>
                   </ol>
