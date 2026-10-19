@@ -364,6 +364,7 @@
   .stat { background: var(--surface-2); border-radius: 12px; padding: 10px; min-width: 0; }
   .stat-v { font-size: 18px; font-weight: 700; }
   .stat-v .unit { font-size: 12px; font-weight: 500; }
+  .stats.stats-2 { grid-template-columns: repeat(2, minmax(0, 1fr)); }
   .stat .small, .ov-sub { word-break: keep-all; overflow-wrap: anywhere; }
   dl.kv { margin: 0; display: grid; grid-template-columns: auto minmax(0, 1fr); gap: 6px 16px; font-size: 13px; }
   dl.kv dt { color: var(--muted); }
@@ -646,6 +647,10 @@
   }
   @media (max-width: 899.98px) {
     .desk-only { display: none !important; }
+    /* 名簿の要約：今日・今月の生成を並べるため、スマホは 2 列 × 2 行（右の列に ov-r） */
+    .overview.ov-4 { grid-template-columns: repeat(2, minmax(0, 1fr)); row-gap: 14px; }
+    .overview.ov-4 .ov-item + .ov-item { border-left: 0; }
+    .overview.ov-4 .ov-item.ov-r { border-left: 1px solid var(--line-soft); }
     .trow.head { display: none; }
   }
   @media (max-width: 360px) {

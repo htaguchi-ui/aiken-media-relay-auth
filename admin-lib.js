@@ -82,13 +82,43 @@ export function sortByLastUsed(rows) {
   });
 }
 
-/** 今日・24 時間・累計の、件数と金額の合計 */
+/**
+ * 今日・24 時間・累計・今月の、件数と金額の合計。
+ * 今月（month_count・month_cost_usd。DB の 20261019…210 で追加）は、1 行でも列が無い（古い DB の応答）と null
+ * （画面は「—」を出す。0 と区別するため）。
+ */
 export function sumUsage(rows) {
   const total = { today_count: 0, today_cost_usd: 0, day_count: 0, day_cost_usd: 0, total_count: 0, total_cost_usd: 0 };
   for (const r of rows) {
     for (const k of Object.keys(total)) total[k] += Number(r[k] ?? 0);
   }
-  return total;
+  /** @type {{ today_count: number, today_cost_usd: number, day_count: number, day_cost_usd: number, total_count: number, total_cost_usd: number, month_count: number | null, month_cost_usd: number | null }} */
+  const result = { ...total, month_count: null, month_cost_usd: null };
+  const hasMonth = rows.every((r) => hasUsageValue(r.month_count) && hasUsageValue(r.month_cost_usd));
+  if (hasMonth) {
+    result.month_count = rows.reduce((n, r) => n + Number(r.month_count), 0);
+    result.month_cost_usd = rows.reduce((n, r) => n + Number(r.month_cost_usd), 0);
+  }
+  return result;
+}
+
+/** 集計の値が入っているか（undefined・null・空文字・数でない値は「入っていない」＝古い DB の応答） */
+function hasUsageValue(value) {
+  return value !== undefined && value !== null && value !== "" && Number.isFinite(Number(value));
+}
+
+/**
+ * 使用状況 1 マス分の表示（回数・クレジットの目安・見積額）。値が無い（古い DB に今月の列が無い）ときは「—」。
+ * count: 数字だけ（単位「回」は付けない）／has: 値があるか／credits:「約 N クレジット」／usd:「見積額 $x.xx」
+ */
+export function usageCellView(count, costUsd) {
+  const has = hasUsageValue(count) && hasUsageValue(costUsd);
+  return {
+    has,
+    count: has ? String(Number(count)) : "—",
+    credits: has ? approxCreditsText(costUsd) : "—",
+    usd: has ? `見積額 ${formatUsd(costUsd)}` : "見積額 —",
+  };
 }
 
 export function formatUsd(value) {
