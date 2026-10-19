@@ -65,6 +65,113 @@ export function creditsView(credits, role) {
   };
 }
 
+/** 残りが少ない・無いときの 1 行（色だけで伝えないための文。どちらでもないときは null） */
+export const MSG_LOW = "残りが少なくなっています";
+export const MSG_EMPTY = "残りがありません";
+
+/**
+ * 残りの主カードに添える注意の 1 行。view は creditsView の結果、credits は user-api の credits。
+ * 数字を出す分岐（mode が number）だけで判断する：残りが 0 なら「残りがありません」、少ない（view.low）なら「残りが少なくなっています」。
+ * 案内・上限なしの分岐では出さない（数が無いのに「少ない」と言わない）
+ */
+export function lowNotice(view, credits) {
+  if (!view || view.mode !== "number") return null;
+  if (credits && typeof credits === "object" && credits.remaining === 0) return MSG_EMPTY;
+  return view.low ? MSG_LOW : null;
+}
+
+/** 主カードに添える段階の決まりの要約（今日の段階の一覧があるときだけ。全文は折りたたみの中の MSG_STAGE_NO_CARRY） */
+export const MSG_STAGE_SUMMARY = "段階ごとの枠・持ち越しなし";
+
+/**
+ * 最後に読み込みに成功した時刻の表示（日本時間の「確認 13:42」）。ms はミリ秒の時刻。
+ * 値が無い・不正なら null（表示しない。失敗や読み込み中を成功の時刻として出さないため、呼び出し側は成功したときだけ時刻を渡す）
+ */
+export function checkedAtText(ms) {
+  if (typeof ms !== "number" || !Number.isFinite(ms)) return null;
+  const d = new Date(ms);
+  if (Number.isNaN(d.getTime())) return null;
+  const parts = Object.fromEntries(
+    new Intl.DateTimeFormat("en-US", { timeZone: "Asia/Tokyo", hour: "2-digit", minute: "2-digit", hourCycle: "h23" })
+      .formatToParts(d)
+      .map((p) => [p.type, p.value]),
+  );
+  return `確認 ${parts.hour}:${parts.minute}`;
+}
+
+/** Canvas から戻ったとき（タブがまた見えたとき）に読み直すまでの最短の間（ミリ秒）。前回の成功からこれ未満なら読み直さない */
+export const RETURN_RELOAD_MIN_MS = 30 * 1000;
+
+/**
+ * タブがまた見えたときに、1 回だけ読み直すか。次をすべて満たすときだけ true：
+ * - タブが見えている（visible）・ログインが有効（signedIn）・本人の画面を出している（showingApp）・読み込み中でない（loading が false）
+ * - 前回の成功の時刻（lastSuccessAt）があり、そこから minMs 以上たっている（時計が戻って差が負のときは読み直さない）
+ * 一定間隔の自動の読み直しはしない（この判断は、見えたときの 1 回だけに使う）
+ */
+export function shouldReloadOnReturn({ visible, signedIn, showingApp, loading, lastSuccessAt, now, minMs = RETURN_RELOAD_MIN_MS }) {
+  if (visible !== true || signedIn !== true || showingApp !== true || loading === true) return false;
+  if (typeof lastSuccessAt !== "number" || !Number.isFinite(lastSuccessAt)) return false;
+  if (typeof now !== "number" || !Number.isFinite(now)) return false;
+  const elapsed = now - lastSuccessAt;
+  return elapsed >= minMs;
+}
+
+/**
+ * 応答で画面を上書きしてよいか（要求の番号の照合）。ticket は要求を出したときの { seq, account }。
+ * latestSeq は今の最新の番号（ログアウトなどで無効にすると増える）、account は応答が届いた時点のログイン中のアカウント（無ければ null）。
+ * 古い要求の応答・ログアウトのあとの応答・別のアカウントに替わったあとの応答は false
+ */
+export function isCurrentResponse({ ticket, latestSeq, account }) {
+  if (!ticket || typeof ticket !== "object") return false;
+  if (typeof ticket.seq !== "number" || ticket.seq !== latestSeq) return false;
+  if (typeof account !== "string" || !account) return false;
+  return ticket.account === account;
+}
+
+/**
+ * 要求の番号を振る小さな係。
+ * - begin(account)：新しい番号の ticket を返す（それより前の ticket は古くなる）。読み込みを始めたら、最初の await より前に呼ぶ
+ *   （アカウントがまだ分からないときは null で取り、認証の確認のあとで withAccount で結び付ける）
+ * - withAccount(ticket, account)：ticket がまだ有効なら、アカウントを結び付けた ticket を返す。無効なら null
+ * - isLive(ticket)：ticket がまだ有効か（新しい要求・invalidate・close で無効になる）
+ * - isCurrent(ticket, account)：有効で、かつ同じアカウントか（isCurrentResponse の照合）
+ * - invalidate()：出ている要求をすべて古くする
+ * - close()：出ている要求をすべて古くし、以後の begin も無効な ticket しか返さない（ログアウトを始めたあとに、
+ *   新しい番号を取り直して本人の内容を出し直せないようにする。ログインし直すときはページを読み直すので、開き直す必要は無い）
+ */
+export function createRequestCounter() {
+  let seq = 0;
+  let closed = false;
+  const live = (ticket) => !closed && !!ticket && typeof ticket === "object" && ticket.seq === seq;
+  return {
+    begin(account) {
+      if (closed) return { seq: -1, account: null };
+      seq += 1;
+      return { seq, account: typeof account === "string" && account ? account : null };
+    },
+    withAccount(ticket, account) {
+      if (!live(ticket)) return null;
+      return { seq: ticket.seq, account: typeof account === "string" && account ? account : null };
+    },
+    isLive(ticket) {
+      return live(ticket);
+    },
+    invalidate() {
+      seq += 1;
+    },
+    close() {
+      closed = true;
+      seq += 1;
+    },
+    get closed() {
+      return closed;
+    },
+    isCurrent(ticket, account) {
+      return !closed && isCurrentResponse({ ticket, latestSeq: seq, account });
+    },
+  };
+}
+
 /** 段階の回で、段階の使い切らなかった分は次に持ち越せないことの 1 行（段階の回だけに出す） */
 export const MSG_STAGE_NO_CARRY = "ワークショップごとに上限があり、使い切らなかった分は次に持ち越せません。";
 
@@ -154,6 +261,15 @@ export function priceText(model) {
 
 export const MSG_CODE_FAILED = "ログインを完了できませんでした。もう一度ログインしてください。";
 export const MSG_DENIED = "利用登録が確認できません。管理者にお問い合わせください。";
+
+/**
+ * 「登録されていない」画面の文。ログインしたメールアドレスが分かれば「このアカウント（…）は登録されていません。」の形にする
+ * （違うアカウントで入ったと気づけるように。メールを出すのはこの画面だけ）。分からなければ MSG_DENIED
+ */
+export function deniedMessage(email) {
+  if (typeof email !== "string" || !email.trim()) return MSG_DENIED;
+  return `このアカウント（${email.trim()}）は登録されていません。管理者にお問い合わせください。`;
+}
 export const MSG_EXPIRED = "ログインの有効期限が切れました。もう一度ログインしてください。";
 export const MSG_FAILED = "読み込めませんでした。通信の状態を確認して、もう一度試してください。";
 

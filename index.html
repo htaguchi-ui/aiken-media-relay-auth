@@ -2,32 +2,201 @@
 <html lang="ja">
 <head>
 <meta charset="utf-8">
-<meta name="viewport" content="width=device-width, initial-scale=1">
-<title>A.I.KEN Studio</title>
-<style>
-  :root { --bg: #f5f6f8; --card: #ffffff; --text: #1a1a1c; --muted: #5f6368; --border: #dadce0; --link: #0b57d0; }
-  @media (prefers-color-scheme: dark) {
-    :root { --bg: #131314; --card: #1e1f20; --text: #e3e3e3; --muted: #a8abaf; --border: #444746; --link: #a8c7fa; }
-  }
-  * { box-sizing: border-box; }
-  body { margin: 0; min-height: 100vh; display: grid; place-items: center; padding: 16px;
-    background: var(--bg); color: var(--text);
-    font-family: "Hiragino Sans", "Noto Sans JP", "Yu Gothic UI", system-ui, sans-serif; line-height: 1.8; }
-  main { width: 100%; max-width: 560px; background: var(--card); border: 1px solid var(--border); border-radius: 16px; padding: 28px 24px; }
-  h1 { font-size: 1.3rem; margin: 0 0 12px; }
-  p { margin: 0 0 12px; }
-  a { color: var(--link); }
-  .muted { color: var(--muted); font-size: 0.9rem; }
-</style>
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+<meta name="robots" content="noindex">
+<meta name="referrer" content="no-referrer">
+<meta name="color-scheme" content="light dark">
+<meta http-equiv="Content-Security-Policy" content="default-src 'self'; script-src 'self' https://cdn.jsdelivr.net/npm/@supabase/supabase-js@2.117.2/dist/umd/supabase.js; connect-src https://tnzwhwitgnzoehbjrmoy.supabase.co; style-src 'self' 'unsafe-inline' https://fonts.googleapis.com; font-src https://fonts.gstatic.com; img-src 'self' data:; object-src 'none'; base-uri 'self'; form-action 'self'">
+<!-- マイページ。トップ（/）で開く。/mypage・/mypage.html も vercel.json の rewrites でこの同じファイルを出す（転送しない。ログインの戻り先がどの住所でも同じページになる） -->
+<!-- supabase-js は版を固定し、改ざんされていないことを integrity（SRI）で確かめてから使う（window.supabase）。CSP もこのファイルだけを許す -->
+<script src="https://cdn.jsdelivr.net/npm/@supabase/supabase-js@2.117.2/dist/umd/supabase.js" integrity="sha384-Rj26LVGvoeRVR6+mwQmFfcR3QOBEwT+ZmuCWpuiqeTzJpCs0ER4ITAWGb4Hiy3Ok" crossorigin="anonymous"></script>
+<title>A.I.KEN Studio マイページ</title>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=IBM+Plex+Sans+JP:wght@400;500;600;700&amp;display=swap">
+<link rel="stylesheet" href="/studio.css">
 </head>
 <body>
-<main>
-  <h1>A.I.KEN Studio</h1>
-  <p>A.I.KEN の研修で使う、動画・画像・音声の生成サービスです。受講者は Codex・Claude Code・ChatGPT から本サービスに接続し、会話しながら生成を依頼します。</p>
-  <p>利用できるのは、研修の受講者と関係者（当社が発行した Google アカウント）だけです。ログインは Codex・Claude Code・ChatGPT の接続ボタンから行います。このページを直接開く必要はありません。</p>
-  <p>自分の残りクレジットと、使えるモデルは<a href="./mypage.html">マイページ</a>で確認できます。</p>
-  <p class="muted">運営：A.I.KEN（株式会社ORENDA WORLD）<br>
-    <a href="https://a-i-ken.com/privacy/">プライバシーポリシー</a> ・ <a href="./terms.html">利用規約</a></p>
-</main>
+<div id="status" class="center-card" role="status"><p class="muted">読み込み中…</p></div>
+
+<!-- スクリプトが動かないとき（確認の仕組みが読むときなど）も、サービスの説明と方針・規約へのリンクは読めるようにする -->
+<noscript>
+  <section class="center-card">
+    <h1>A.I.KEN Studio</h1>
+    <p>A.I.KEN の研修で使う、動画・画像・音声の生成サービスです。</p>
+    <p>使えるのは、研修の受講者と関係者で、当社が発行した Google アカウントをお持ちの方です。</p>
+    <p class="muted">この画面を使うには、JavaScript を有効にしてください。</p>
+    <nav class="links" aria-label="サービスの情報">
+      <a href="https://a-i-ken.com/privacy/">プライバシーポリシー</a>
+      <a href="/terms.html">利用規約</a>
+      <a href="/about">サービスの案内</a>
+    </nav>
+    <p class="foot">運営：A.I.KEN（株式会社ORENDA WORLD）</p>
+  </section>
+</noscript>
+
+<!-- ログイン前のトップ：今の案内（/about）の要点・Google でログイン・方針と規約へのリンク -->
+<section id="login" class="center-card" hidden aria-labelledby="login-title">
+  <span class="brand-sub">マイページ</span>
+  <h1 id="login-title">A.I.KEN Studio</h1>
+  <p class="warn-text" id="login-note" role="status" hidden></p>
+  <div class="prose">
+    <p>A.I.KEN の研修で使う、動画・画像・音声の生成サービスです。</p>
+    <p>使えるのは、研修の受講者と関係者で、当社が発行した Google アカウントをお持ちの方です。</p>
+    <p>ログインすると、自分の残りクレジットと使えるモデルを確かめ、Canvas を開けます。</p>
+  </div>
+  <button type="button" class="btn primary big" id="login-btn">Google でログイン</button>
+  <details class="sub-fold">
+    <summary>ログインについて</summary>
+    <div class="sub-body">
+      <p class="small">このページを閉じたり、ほかのページへ移ったりすると、ログアウトします（再読み込みのときは自動でログインし直します）。</p>
+      <p class="small">30 分操作しないときも、ログアウトします。</p>
+    </div>
+  </details>
+  <nav class="links" aria-label="サービスの情報">
+    <a href="https://a-i-ken.com/privacy/">プライバシーポリシー</a>
+    <a href="/terms.html">利用規約</a>
+    <a href="/about">サービスの案内</a>
+  </nav>
+  <p class="foot">運営：A.I.KEN（株式会社ORENDA WORLD）</p>
+</section>
+
+<section id="denied" class="center-card" hidden aria-labelledby="denied-title">
+  <span class="brand-sub">A.I.KEN Studio</span>
+  <h1 id="denied-title">マイページ</h1>
+  <p class="error-text" id="denied-message">利用登録が確認できません。管理者にお問い合わせください。</p>
+  <div class="row"><button type="button" class="btn" id="denied-logout-btn">ログアウト</button></div>
+</section>
+
+<section id="failed" class="center-card" hidden aria-labelledby="failed-title">
+  <span class="brand-sub">A.I.KEN Studio</span>
+  <h1 id="failed-title">マイページ</h1>
+  <p class="error-text" id="failed-message">読み込めませんでした。</p>
+  <div class="row">
+    <button type="button" class="btn primary" id="retry-btn">もう一度試す</button>
+    <button type="button" class="btn" id="failed-logout-btn">ログアウト</button>
+  </div>
+</section>
+
+<div id="app" hidden>
+  <header class="topbar">
+    <div class="topbar-inner">
+      <div class="brand">
+        <span class="brand-sub">A.I.KEN Studio</span>
+        <h1>マイページ</h1>
+      </div>
+      <div class="account">
+        <span id="me-role" class="badge" hidden></span>
+        <button type="button" class="btn" id="logout-btn">ログアウト</button>
+      </div>
+    </div>
+  </header>
+
+  <main class="content">
+    <!-- 残りの主カード：残り → 段階・期間 → Canvas を開く。読み上げ・Tab の順もこのとおり -->
+    <section class="card hero" id="hero" aria-labelledby="credits-title">
+      <div class="card-head">
+        <h2 id="credits-title" tabindex="-1">残りクレジット</h2>
+        <div class="refresh">
+          <span class="checked tabular" id="checked-at" hidden></span>
+          <button type="button" class="icon-btn" id="reload-btn" aria-label="最新の状態を読み込む" data-tip="最新にする">
+            <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true" focusable="false"><path d="M20 11a8 8 0 1 0-2.34 5.66"/><path d="M20 4v7h-7"/></svg>
+          </button>
+        </div>
+      </div>
+      <div class="hero-body" id="hero-body">
+        <div class="hero-main">
+          <div class="big-number" id="big-number">
+            <span class="value tabular" id="credits-value">—</span>
+            <span class="limit tabular" id="credits-limit" hidden></span>
+          </div>
+          <div class="bar" id="credits-bar" hidden><span id="credits-bar-fill"></span></div>
+          <p class="low-line tone-warn" id="low-line" hidden><span aria-hidden="true">⚠</span><span id="low-line-text"></span></p>
+          <p class="notice" id="credits-notice" hidden></p>
+        </div>
+        <div class="hero-context" id="hero-context">
+          <p class="stage-name" id="stage-name" hidden></p>
+          <p class="slot-line" id="slot-line" hidden></p>
+          <p class="stage-summary" id="stage-summary" hidden></p>
+        </div>
+      </div>
+      <div class="inline-alert" id="refresh-error" role="alert" hidden>
+        <p id="refresh-error-text"></p>
+        <button type="button" class="btn" id="refresh-retry-btn">もう一度試す</button>
+      </div>
+      <div class="canvas-entry">
+        <a class="btn primary big" id="canvas-link" href="/canvas" target="_blank" rel="noopener noreferrer" aria-describedby="canvas-hint">
+          Canvas を開く
+          <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true" focusable="false"><path d="M14 4h6v6"/><path d="M20 4l-9 9"/><path d="M18 14v5a1 1 0 0 1-1 1H5a1 1 0 0 1-1-1V7a1 1 0 0 1 1-1h5"/></svg>
+        </a>
+        <p class="hint" id="canvas-hint">別のタブで開きます</p>
+      </div>
+    </section>
+
+    <!-- 詳細：今日の段階・使えるモデルは初めは閉じる（広い幅だけ 2 列）。つなぎ方は最後の短い折りたたみ -->
+    <div class="folds" id="folds">
+      <div class="fold-group" id="stages-group" hidden>
+        <details class="fold" id="stages-fold">
+          <summary><span>今日の段階</span><span class="meta tabular" id="stages-meta"></span></summary>
+          <div class="fold-body">
+            <ul class="stages" id="stages"></ul>
+            <p class="small muted" id="stage-note"></p>
+          </div>
+        </details>
+      </div>
+
+      <div class="fold-group" id="models-group">
+        <details class="fold" id="models-fold">
+          <summary><span>使えるモデル</span><span class="meta tabular" id="models-meta"></span></summary>
+          <div class="fold-body">
+            <p class="small muted">目安はクレジット</p>
+            <div id="models"></div>
+          </div>
+        </details>
+        <p class="fold-empty" id="models-empty" hidden>現在使えるモデルはありません</p>
+      </div>
+
+      <div class="fold-group wide" id="connect-group">
+        <details class="fold" id="connect-fold">
+          <summary><span>つなぎ方</span></summary>
+          <div class="fold-body">
+            <p>ChatGPT・Codex・Claude Code から A.I.KEN Studio につなぐと、会話しながら生成を頼めます。ログインは、それぞれのアプリの接続の操作から、A.I.KEN の Google アカウントで行います。</p>
+            <p class="small">つなぐ住所（MCP の URL）<br><code>https://tnzwhwitgnzoehbjrmoy.supabase.co/functions/v1/mcp</code></p>
+            <div>
+              <details class="sub-fold">
+                <summary>ChatGPT</summary>
+                <div class="sub-body">
+                  <p>上の住所を、ChatGPT のコネクタとして登録して使います。</p>
+                  <p class="small">ログインから 7 日たつと接続が切れます。そのときはコネクタをつなぎ直します。</p>
+                </div>
+              </details>
+              <details class="sub-fold">
+                <summary>Claude Code</summary>
+                <div class="sub-body">
+                  <ol class="steps">
+                    <li>版が 2.1.231 以上か確かめます（<code>claude --version</code>）。</li>
+                    <li>登録します：<code>claude mcp add --transport http aiken-media-relay https://tnzwhwitgnzoehbjrmoy.supabase.co/functions/v1/mcp</code></li>
+                    <li>Claude Code で <code>/mcp</code> → aiken-media-relay → ログイン。ブラウザで A.I.KEN の Google アカウントでログインし、許可の画面で「許可する」を押します（自分で操作した流れで開いたときだけ）。</li>
+                  </ol>
+                  <p class="small">ログインから 7 日たつと接続が切れます。そのときは 3 のログインをやり直します。</p>
+                </div>
+              </details>
+              <details class="sub-fold">
+                <summary>Codex</summary>
+                <div class="sub-body">
+                  <p>Codex の設定手順は、管理者に確認してください。</p>
+                </div>
+              </details>
+            </div>
+          </div>
+        </details>
+      </div>
+    </div>
+  </main>
+  <!-- 読み上げだけに知らせる（手動の更新の結果など。数字の更新は必要なときだけ） -->
+  <p class="sr-only" id="live" role="status" aria-live="polite"></p>
+</div>
+<script type="module" src="/topbar-height.js"></script>
+<script type="module" src="/mypage.js"></script>
 </body>
 </html>

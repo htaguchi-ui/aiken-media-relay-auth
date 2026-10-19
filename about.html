@@ -1,0 +1,44 @@
+<!doctype html>
+<html lang="ja">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+<meta name="robots" content="noindex">
+<meta name="referrer" content="no-referrer">
+<meta name="color-scheme" content="light dark">
+<meta http-equiv="Content-Security-Policy" content="default-src 'self'; script-src 'self'; style-src 'self' 'unsafe-inline' https://fonts.googleapis.com; font-src https://fonts.gstatic.com; img-src 'self' data:; connect-src 'none'; object-src 'none'; base-uri 'self'; form-action 'self'">
+<!-- サービスの案内（/about）。以前のトップ（index.html）の文を残したもの。トップ（/）はマイページになったので、ログインの文だけ今に合わせた（2026-10-19 main の決定） -->
+<title>A.I.KEN Studio サービスの案内</title>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=IBM+Plex+Sans+JP:wght@400;500;600;700&amp;display=swap">
+<link rel="stylesheet" href="/studio.css">
+</head>
+<body>
+<header class="topbar">
+  <div class="topbar-inner">
+    <div class="brand">
+      <span class="brand-sub">A.I.KEN Studio</span>
+      <h1>サービスの案内</h1>
+    </div>
+    <div class="account">
+      <a class="btn" href="/">マイページ</a>
+    </div>
+  </div>
+</header>
+<main class="content">
+  <section class="card prose" aria-labelledby="about-title">
+    <h2 id="about-title">A.I.KEN Studio</h2>
+    <p>A.I.KEN の研修で使う、動画・画像・音声の生成サービスです。受講者は Codex・Claude Code・ChatGPT から本サービスに接続し、会話しながら生成を依頼します。</p>
+    <p>利用できるのは、研修の受講者と関係者（当社が発行した Google アカウント）だけです。ログインは各アプリ（Codex・Claude Code・ChatGPT）の接続ボタンから行います。残りのクレジットの確認と Canvas は、トップのページから Google でログインして使えます。</p>
+    <p>自分の残りクレジットと、使えるモデルは<a href="/">マイページ</a>で確認できます。</p>
+    <p class="foot">運営：A.I.KEN（株式会社ORENDA WORLD）</p>
+    <nav class="links" aria-label="サービスの情報">
+      <a href="https://a-i-ken.com/privacy/">プライバシーポリシー</a>
+      <a href="/terms.html">利用規約</a>
+    </nav>
+  </section>
+</main>
+<script type="module" src="/topbar-height.js"></script>
+</body>
+</html>

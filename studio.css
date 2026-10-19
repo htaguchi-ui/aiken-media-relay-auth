@@ -1,0 +1,289 @@
+/* A.I.KEN Studio の共通の見た目（デザインの変数と部品）。
+   今これを読むのは、マイページ（index.html。/・/mypage・/mypage.html）と案内のページ（about.html。/about）だけ。
+   管理コンソール（admin.html）と講師の画面（instructor.html）は、まだそれぞれの HTML の中の CSS のまま（見た目を変えないため）。
+   - 変数の名前は Canvas（canvas-app/src/styles.css）にそろえる：余白 --s1〜--s5、角丸 --r-s／--r-m／--r-l、状態の色 .tone-ok／.tone-warn など。
+     値は管理コンソールの見た目（紺・IBM Plex Sans JP・角丸の大きさ）を基準にする。Canvas と 1 対 1 に対応しない色（区分の色・--low など）は管理コンソールの名前のまま。
+   - 色は admin.html の値。ただし明るい配色の --muted と --low-text だけは、判断に使う数字（残り・上限・使用・目安）を明暗とも 7:1 以上にするために暗くした
+     （--muted #5B6270→#4C525F：白 7.84・背景 7.19／--low-text #8A4B33→#7C422C：白 7.86・背景 7.21）。暗い配色は admin.html の値のままで 7:1 以上ある。
+   - 配色は OS の設定に従う（切り替えのボタンは無い）。 */
+
+:root {
+  /* 余白（8px の格子。Canvas と同じ値） */
+  --s1: 4px;
+  --s2: 8px;
+  --s3: 12px;
+  --s4: 16px;
+  --s5: 24px;
+  /* 角丸（名前は Canvas、値は管理コンソールのボタン・カードの大きさ） */
+  --r-s: 10px;
+  --r-m: 12px;
+  --r-l: 16px;
+  --r-pill: 999px;
+  /* 押せる範囲（スマホ 44px・広い幅 40px 以上。ここでは全幅で 44px） */
+  --ctl-h: 44px;
+  --font: "IBM Plex Sans JP", "Hiragino Sans", "Hiragino Kaku Gothic ProN", "Noto Sans JP", "Yu Gothic UI", Meiryo, system-ui, sans-serif;
+
+  --accent: #26396E; --accent-hover: #1B2B55; --on-accent: #FFFFFF;
+  --accent-soft: #EEF1F6; --accent-soft-line: #C8D0DE; --accent-soft-text: #22325E;
+  --bg: #F4F5F8; --surface: #FFFFFF; --surface-2: #F6F7F9; --seg: #E7E9EE;
+  --text: #16181D; --text-2: #4A505B; --muted: #4C525F;
+  --line: #E3E6EB; --line-2: #DDE1E7; --line-soft: #EEF0F3; --input-line: #C9CED6;
+  --track: #E9ECF1;
+  --student-bg: #E6EAF2; --student-fg: #22325E;
+  --member-bg: #E5ECEA; --member-fg: #355A54;
+  --admin-bg: #ECEDF0; --admin-fg: #30343B;
+  --instructor-bg: #ECE8F2; --instructor-fg: #4A3A66;
+  --ok-bg: #E7EDE8; --ok-fg: #3D5B45;
+  --warn-bg: #F5EFE7; --warn-fg: #74512C; --warn-line: #E5D7C5;
+  --low: #A0573A; --low-text: #7C422C;
+  --danger: #96413A; --danger-line: #E2CDC9;
+  --tip-bg: #1F2430; --tip-text: #F4F6FA;
+}
+/* 暗い配色：紺の基調のまま明度を反転（管理コンソールと同じ値） */
+@media (prefers-color-scheme: dark) {
+  :root {
+    --accent: #A9B9E9; --accent-hover: #C3CFF2; --on-accent: #0E1322;
+    --accent-soft: #1E2741; --accent-soft-line: #34406A; --accent-soft-text: #C7D2F2;
+    --bg: #0E1220; --surface: #161B2B; --surface-2: #1C2234; --seg: #222A3E;
+    --text: #E8EAF0; --text-2: #C2C7D2; --muted: #A0A7B6;
+    --line: #283048; --line-2: #323B54; --line-soft: #222A3E; --input-line: #3C4661;
+    --track: #262E44;
+    --student-bg: #243052; --student-fg: #C7D2F2;
+    --member-bg: #1E3532; --member-fg: #A9D0C6;
+    --admin-bg: #2A2E39; --admin-fg: #D0D4DC;
+    --instructor-bg: #2E2640; --instructor-fg: #D2C6EC;
+    --ok-bg: #1F3527; --ok-fg: #A9D4B4;
+    --warn-bg: #3A2D1F; --warn-fg: #EBC79C; --warn-line: #5A4630;
+    --low: #D8916F; --low-text: #EBA887;
+    --danger: #EE968C; --danger-line: #5C3631;
+    --tip-bg: #E8EAF0; --tip-text: #0E1220;
+  }
+}
+
+/* ---- 土台 ---- */
+* { box-sizing: border-box; }
+html { -webkit-text-size-adjust: 100%; }
+body {
+  margin: 0; min-height: 100vh; background: var(--bg); color: var(--text);
+  font-family: var(--font); font-size: 15px; line-height: 1.7;
+}
+[hidden] { display: none !important; }
+h1, h2, h3, p { margin: 0; }
+a { color: var(--accent); }
+button { font: inherit; color: inherit; cursor: pointer; }
+button:disabled, [aria-disabled="true"] { cursor: not-allowed; }
+:focus-visible { outline: 2px solid var(--accent); outline-offset: 2px; }
+.num, .tabular { font-variant-numeric: tabular-nums; }
+.muted { color: var(--muted); }
+.small { font-size: 14px; } /* 説明の本文は 14px 以上（Codex TASK-0087 F3） */
+.sr-only { position: absolute; width: 1px; height: 1px; padding: 0; margin: -1px; overflow: hidden; clip: rect(0, 0, 0, 0); white-space: nowrap; border: 0; }
+.error-text { color: var(--danger); }
+#denied-message { overflow-wrap: anywhere; }
+.warn-text { color: var(--warn-fg); font-weight: 600; }
+code { font-family: ui-monospace, SFMono-Regular, Consolas, "Liberation Mono", monospace; font-size: 14px; overflow-wrap: anywhere; word-break: break-all; }
+
+/* ---- 状態の印（Canvas の .tone-* と同じ名前。色は上の変数） ---- */
+.badge { flex: none; display: inline-flex; align-items: center; gap: var(--s1); font-size: 13px; font-weight: 600; padding: 1px 10px; border-radius: var(--r-pill); white-space: nowrap; line-height: 1.6; }
+.badge.student { background: var(--student-bg); color: var(--student-fg); }
+.badge.member { background: var(--member-bg); color: var(--member-fg); }
+.badge.admin { background: var(--admin-bg); color: var(--admin-fg); }
+.badge.instructor { background: var(--instructor-bg); color: var(--instructor-fg); }
+.badge:not(.student):not(.member):not(.admin):not(.instructor) { background: var(--seg); color: var(--text); }
+.tone-ok { background: var(--ok-bg); color: var(--ok-fg); }
+.tone-warn { background: var(--warn-bg); color: var(--warn-fg); }
+.tag { display: inline-block; font-size: 12px; font-weight: 600; padding: 0 8px; border-radius: var(--r-pill); white-space: nowrap; line-height: 1.6; vertical-align: 1px; }
+.tag.image-only { background: var(--accent-soft); color: var(--accent-soft-text); border: 1px solid var(--accent-soft-line); }
+
+/* ---- ボタン（押せる範囲は 44px 以上） ---- */
+.btn {
+  min-height: var(--ctl-h); padding: 0 var(--s4); border-radius: var(--r-m); border: 1px solid var(--line-2);
+  background: var(--surface); color: var(--text); font-weight: 700; font-size: 15px; line-height: 1.3;
+  display: inline-flex; align-items: center; justify-content: center; gap: var(--s2); text-decoration: none; text-align: center;
+}
+.btn:hover:not(:disabled) { border-color: var(--input-line); }
+.btn.primary { background: var(--accent); border-color: var(--accent); color: var(--on-accent); }
+.btn.primary:hover:not(:disabled) { background: var(--accent-hover); border-color: var(--accent-hover); }
+.btn.big { min-height: 52px; border-radius: 14px; font-size: 16px; padding: var(--s2) var(--s5); }
+.btn.block { width: 100%; }
+.btn:disabled { opacity: 0.55; }
+.btn svg { flex: none; }
+/* アイコンだけのボタン（読み上げの名前は aria-label。見える名前は data-tip の自前のツールチップ。ブラウザの title は使わない） */
+.icon-btn {
+  position: relative; flex: none; width: var(--ctl-h); height: var(--ctl-h); border-radius: var(--r-m); border: 1px solid var(--line-2);
+  background: var(--surface); color: var(--text); display: inline-flex; align-items: center; justify-content: center; padding: 0;
+}
+.icon-btn:hover:not([aria-disabled="true"]) { border-color: var(--input-line); background: var(--surface-2); }
+.icon-btn[aria-disabled="true"] { color: var(--muted); }
+.icon-btn[data-tip]::after {
+  content: attr(data-tip); position: absolute; top: calc(100% + 6px); right: 0; z-index: 5;
+  background: var(--tip-bg); color: var(--tip-text); font-size: 12px; font-weight: 600; line-height: 1.4;
+  padding: 4px 8px; border-radius: 6px; white-space: nowrap; opacity: 0; pointer-events: none; transition: opacity 0.12s;
+}
+.icon-btn[data-tip]:hover::after, .icon-btn[data-tip]:focus-visible::after { opacity: 1; }
+.icon-btn.busy svg { animation: spin 0.9s linear infinite; }
+@keyframes spin { to { transform: rotate(360deg); } }
+
+/* ---- 読み込み中・ログイン・拒否・失敗の 1 枚のカード ---- */
+.center-card { max-width: 480px; margin: 12vh auto 0; background: var(--surface); border: 1px solid var(--line); border-radius: var(--r-l); padding: 32px 28px; display: flex; flex-direction: column; gap: var(--s4); }
+.center-card h1 { font-size: 22px; line-height: 1.4; }
+.center-card .brand-sub { font-size: 13px; color: var(--muted); letter-spacing: 0.04em; }
+.center-card .row { display: flex; flex-wrap: wrap; gap: var(--s2); }
+@media (max-width: 480px) { .center-card { margin: 6vh 16px 32px; padding: 24px 20px; } }
+
+/* ---- 上部の帯（画面の上に固定。見た目は管理コンソール admin.html と同じ） ---- */
+/* --topbar-h ＝ 固定したヘッダーの高さ（ノッチ分を含む）。実際の高さは topbar-height.js が入れ直す。ここは幅ごとの実測の初期値 */
+:root { --topbar-h: calc(78px + env(safe-area-inset-top)); } /* 561〜899px。実測 77.6px */
+html { scroll-padding-top: var(--topbar-h); }
+.topbar { position: sticky; top: 0; z-index: 20; background: var(--surface); border-bottom: 1px solid var(--line); padding-top: env(safe-area-inset-top); line-height: 1.5; }
+/* すりガラス：背景を 88% の不透明にして、後ろを blur(16px) saturate(180%) でぼかす（色は --surface から作るので、ライト・ダークとも自動）。
+   88% は、後ろが真っ黒・真っ白でも小さい見出し（--muted）が AA（4.5:1）を割らない最小に近い値。
+   対応していないブラウザ（backdrop-filter・color-mix が無い）と、透明を減らす設定（prefers-reduced-transparency）のときは、上の不透明な背景のまま。 */
+@supports ((backdrop-filter: blur(1px)) or (-webkit-backdrop-filter: blur(1px))) and (background: color-mix(in srgb, red 50%, transparent)) {
+  .topbar { background: color-mix(in srgb, var(--surface) 88%, transparent); -webkit-backdrop-filter: blur(16px) saturate(180%); backdrop-filter: blur(16px) saturate(180%); }
+}
+@media (prefers-reduced-transparency: reduce) {
+  .topbar { background: var(--surface); -webkit-backdrop-filter: none; backdrop-filter: none; }
+}
+.topbar-inner { max-width: 880px; margin: 0 auto; display: flex; flex-wrap: wrap; align-items: center; justify-content: space-between; gap: var(--s2) var(--s4); padding: 14px 20px; }
+.brand { display: flex; flex-direction: column; gap: 2px; min-width: 0; }
+.brand-sub { font-size: 12px; color: var(--muted); letter-spacing: 0.04em; }
+.brand h1 { font-size: 22px; font-weight: 700; letter-spacing: 0.01em; line-height: 1.3; }
+.account { display: flex; flex-wrap: wrap; align-items: center; justify-content: flex-end; gap: var(--s2) var(--s3); min-width: 0; font-size: 13px; color: var(--muted); }
+.account .btn { flex: none; white-space: nowrap; font-size: 14px; }
+@media (min-width: 900px) {
+  :root { --topbar-h: calc(69px + env(safe-area-inset-top)); } /* 900px 以上。実測 69px */
+  .topbar-inner { flex-wrap: nowrap; }
+  .brand { flex: none; flex-direction: row-reverse; align-items: baseline; gap: 12px; white-space: nowrap; }
+  .brand h1 { font-size: 20px; }
+  .brand-sub { font-size: 13px; letter-spacing: 0; }
+  .account .btn { min-height: 40px; border-radius: var(--r-s); font-weight: 600; }
+}
+/* スマホの幅（560px 以下）：詰めて常に表示する。小さい見出しは隠し、題名・区分・ログアウトを 1 行に置く。実測 57px */
+@media (max-width: 560px) {
+  :root { --topbar-h: calc(57px + env(safe-area-inset-top)); }
+  .topbar-inner { padding: 8px 16px; gap: 4px 8px; }
+  .topbar .brand-sub { display: none; }
+  .brand h1 { font-size: 18px; }
+  .account .btn { min-height: 40px; padding: 0 12px; }
+  .account .btn::after { content: ""; position: absolute; inset: -2px 0; } /* 見た目は 40px、押せる範囲は 44px */
+  .account .btn { position: relative; }
+}
+/* 横向きのスマホ（高さが低い）：画面を圧迫するので固定しない */
+@media (orientation: landscape) and (max-height: 500px) {
+  :root { --topbar-h: 0px; }
+  .topbar { position: static; }
+}
+
+/* ---- 本体 ---- */
+.content { max-width: 880px; margin: 0 auto; padding: 24px 20px 96px; display: flex; flex-direction: column; gap: var(--s4); }
+@media (max-width: 560px) { .content { padding: 16px 16px 72px; gap: var(--s3); } }
+.card { background: var(--surface); border: 1px solid var(--line); border-radius: var(--r-l); padding: 24px; display: flex; flex-direction: column; gap: var(--s4); min-width: 0; }
+@media (max-width: 560px) { .card { padding: 16px; } }
+.card-head { display: flex; flex-wrap: wrap; align-items: center; justify-content: space-between; gap: var(--s2) var(--s3); }
+.card h2 { font-size: 16px; font-weight: 700; }
+.card h2:focus { outline: none; }
+.card h2:focus-visible { outline: 2px solid var(--accent); outline-offset: 2px; }
+
+/* ---- 残りの主カード ---- */
+/* 時刻と更新ボタンの組。狭いとき（320px・文字 200% など）は折り返して、カードの枠を越えない（Codex TASK-0087 F2） */
+.refresh { display: flex; flex-wrap: wrap; align-items: center; justify-content: flex-end; gap: var(--s1) var(--s2); margin-left: auto; min-width: 0; max-width: 100%; }
+.checked { font-size: 14px; color: var(--text-2); white-space: nowrap; }
+.hero-body { display: flex; flex-direction: column; gap: var(--s3); min-width: 0; }
+.hero-main, .hero-context { display: flex; flex-direction: column; gap: var(--s2); min-width: 0; }
+.big-number { display: flex; align-items: baseline; gap: 2px 12px; flex-wrap: wrap; min-width: 0; }
+.big-number .value { font-size: clamp(32px, 15vw, 56px); font-weight: 700; line-height: 1.1; letter-spacing: 0.01em; color: var(--accent); overflow-wrap: anywhere; min-width: 0; }
+.big-number .value.text { font-size: 32px; }
+.big-number .limit { font-size: 16px; color: var(--text-2); font-weight: 600; }
+.big-number.low .value { color: var(--low-text); }
+@media (max-width: 560px) { .big-number .value { font-size: clamp(32px, 13vw, 48px); } .big-number .value.text { font-size: 28px; } }
+.bar { height: 8px; border-radius: 4px; background: var(--track); overflow: hidden; }
+.bar > span { display: block; height: 100%; border-radius: inherit; background: var(--accent); }
+.bar.low > span { background: var(--low); }
+.low-line { align-self: flex-start; display: inline-flex; align-items: center; gap: 6px; padding: 2px 10px; border-radius: var(--r-s); font-size: 14px; font-weight: 600; }
+.notice { color: var(--text); font-size: 16px; overflow-wrap: anywhere; }
+.stage-name { font-size: 17px; font-weight: 700; overflow-wrap: anywhere; }
+.stage-name .label { font-size: 13px; font-weight: 600; color: var(--text-2); margin-right: 8px; }
+.slot-line { color: var(--text-2); overflow-wrap: anywhere; }
+.stage-summary { color: var(--text-2); font-size: 14px; }
+.inline-alert { display: flex; flex-wrap: wrap; align-items: center; gap: var(--s2) var(--s3); padding: 12px 14px; border-radius: var(--r-m); border: 1px solid var(--danger-line); background: var(--surface-2); }
+.inline-alert p { flex: 1 1 220px; color: var(--danger); font-weight: 600; overflow-wrap: anywhere; }
+.canvas-entry { display: flex; flex-direction: column; align-items: stretch; gap: 6px; padding-top: var(--s1); }
+.canvas-entry .hint { text-align: center; font-size: 14px; color: var(--text-2); }
+@media (min-width: 640px) {
+  .canvas-entry { flex-direction: row; align-items: center; gap: var(--s3); }
+  .canvas-entry .btn { min-width: 280px; }
+  .canvas-entry .hint { text-align: left; }
+}
+@media (min-width: 880px) {
+  .hero-body.has-context { display: grid; grid-template-columns: minmax(0, 1.1fr) minmax(0, 1fr); gap: var(--s3) var(--s5); align-items: start; }
+}
+
+/* ---- 折りたたみ（details／summary。初めは閉じる。開閉の状態は保存しない） ---- */
+.folds { display: flex; flex-direction: column; gap: var(--s3); }
+@media (min-width: 880px) {
+  /* 広い幅だけ、今日の段階と使えるモデルを 2 列にする（読み上げ・Tab の順は変えない）。段階が無いときはモデルを本文の幅で置く */
+  .folds { display: grid; grid-template-columns: minmax(0, 1fr) minmax(0, 1fr); align-items: start; gap: var(--s4); }
+  .folds > .wide, .folds:not(.has-stages) > #models-group { grid-column: 1 / -1; }
+}
+.fold-group { background: var(--surface); border: 1px solid var(--line); border-radius: var(--r-l); min-width: 0; }
+.fold > summary {
+  list-style: none; cursor: pointer; min-height: 52px; padding: 10px 20px; border-radius: var(--r-l);
+  display: flex; flex-wrap: wrap; align-items: center; gap: 2px var(--s3); font-weight: 700; font-size: 16px;
+}
+.fold > summary::-webkit-details-marker { display: none; }
+.fold > summary::before {
+  content: ""; flex: none; width: 8px; height: 8px; border-right: 2px solid currentColor; border-bottom: 2px solid currentColor;
+  transform: rotate(-45deg); transition: transform 0.15s; margin-right: 2px;
+}
+.fold[open] > summary::before { transform: rotate(45deg); }
+.fold > summary:hover { background: var(--surface-2); }
+.fold > summary .meta { margin-left: auto; font-size: 13px; font-weight: 500; color: var(--text-2); }
+.fold-body { padding: 4px 20px 20px; display: flex; flex-direction: column; gap: var(--s3); min-width: 0; }
+.fold-empty { padding: 0 20px 16px 42px; color: var(--text-2); }
+@media (max-width: 560px) {
+  .fold > summary { padding: 10px 16px; }
+  .fold-body { padding: 4px 16px 16px; }
+  .fold-empty { padding: 0 16px 14px 38px; }
+}
+/* 入れ子の小さな折りたたみ（ログインについて・アプリごとの手順） */
+.sub-fold > summary { list-style: none; cursor: pointer; min-height: 44px; display: flex; align-items: center; gap: 10px; font-weight: 600; color: var(--accent); border-radius: var(--r-s); }
+.sub-fold > summary::-webkit-details-marker { display: none; }
+.sub-fold > summary::before {
+  content: ""; flex: none; width: 7px; height: 7px; border-right: 2px solid currentColor; border-bottom: 2px solid currentColor;
+  transform: rotate(-45deg); transition: transform 0.15s; margin: 0 2px;
+}
+.sub-fold[open] > summary::before { transform: rotate(45deg); }
+.sub-fold > .sub-body { padding: 0 0 8px 20px; display: flex; flex-direction: column; gap: var(--s2); }
+.sub-fold + .sub-fold { border-top: 1px solid var(--line-soft); }
+ol.steps { margin: 0; padding-left: 1.4em; display: flex; flex-direction: column; gap: 6px; }
+
+/* ---- 今日の段階・使えるモデルの一覧 ---- */
+ul.stages, ul.models { list-style: none; margin: 0; padding: 0; }
+ul.stages li, ul.models li { display: grid; grid-template-columns: minmax(0, 1fr) auto; align-items: baseline; gap: 2px 12px; padding: 10px 0; border-bottom: 1px solid var(--line-soft); }
+ul.stages li:last-child, ul.models li:last-child { border-bottom: 0; }
+ul.stages li.current { font-weight: 700; }
+ul.stages .name, ul.models .name { overflow-wrap: anywhere; min-width: 0; }
+ul.stages .name .tag, ul.models .name .tag { margin-left: 8px; }
+ul.stages .num, ul.models .price { color: var(--text-2); white-space: nowrap; font-variant-numeric: tabular-nums; font-weight: 500; }
+ul.stages li.current .num { color: var(--text); font-weight: 700; }
+ul.models .name { font-weight: 600; }
+.kind-group { display: flex; flex-direction: column; gap: 2px; }
+.kind-group + .kind-group { margin-top: 8px; }
+.kind-group h3 { font-size: 13px; font-weight: 700; color: var(--text-2); letter-spacing: 0.04em; padding-bottom: 4px; border-bottom: 1px solid var(--line); }
+/* 狭い幅（または文字の拡大）では、数字を名前の下の行に回す */
+@media (max-width: 400px) {
+  ul.stages li, ul.models li { grid-template-columns: minmax(0, 1fr); }
+  ul.stages .num, ul.models .price { white-space: normal; }
+}
+
+/* ---- ログイン前のトップ・案内のページの文 ---- */
+.prose { display: flex; flex-direction: column; gap: var(--s3); }
+.links { display: flex; flex-wrap: wrap; gap: 0 var(--s4); }
+.links a { min-height: 44px; display: inline-flex; align-items: center; font-weight: 600; }
+.foot { font-size: 14px; color: var(--muted); }
+
+/* 動きを減らす設定：開閉・回転の動きを止める */
+@media (prefers-reduced-motion: reduce) {
+  .fold > summary::before, .sub-fold > summary::before, .icon-btn[data-tip]::after { transition: none; }
+  .icon-btn.busy svg { animation: none; }
+}
