@@ -21,7 +21,7 @@
     },
     {
       "source": "/",
-      "headers": [{ "key": "Cache-Control", "value": "no-cache" }]
+      "headers": [{ "key": "Cache-Control", "value": "no-cache" }, { "key": "X-Robots-Tag", "value": "noindex, nofollow" }]
     },
     {
       "source": "/(admin|mypage|instructor)",
