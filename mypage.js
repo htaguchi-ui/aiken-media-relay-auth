@@ -587,8 +587,8 @@ $("refresh-retry-btn").addEventListener("click", () => {
 });
 $("retry-btn").addEventListener("click", () => load({ mode: "retry" }));
 
-// ---- つなぎ方の［コピー］ ----
-// 枠（code）の文字をそのままクリップボードへ。使えない・断られたときは、枠の文字を選んだ状態にして「選んだ文字をコピーしてください」と出す。
+// ---- つなぎ方のコピーのボタン（コードの枠の右上のアイコン） ----
+// 枠（code）の文字をそのままクリップボードへ。使えない・断られたときは、枠の文字を選んだ状態にして（アイコンはそのまま）「選んだ文字をコピーしてください」と出す。
 // 知らせは各枠の下の 1 行（role="status"。見た目と読み上げの両方）。ボタンからフォーカスは動かさない
 const copyTimers = new WeakMap();
 // 枠ごとに、最後に押した［コピー］の結果だけを出す（連打で完了の順が入れ替わっても、古い結果で上書きしない。Codex TASK-0101 の F101-02）
@@ -626,9 +626,15 @@ async function copyFromBox(btn) {
   // 同じ文が続いても読み上げられるように、いったん空にしてから入れる
   status.textContent = "";
   status.classList.toggle("warn", !ok);
+  delete btn.dataset.state;
   if (ok) {
     status.textContent = MSG_COPY_OK;
-    copyTimers.set(status, setTimeout(() => (status.textContent = ""), COPY_OK_CLEAR_MS));
+    // アイコンを一時的にチェックの印にする（知らせの文と同じ時間）
+    btn.dataset.state = "done";
+    copyTimers.set(status, setTimeout(() => {
+      status.textContent = "";
+      delete btn.dataset.state;
+    }, COPY_OK_CLEAR_MS));
   } else {
     selectContents(code);
     status.textContent = MSG_COPY_FALLBACK;
