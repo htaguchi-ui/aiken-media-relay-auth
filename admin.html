@@ -201,6 +201,15 @@
   :root:has(body.selecting) { --topbar-h: 0px; } /* 選択中はヘッダーを隠す */
   html { scroll-padding-top: var(--topbar-h); }
   .topbar { position: sticky; top: 0; z-index: 20; background: var(--surface); border-bottom: 1px solid var(--line); padding-top: env(safe-area-inset-top); }
+  /* すりガラス：背景を 88% の不透明にして、後ろを blur(16px) saturate(180%) でぼかす（色は --surface から作るので、ライト・ダークとも自動）。
+     88% は、後ろが真っ黒・真っ白でも小さい見出し・メール（--muted）が AA（4.5:1）を割らない最小に近い値（ライト 4.6:1・ダーク 5.0:1）。
+     対応していないブラウザ（backdrop-filter・color-mix が無い）と、透明を減らす設定（prefers-reduced-transparency）のときは、上の不透明な背景のまま。 */
+  @supports ((backdrop-filter: blur(1px)) or (-webkit-backdrop-filter: blur(1px))) and (background: color-mix(in srgb, red 50%, transparent)) {
+    .topbar { background: color-mix(in srgb, var(--surface) 88%, transparent); -webkit-backdrop-filter: blur(16px) saturate(180%); backdrop-filter: blur(16px) saturate(180%); }
+  }
+  @media (prefers-reduced-transparency: reduce) {
+    .topbar { background: var(--surface); -webkit-backdrop-filter: none; backdrop-filter: none; }
+  }
   .topbar-inner { display: flex; flex-wrap: wrap; align-items: center; justify-content: space-between; gap: 12px; padding: 20px 20px 12px; }
   .brand { display: flex; flex-direction: column; gap: 2px; min-width: 0; }
   .brand-sub { font-size: 12px; color: var(--muted); letter-spacing: 0.04em; }
