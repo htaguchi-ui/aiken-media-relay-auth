@@ -166,32 +166,277 @@
       <div class="fold-group wide" id="connect-group">
         <details class="fold" id="connect-fold">
           <summary><span>つなぎ方</span></summary>
-          <div class="fold-body">
-            <p>ChatGPT・Codex・Claude Code から A.I.KEN Studio につなぐと、会話しながら生成を頼めます。ログインは、それぞれのアプリの接続の操作から、A.I.KEN の Google アカウントで行います。</p>
-            <p class="small">つなぐ住所（MCP の URL）<br><code>https://tnzwhwitgnzoehbjrmoy.supabase.co/functions/v1/mcp</code></p>
-            <div>
-              <details class="sub-fold">
+          <!-- つなぎ方（2026-10-19 TASK-0100。文は Codex の下書き TASK-0100-draft.md の A 章、見せ方は B 章）。
+               住所・コマンド・入れる値・確認用の文はコードの枠に入れ、［コピー］で枠の文字（textContent）をそのままコピーする。
+               見た目の折り返しは CSS だけなので、コピーする文字は変わらない。住所と登録名（aiken-media-relay）が全部の枠で同じことは試験で確かめる。
+               ChatGPT・Codex・Claude Code の画面の名前・操作名は、公式の資料と調査のメモ（findings.md）にもとづく。今回、実機の画面では確かめていない -->
+          <div class="fold-body connect-guide">
+            <div class="prose">
+              <p>ChatGPT・Codex・Claude Code で、会話しながら動画・画像・音声・音楽の生成を頼めます。</p>
+              <p>使うアプリの手順を開き、A.I.KEN の Google アカウントでログインしてください。</p>
+              <p>接続のログインは<strong>最長およそ 7 日</strong>で切れます。切れたら、そのアプリでログインし直します。</p>
+            </div>
+
+            <div class="copy-box">
+              <div class="copy-head">
+                <span class="copy-label">つなぐ住所（MCP の URL）</span>
+                <button type="button" class="btn copy-btn" data-copy="cg-url" aria-label="つなぐ住所（MCP の URL）をコピー">コピー</button>
+              </div>
+              <pre class="copy-code"><code id="cg-url">https://tnzwhwitgnzoehbjrmoy.supabase.co/functions/v1/mcp</code></pre>
+              <p class="copy-status" role="status"></p>
+              <p class="copy-wrap-note" id="copy-wrap-note">長い住所やコマンドは、画面では折り返して見えます。［コピー］を使うと、1 行のままコピーできます。</p>
+            </div>
+
+            <div class="notice-box">
+              <p class="notice-title">許可する前に</p>
+              <p>ログインと許可は、ご自身で操作してください。<strong>「許可する」を押すのは、自分で接続の操作を始め、その流れで開いた画面だけ</strong>にしてください。人から送られたリンクで開いた画面では許可しないでください。</p>
+              <p>許可したあとの画面の URL は、エラーの画面も含めて人に送らないでください。</p>
+            </div>
+            <p class="small muted">画面の名前は変わることがあります。</p>
+
+            <div class="guide-apps">
+              <details class="sub-fold" id="guide-chatgpt">
                 <summary>ChatGPT</summary>
                 <div class="sub-body">
-                  <p>上の住所を、ChatGPT のコネクタとして登録して使います。</p>
-                  <p class="small">ログインから 7 日たつと接続が切れます。そのときはコネクタをつなぎ直します。</p>
-                </div>
-              </details>
-              <details class="sub-fold">
-                <summary>Claude Code</summary>
-                <div class="sub-body">
+                  <h3 class="guide-h">初めてつなぐ</h3>
+                  <p>会社のワークスペースでは、追加や利用に管理者の許可が必要なことがあります。</p>
                   <ol class="steps">
-                    <li>版が 2.1.231 以上か確かめます（<code>claude --version</code>）。</li>
-                    <li>登録します：<code>claude mcp add --transport http aiken-media-relay https://tnzwhwitgnzoehbjrmoy.supabase.co/functions/v1/mcp</code></li>
-                    <li>Claude Code で <code>/mcp</code> → aiken-media-relay → ログイン。ブラウザで A.I.KEN の Google アカウントでログインし、許可の画面で「許可する」を押します（自分で操作した流れで開いたときだけ）。</li>
+                    <li>ChatGPT の Web 版で <a href="https://chatgpt.com/plugins" target="_blank" rel="noopener noreferrer"><strong>「Plugins」</strong></a>を開きます（別のタブで開きます）。</li>
+                    <li><strong>「＋」</strong>を押します。</li>
+                    <li><strong>「Add custom MCP server」</strong>を選びます。</li>
+                    <li><strong>「Name」</strong>に、次の名前を入れます。
+                      <div class="copy-box">
+                        <div class="copy-head">
+                          <span class="copy-label">Name</span>
+                          <button type="button" class="btn copy-btn" data-copy="cg-chatgpt-name" aria-label="ChatGPT の Name に入れる名前をコピー">コピー</button>
+                        </div>
+                        <pre class="copy-code"><code id="cg-chatgpt-name">A.I.KEN Studio</code></pre>
+                        <p class="copy-status" role="status"></p>
+                      </div>
+                    </li>
+                    <li><strong>「Connection」</strong>の<strong>「Server URL」</strong>に、次の住所を入れます。
+                      <div class="copy-box">
+                        <div class="copy-head">
+                          <span class="copy-label">Server URL</span>
+                          <button type="button" class="btn copy-btn" data-copy="cg-chatgpt-url" aria-label="ChatGPT の Server URL をコピー">コピー</button>
+                        </div>
+                        <pre class="copy-code"><code id="cg-chatgpt-url">https://tnzwhwitgnzoehbjrmoy.supabase.co/functions/v1/mcp</code></pre>
+                        <p class="copy-status" role="status"></p>
+                      </div>
+                    </li>
+                    <li><strong>「Authentication」</strong>で<strong>「OAuth」</strong>を選びます。</li>
+                    <li>警告の内容を読んでから、<strong>「I understand and want to continue」</strong>を選びます。</li>
+                    <li><strong>「Create as a plugin」</strong>を押します。</li>
+                    <li>表示されたツールの一覧を確かめます。</li>
+                    <li><strong>「Install」</strong>を押します。</li>
                   </ol>
-                  <p class="small">ログインから 7 日たつと接続が切れます。そのときは 3 のログインをやり直します。</p>
+                  <p>途中で Google のログイン画面や A.I.KEN Studio の許可画面が開いたときは、次の順に進めてください。</p>
+                  <ol class="steps">
+                    <li><strong>A.I.KEN の Google アカウント</strong>を選びます。</li>
+                    <li>自分で始めた接続の流れであることを確かめ、<strong>「許可する」</strong>を押します。</li>
+                    <li>ChatGPT に戻ります。</li>
+                  </ol>
+
+                  <h3 class="guide-h">つながったか確かめる</h3>
+                  <ol class="steps">
+                    <li>新しい会話の入力欄で <code>@</code> を入力します。</li>
+                    <li><strong>「A.I.KEN Studio」</strong>を選びます。</li>
+                    <li>次の文を、その会話に送ります。
+                      <div class="copy-box">
+                        <div class="copy-head">
+                          <span class="copy-label">アプリの会話に送る文</span>
+                          <button type="button" class="btn copy-btn" data-copy="cg-chatgpt-check" aria-label="ChatGPT に送る確認用の文をコピー">コピー</button>
+                        </div>
+                        <pre class="copy-code"><code id="cg-chatgpt-check">A.I.KEN Studio のツールで、今の残りクレジットを確認してください。生成はしないでください。</code></pre>
+                        <p class="copy-status" role="status"></p>
+                      </div>
+                    </li>
+                  </ol>
+                  <p>残りクレジットや利用枠の情報が返れば、接続できています。</p>
+
+                  <h3 class="guide-h">7 日ほどたって切れたら</h3>
+                  <ol class="steps">
+                    <li><strong>「Plugins」</strong>を開きます。</li>
+                    <li><strong>「A.I.KEN Studio」</strong>の接続をやり直します。</li>
+                    <li>ログイン画面が開いたら、A.I.KEN の Google アカウントでログインします。</li>
+                    <li>自分で始めた接続の許可画面で、<strong>「許可する」</strong>を押します。</li>
+                  </ol>
+                  <p>接続をやり直す項目が見つからないときは、管理者に確認してください。</p>
                 </div>
               </details>
-              <details class="sub-fold">
+
+              <details class="sub-fold" id="guide-codex">
                 <summary>Codex</summary>
                 <div class="sub-body">
-                  <p>Codex の設定手順は、管理者に確認してください。</p>
+                  <h3 class="guide-h">初めてつなぐ</h3>
+                  <p>コマンドは、Codex CLI を使うパソコンの<strong>ターミナル</strong>で実行します。</p>
+                  <ol class="steps">
+                    <li>次のコマンドで、接続先を登録します。
+                      <div class="copy-box">
+                        <div class="copy-head">
+                          <span class="copy-label">ターミナルに入れるコマンド</span>
+                          <button type="button" class="btn copy-btn" data-copy="cg-codex-add" aria-label="Codex の登録コマンドをコピー">コピー</button>
+                        </div>
+                        <pre class="copy-code"><code id="cg-codex-add">codex mcp add aiken-media-relay --url https://tnzwhwitgnzoehbjrmoy.supabase.co/functions/v1/mcp</code></pre>
+                        <p class="copy-status" role="status"></p>
+                      </div>
+                    </li>
+                    <li>次のコマンドで、ログインを始めます。
+                      <div class="copy-box">
+                        <div class="copy-head">
+                          <span class="copy-label">ターミナルに入れるコマンド</span>
+                          <button type="button" class="btn copy-btn" data-copy="cg-codex-login" aria-label="Codex のログインコマンドをコピー">コピー</button>
+                        </div>
+                        <pre class="copy-code"><code id="cg-codex-login">codex mcp login aiken-media-relay</code></pre>
+                        <p class="copy-status" role="status"></p>
+                      </div>
+                    </li>
+                    <li>開いたブラウザで、<strong>A.I.KEN の Google アカウント</strong>を選びます。</li>
+                    <li>自分で始めた接続の許可画面で、<strong>「許可する」</strong>を押します。</li>
+                    <li>Codex に戻ります。</li>
+                  </ol>
+
+                  <h3 class="guide-h">つながったか確かめる</h3>
+                  <p>Codex の会話に、次の文を送ります。</p>
+                  <div class="copy-box">
+                    <div class="copy-head">
+                      <span class="copy-label">アプリの会話に送る文</span>
+                      <button type="button" class="btn copy-btn" data-copy="cg-codex-check" aria-label="Codex に送る確認用の文をコピー">コピー</button>
+                    </div>
+                    <pre class="copy-code"><code id="cg-codex-check">A.I.KEN Studio のツールで、今の残りクレジットを確認してください。生成はしないでください。</code></pre>
+                    <p class="copy-status" role="status"></p>
+                  </div>
+                  <p>残りクレジットや利用枠の情報が返れば、接続できています。</p>
+
+                  <h3 class="guide-h">7 日ほどたって切れたら</h3>
+                  <p>接続先の登録をやり直す必要はありません。</p>
+                  <ol class="steps">
+                    <li>ターミナルで、次のコマンドを実行します。
+                      <div class="copy-box">
+                        <div class="copy-head">
+                          <span class="copy-label">ターミナルに入れるコマンド</span>
+                          <button type="button" class="btn copy-btn" data-copy="cg-codex-relogin" aria-label="Codex のログインコマンドをコピー（切れたとき）">コピー</button>
+                        </div>
+                        <pre class="copy-code"><code id="cg-codex-relogin">codex mcp login aiken-media-relay</code></pre>
+                        <p class="copy-status" role="status"></p>
+                      </div>
+                    </li>
+                    <li>開いたブラウザで、<strong>A.I.KEN の Google アカウント</strong>を選びます。</li>
+                    <li>自分で始めた接続の許可画面で、<strong>「許可する」</strong>を押します。</li>
+                    <li>Codex に戻ります。</li>
+                  </ol>
+                </div>
+              </details>
+
+              <details class="sub-fold" id="guide-claude">
+                <summary>Claude Code</summary>
+                <div class="sub-body">
+                  <h3 class="guide-h">初めてつなぐ</h3>
+                  <p>登録のコマンドは、Claude Code を使うパソコンの<strong>ターミナル</strong>で実行します。</p>
+                  <ol class="steps">
+                    <li>次のコマンドで、Claude Code の版を確かめます。
+                      <div class="copy-box">
+                        <div class="copy-head">
+                          <span class="copy-label">ターミナルに入れるコマンド</span>
+                          <button type="button" class="btn copy-btn" data-copy="cg-claude-version" aria-label="Claude Code の版を調べるコマンドをコピー">コピー</button>
+                        </div>
+                        <pre class="copy-code"><code id="cg-claude-version">claude --version</code></pre>
+                        <p class="copy-status" role="status"></p>
+                      </div>
+                      <p><strong>2.1.231 以上</strong>なら、次へ進みます。古い場合は、管理者に更新を確認してください。</p>
+                    </li>
+                    <li>次のコマンドで、接続先を登録します。
+                      <div class="copy-box">
+                        <div class="copy-head">
+                          <span class="copy-label">ターミナルに入れるコマンド</span>
+                          <button type="button" class="btn copy-btn" data-copy="cg-claude-add" aria-label="Claude Code の登録コマンドをコピー">コピー</button>
+                        </div>
+                        <pre class="copy-code"><code id="cg-claude-add">claude mcp add --transport http --scope user aiken-media-relay https://tnzwhwitgnzoehbjrmoy.supabase.co/functions/v1/mcp</code></pre>
+                        <p class="copy-status" role="status"></p>
+                      </div>
+                      <p><code>--scope user</code> を付けると、どのフォルダで Claude Code を開いても、この接続先を使えます。</p>
+                    </li>
+                    <li>Claude Code を開きます。</li>
+                    <li>Claude Code の会話に、次を入力します。
+                      <div class="copy-box">
+                        <div class="copy-head">
+                          <span class="copy-label">Claude Code に入れるコマンド</span>
+                          <button type="button" class="btn copy-btn" data-copy="cg-claude-mcp" aria-label="Claude Code に入れる /mcp をコピー">コピー</button>
+                        </div>
+                        <pre class="copy-code"><code id="cg-claude-mcp">/mcp</code></pre>
+                        <p class="copy-status" role="status"></p>
+                      </div>
+                    </li>
+                    <li>一覧から<strong>「aiken-media-relay」</strong>を選びます。</li>
+                    <li>表示された案内に沿って、ログインを始めます。</li>
+                    <li>開いたブラウザで、<strong>A.I.KEN の Google アカウント</strong>を選びます。</li>
+                    <li>自分で始めた接続の許可画面で、<strong>「許可する」</strong>を押します。</li>
+                    <li>Claude Code に戻ります。</li>
+                  </ol>
+
+                  <h3 class="guide-h">つながったか確かめる</h3>
+                  <p>Claude Code の会話に、次の文を送ります。</p>
+                  <div class="copy-box">
+                    <div class="copy-head">
+                      <span class="copy-label">アプリの会話に送る文</span>
+                      <button type="button" class="btn copy-btn" data-copy="cg-claude-check" aria-label="Claude Code に送る確認用の文をコピー">コピー</button>
+                    </div>
+                    <pre class="copy-code"><code id="cg-claude-check">A.I.KEN Studio のツールで、今の残りクレジットを確認してください。生成はしないでください。</code></pre>
+                    <p class="copy-status" role="status"></p>
+                  </div>
+                  <p>残りクレジットや利用枠の情報が返れば、接続できています。</p>
+
+                  <h3 class="guide-h">7 日ほどたって切れたら</h3>
+                  <p>接続先の登録をやり直す必要はありません。</p>
+                  <ol class="steps">
+                    <li>Claude Code の会話に <code>/mcp</code> を入力します。</li>
+                    <li><strong>「aiken-media-relay」</strong>を選びます。</li>
+                    <li><strong>「Re-authenticate」</strong>を選びます。</li>
+                    <li>開いたブラウザで、<strong>A.I.KEN の Google アカウント</strong>を選びます。</li>
+                    <li>自分で始めた接続の許可画面で、<strong>「許可する」</strong>を押します。</li>
+                    <li>Claude Code に戻ります。</li>
+                  </ol>
+                </div>
+              </details>
+
+              <details class="sub-fold" id="guide-trouble">
+                <summary>うまくいかないとき</summary>
+                <div class="sub-body">
+                  <h3 class="guide-h">ブラウザが開かない</h3>
+                  <p>接続を始めたアプリの画面を確認してください。Claude Code にログイン用の URL が表示されている場合は、その URL を自分のブラウザで開けます。自分で接続を始めた画面に表示された URL だけを使ってください。</p>
+                  <p>Codex・ChatGPT で先に進めない場合は、使っているアプリの名前と、URL を除いたエラー文を管理者に伝えてください。</p>
+
+                  <h3 class="guide-h">違う Google アカウントが出る</h3>
+                  <p>許可する前なら、A.I.KEN Studio の画面で<strong>「別のアカウントでログイン」</strong>を選んでください。A.I.KEN の Google アカウントで入り直します。</p>
+                  <p>すでに違うアカウントで接続を許可した場合は、そのまま生成を始めず、管理者にアカウントの切り替え方を確認してください。</p>
+
+                  <h3 class="guide-h">別のフォルダで接続先が見えない（Claude Code）</h3>
+                  <p>初めの登録に <code>--scope user</code> が無いと、登録したフォルダでしか見えないことがあります。</p>
+                  <ol class="steps">
+                    <li>「Claude Code」の手順 2 にある、<strong><code>--scope user</code> 付きの登録コマンド</strong>をターミナルで実行します。</li>
+                    <li>使いたいフォルダで Claude Code を開きます。</li>
+                    <li><code>/mcp</code> で<strong>「aiken-media-relay」</strong>があるか確かめます。</li>
+                  </ol>
+                  <p>同じ名前の登録があるというエラーが出た場合は、管理者に確認してください。</p>
+
+                  <h3 class="guide-h">ワークスペースで追加できない（ChatGPT）</h3>
+                  <p>管理者に、カスタム MCP サーバーをプラグインとして追加・利用できるか確認してください。</p>
+
+                  <h3 class="guide-h">コマンドで登録できない（Codex：設定ファイルを使う場合）</h3>
+                  <p>管理者と確認しながら、<code>~/.codex/config.toml</code> に次の接続先の項目を追加します。すでに同じ項目がある場合は重ねて追加せず、ほかの設定は残してください。</p>
+                  <div class="copy-box">
+                    <div class="copy-head">
+                      <span class="copy-label">設定ファイルに加える例</span>
+                      <button type="button" class="btn copy-btn" data-copy="cg-codex-toml" aria-label="Codex の設定の例をコピー">コピー</button>
+                    </div>
+                    <pre class="copy-code"><code id="cg-codex-toml">[mcp_servers.aiken-media-relay]
+url = "https://tnzwhwitgnzoehbjrmoy.supabase.co/functions/v1/mcp"</code></pre>
+                    <p class="copy-status" role="status"></p>
+                  </div>
+                  <p>追加後は「Codex」の手順 2 のログインを行います。</p>
+
+                  <h3 class="guide-h">残りクレジットの確認でもエラーになる</h3>
+                  <p>使ったアプリの名前と、URL を除いたエラー文を管理者に伝えてください。ログインや許可のあとに表示された URL 全体は送らないでください。</p>
                 </div>
               </details>
             </div>

@@ -28,6 +28,11 @@ import {
   groupModels,
   hadActiveSession,
   headerTools,
+  COPY_OK_CLEAR_MS,
+  copyTextOf,
+  createLatestGate,
+  MSG_COPY_FALLBACK,
+  MSG_COPY_OK,
   lowNotice,
   MSG_CODE_FAILED,
   MSG_DENIED,
@@ -712,6 +717,58 @@ $("refresh-retry-btn").addEventListener("click", () => {
   if (!loading) load({ mode: "manual" });
 });
 $("retry-btn").addEventListener("click", () => load({ mode: "retry" }));
+
+// ---- つなぎ方の［コピー］ ----
+// 枠（code）の文字をそのままクリップボードへ。使えない・断られたときは、枠の文字を選んだ状態にして「選んだ文字をコピーしてください」と出す。
+// 知らせは各枠の下の 1 行（role="status"。見た目と読み上げの両方）。ボタンからフォーカスは動かさない
+const copyTimers = new WeakMap();
+// 枠ごとに、最後に押した［コピー］の結果だけを出す（連打で完了の順が入れ替わっても、古い結果で上書きしない。Codex TASK-0101 の F101-02）
+const copyGate = createLatestGate();
+function selectContents(node) {
+  try {
+    const range = document.createRange();
+    range.selectNodeContents(node);
+    const sel = window.getSelection();
+    sel.removeAllRanges();
+    sel.addRange(range);
+  } catch {
+    // 選べなくても、知らせは出す
+  }
+}
+async function copyFromBox(btn) {
+  const box = btn.closest(".copy-box");
+  const code = document.getElementById(btn.dataset.copy);
+  const status = box?.querySelector(".copy-status");
+  if (!code || !status) return;
+  const text = copyTextOf(code.textContent);
+  const turn = copyGate.begin(status);
+  let ok = false;
+  try {
+    if (typeof navigator.clipboard?.writeText === "function") {
+      await navigator.clipboard.writeText(text);
+      ok = true;
+    }
+  } catch {
+    ok = false;
+  }
+  // この間に同じ枠の［コピー］がまた押されていたら、この結果は出さない（新しいほうの結果だけを出す）
+  if (!copyGate.isLatest(status, turn)) return;
+  clearTimeout(copyTimers.get(status));
+  // 同じ文が続いても読み上げられるように、いったん空にしてから入れる
+  status.textContent = "";
+  status.classList.toggle("warn", !ok);
+  if (ok) {
+    status.textContent = MSG_COPY_OK;
+    copyTimers.set(status, setTimeout(() => (status.textContent = ""), COPY_OK_CLEAR_MS));
+  } else {
+    selectContents(code);
+    status.textContent = MSG_COPY_FALLBACK;
+  }
+}
+$("connect-fold").addEventListener("click", (e) => {
+  const btn = e.target?.closest?.(".copy-btn");
+  if (btn) copyFromBox(btn);
+});
 
 main().catch(() => {
   $("failed-message").textContent = "エラーが発生しました。ページを開き直してください。";

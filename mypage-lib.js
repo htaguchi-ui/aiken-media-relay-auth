@@ -16,6 +16,40 @@ export function formatCredits(value) {
   return Number.isFinite(n) ? n.toLocaleString("en-US") : "—";
 }
 
+/** つなぎ方の［コピー］：コピーできたときの知らせ */
+export const MSG_COPY_OK = "コピーしました";
+/** つなぎ方の［コピー］：クリップボードが使えないとき（枠の文字を選んだ状態にして出す） */
+export const MSG_COPY_FALLBACK = "コピーできませんでした。枠の文字を選んだので、選んだ文字をコピーしてください。";
+/** コピーの知らせを消すまでの時間（ミリ秒。失敗の知らせは消さない） */
+export const COPY_OK_CLEAR_MS = 4000;
+
+/**
+ * 「最後に始めたものだけを有効にする」番号の係（つなぎ方の［コピー］で、枠ごとに使う）。
+ * begin(key) で key の新しい番号を返し、isLatest(key, n) は n がその key の最新の番号か。
+ * 連打して完了の順が入れ替わっても、古い結果（失敗など）で新しい結果の知らせを上書きしない
+ */
+export function createLatestGate() {
+  const latest = new Map();
+  return {
+    begin(key) {
+      const n = (latest.get(key) ?? 0) + 1;
+      latest.set(key, n);
+      return n;
+    },
+    isLatest(key, n) {
+      return latest.get(key) === n;
+    },
+  };
+}
+
+/**
+ * コピーする文字：枠（code）の textContent をそのまま使う。見た目の折り返しは CSS だけなので、ここには改行が入らない。
+ * HTML の書き方でまぎれる前後の改行だけを外す（行の中・行の間の空白や改行は変えない。2 行の設定の例は 2 行のまま）
+ */
+export function copyTextOf(text) {
+  return typeof text === "string" ? text.replace(/^\r?\n/, "").replace(/\r?\n$/, "") : "";
+}
+
 /**
  * ヘッダーに出すほかの画面へのボタン（/me の区分 role だけで決める）。講師は講師の画面、管理者は講師の画面と管理コンソールの両方
  * （管理者は講師の画面も使えるため）。ボタンを出すかどうかだけに使い、守りには使わない（各画面が自分で権限を確かめる）

@@ -280,6 +280,30 @@ html { scroll-padding-top: var(--topbar-h); }
 .sub-fold + .sub-fold { border-top: 1px solid var(--line-soft); }
 ol.steps { margin: 0; padding-left: 1.4em; display: flex; flex-direction: column; gap: 6px; }
 
+/* ---- つなぎ方（#connect-fold）：住所・コマンド・入れる値・確認用の文のコードの枠と［コピー］ ---- */
+/* 長い URL やコマンドは枠の中だけで折り返す（ページ全体を横にはみ出させない）。折り返しは見た目だけで、コピーする文字は変わらない */
+.connect-guide, .connect-guide .sub-body, .connect-guide ol.steps, .connect-guide ol.steps > li { min-width: 0; max-width: 100%; }
+.connect-guide ol.steps > li > p { margin-top: 6px; }
+.guide-apps { display: flex; flex-direction: column; }
+.guide-h { font-size: 15px; font-weight: 700; margin-top: var(--s2); }
+.guide-h:first-child { margin-top: 0; }
+.copy-box { display: flex; flex-direction: column; gap: 4px; min-width: 0; max-width: 100%; margin: 6px 0 2px; }
+.copy-head { display: flex; flex-wrap: wrap; align-items: center; justify-content: space-between; gap: 4px 8px; min-width: 0; }
+.copy-label { font-size: 14px; font-weight: 600; color: var(--text-2); }
+.copy-btn { min-height: 44px; padding: 0 16px; font-size: 14px; flex: none; }
+.copy-code {
+  margin: 0; padding: 10px 12px; max-width: 100%; border-radius: var(--r-s);
+  background: var(--surface-2); border: 1px solid var(--line-2); color: var(--text);
+  white-space: pre-wrap; overflow-wrap: anywhere; word-break: normal; line-height: 1.6;
+}
+.copy-code code { white-space: inherit; overflow-wrap: inherit; word-break: inherit; font-size: 14px; }
+.copy-status { min-height: 0; font-size: 14px; font-weight: 600; color: var(--ok-fg); }
+.copy-status:empty { display: none; }
+.copy-status.warn { color: var(--warn-fg); }
+.copy-wrap-note { font-size: 14px; color: var(--text-2); }
+.notice-box { border: 1px solid var(--warn-line); background: var(--warn-bg); border-radius: var(--r-m); padding: 12px 14px; display: flex; flex-direction: column; gap: 6px; color: var(--text); }
+.notice-box .notice-title { font-weight: 700; color: var(--warn-fg); }
+
 /* ---- 今日の段階・使えるモデルの一覧 ---- */
 ul.stages, ul.models { list-style: none; margin: 0; padding: 0; }
 ul.stages li, ul.models li { display: grid; grid-template-columns: minmax(0, 1fr) auto; align-items: baseline; gap: 2px 12px; padding: 10px 0; border-bottom: 1px solid var(--line-soft); }
