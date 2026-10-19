@@ -59,7 +59,6 @@ import {
   windowView,
   YEN_PER_USD,
   catalogModes,
-  DEFAULT_SETTING_TEXT,
   enabledModelsPayload,
   applyMasterOptIn,
   masterView,
@@ -67,9 +66,7 @@ import {
   modeStatus,
   normalizeOptInModes,
   explainApiError,
-  formatSettingValue,
   formatUsdShort,
-  globalUsageView,
   availableLimits,
   settingDesc,
   settingLabel,
@@ -110,6 +107,22 @@ import {
   rosterFilters,
   roleLabelsFor,
   MSG_STAGE_NOT_READY,
+  checkedText,
+  editDirty,
+  freshnessView,
+  groupSettingLimits,
+  limitConfirmView,
+  modelScopeSummary,
+  resetConfirmView,
+  settingEmptyText,
+  settingInitialText,
+  settingSpec,
+  settingTarget,
+  settingUnitText,
+  settingValueText,
+  usageSummaryView,
+  usdCreditsText,
+  createLoadGate,
 } from "./admin-lib.js";
 import {
   adminGrantGroups,
@@ -170,7 +183,12 @@ const $ = (id) => document.getElementById(id);
 const SECTIONS = ["status", "login", "denied", "app"];
 const desktopMq = window.matchMedia("(min-width: 900px)");
 const isDesktop = () => desktopMq.matches;
+// 設定タブの右の欄は 1,100px 以上（em なので、文字を大きくしたときは早めにシートの形へ戻す。提案書 11.2）
+const wideMq = window.matchMedia("(min-width: 68.75em)");
+const isWide = () => wideMq.matches;
 let myEmail = "";
+/** 操作が無くてログアウトした（このあと遅れて届いた応答で、画面や前の人の値を出さない） */
+let appClosed = false;
 
 /** 画面の状態 */
 const state = {
@@ -202,7 +220,13 @@ const state = {
   cohortDraft: null,
   /** 回の読み込みの失敗（013 が無いかの判定に使う） */
   cohortsErrorRaw: null,
-  updatedAt: null,
+  /**
+   * 読み込みの部分ごとの、最後に成功した時刻（ms）と、最後の読み込みが失敗したか（前に読んだ値を出している）。
+   * 設定の 3 つ（上限・モデル・履歴）は state.settings の infoAt などに持つ。新しく一定間隔の取得はしない（手動の更新が起点）
+   */
+  fresh: { rows: { at: null, stale: false }, cohorts: { at: null, stale: false }, stages: { at: null, stale: false } },
+  /** タブごとのスクロールの位置（タブを行き来したときに戻す） */
+  scroll: { roster: 0, cohorts: 0, settings: 0 },
   /**
    * 段階（016）の情報。available は DB が 016 を当てているか（cohorts に credit_mode の列があるか）。
    * false の間は、新しい欄・操作を出さず、今までの書き込み（直接の insert・update・delete）を使う
@@ -230,7 +254,36 @@ const state = {
     resetNull: {},
     /** 開いているタブ（all・student・member） */
     scope: "all",
+    /** 部分ごとの最後に成功した時刻（ms） */
+    infoAt: null,
+    modelsAt: null,
+    historyAt: null,
+    /** 選んでいる項目（{ kind: "limit", key } か { kind: "template", id }）。広い幅は右の欄、狭い幅は下の帯からシート */
+    sel: null,
+    /** 数値の編集の下書き（{ key, text, initial, base, error, saving }）。画面を描き直しても、閉じても、明示して捨てるまで残す */
+    edit: null,
+    /** モデルを変更中か（読む表示から［モデルを変更］で入る） */
+    modelsEditing: false,
+    /** モデルの保存中 */
+    modelSaving: false,
+    historyOpen: false,
+    breakdownOpen: false,
+    /** 設定の保存中（結果が決まるまで、ほかの項目の編集・タブの移動を止める） */
+    busy: false,
   },
+};
+
+/**
+ * 読み込みの部分ごとの、応答の順番の番人（createLoadGate）。遅れて届いた古い応答で、新しい値（保存のあとの値）を戻さない。
+ * 保存を始めたとき・終わったときは invalidate() で、それより前に出した読み込みの応答を捨てる
+ */
+const gates = {
+  rows: createLoadGate(),
+  cohorts: createLoadGate(),
+  stages: createLoadGate(),
+  info: createLoadGate(),
+  models: createLoadGate(),
+  history: createLoadGate(),
 };
 
 function show(id) {
@@ -262,6 +315,7 @@ const ICONS = {
   trash: [["path", { d: "M4 7h16" }], ["path", { d: "M9 7V4h6v3" }], ["path", { d: "M6 7l1 13h10l1-13" }]],
   chevron: [["path", { d: "M9 6l6 6-6 6" }]],
   edit: [["path", { d: "M4 20h4l10.5-10.5a2.1 2.1 0 00-3-3L5 17v3" }]],
+  refresh: [["path", { d: "M20 11a8 8 0 1 0-2.34 5.66" }], ["path", { d: "M20 4v7h-7" }]],
   users: [
     ["circle", { cx: 9, cy: 8, r: 3.5 }],
     ["path", { d: "M2.5 20c.8-3.6 3.4-5.5 6.5-5.5s5.7 1.9 6.5 5.5" }],
@@ -415,11 +469,15 @@ function scheduleToast(t) {
   t.timer = setTimeout(() => dismissToast(t), NOTICE_MS);
 }
 
-/** 画面上部のお知らせ。kind は "ok"（数秒で消える）・"error"・"warn"（閉じるまで残る）。details は箇条書き。直前と同じ文は 1 つにまとめる（×回数） */
-function notify(message, kind = "ok", details = []) {
+/**
+ * 画面上部のお知らせ。kind は "ok"（数秒で消える）・"error"・"warn"（閉じるまで残る）。details は箇条書き。直前と同じ文は 1 つにまとめる（×回数）。
+ * action（{ label, onClick }）は、操作のあとに戻る道（［変更履歴を見る］など。3.4 の 9）
+ */
+function notify(message, kind = "ok", details = [], action = null) {
+  if (appClosed) return;
   if (kind !== "error" && kind !== "warn") kind = "ok";
   placeNotice();
-  const key = [kind, message, ...details].join("\n");
+  const key = [kind, message, ...details, action?.label ?? ""].join("\n");
   const last = toasts[toasts.length - 1];
   if (last && last.key === key) {
     last.count += 1;
@@ -439,6 +497,19 @@ function notify(message, kind = "ok", details = []) {
     ),
   );
   const t = { node, kind, key, count: 1, timer: 0, hover: false, focus: false };
+  if (action) {
+    node.querySelector(".notice-body").append(
+      el("button", {
+        type: "button",
+        className: "link-btn notice-action",
+        text: action.label,
+        onclick: () => {
+          dismissToast(t);
+          action.onClick();
+        },
+      }),
+    );
+  }
   node.append(el("button", { type: "button", className: "icon-btn bare", "aria-label": "お知らせを閉じる", onclick: () => dismissToast(t) }, icon("close")));
   node.addEventListener("mouseenter", () => {
     t.hover = true;
@@ -496,6 +567,18 @@ function closeSheet() {
   if (sheet.open) sheet.close();
 }
 
+/**
+ * 閉じる前に確かめる関数（未保存の編集があるシートだけ。reason は "esc"・"close"。true を返したら閉じてよい）。
+ * シートが閉じたら消える。確かめの無いシート（名簿・回など）は、今までどおりすぐ閉じる
+ */
+let sheetGuard = null;
+
+/** 閉じるボタン・背景・Esc・キャンセルから閉じる（未保存の編集があれば確かめる） */
+async function requestCloseSheet(reason = "close") {
+  if (sheetGuard && !(await sheetGuard(reason))) return;
+  closeSheet();
+}
+
 /** シートの中身を組み立てる。head を渡すときは、その中に id="sheet-title" の見出しを入れる */
 function setSheet({ title = "", head = null, body = [], foot = [] }) {
   const scroll = sheet.scrollTop;
@@ -507,7 +590,7 @@ function setSheet({ title = "", head = null, body = [], foot = [] }) {
       "div",
       { className: "sheet-head" },
       head ?? el("h2", { id: "sheet-title", text: title }),
-      el("button", { type: "button", className: "icon-btn", "aria-label": "閉じる", onclick: closeSheet }, icon("close", 18, 2.2)),
+      el("button", { type: "button", className: "icon-btn", "aria-label": "閉じる", onclick: () => requestCloseSheet("close") }, icon("close", 18, 2.2)),
     ),
     el("div", { className: "sheet-body" }, ...body),
     ...(foot.length ? [el("div", { className: "sheet-foot" }, ...foot)] : []),
@@ -517,18 +600,115 @@ function setSheet({ title = "", head = null, body = [], foot = [] }) {
 }
 
 sheet.addEventListener("close", () => {
+  const kind = sheetKind;
   sheetKind = null;
   sheetRender = null;
+  sheetGuard = null;
+  templateDirty = null;
   placeNotice(); // 閉じたので入れ物を body へ戻す（シートの中身を消す前に）
   sheet.replaceChildren();
+  // 設定の項目のシートを閉じたら、入口の行へフォーカスを戻す（選択は残る。下の帯から開き直せる）
+  if (kind === "setting") {
+    renderSettings();
+    if (state.settings.sel) focusKey(selFocusKey(state.settings.sel));
+  }
 });
 // 背景（シートの外）を押したら閉じる
 sheet.addEventListener("click", (e) => {
-  if (e.target === sheet) closeSheet();
+  if (e.target === sheet) requestCloseSheet("close");
+});
+// Esc：確かめのあるシートは、上から 1 つずつ（編集 → 読む → 閉じる）
+sheet.addEventListener("cancel", (e) => {
+  e.preventDefault();
+  requestCloseSheet("esc");
 });
 
 function cancelButton(text = "キャンセル") {
-  return el("button", { type: "button", className: "btn big cancel", text, onclick: closeSheet });
+  return el("button", { type: "button", className: "btn big cancel", text, onclick: () => requestCloseSheet("close") });
+}
+
+// ---- 確かめるダイアログ（ブラウザの confirm の代わり。提案書 3.4 の 4・11.7） ----
+// 見出しは問い、本文は 3 行まで（lines）、注意は warnings、長い内訳は detail（同じダイアログの中の一覧）。
+// 最初のフォーカスと Esc は安全な側（cancelValue）。シートの上にも重ねて出せる（別の dialog）
+
+const askEl = $("ask");
+let askDone = null;
+
+/**
+ * @param {{ title: string, lines?: string[], note?: string|null, warnings?: string[], detail?: string[],
+ *   buttons: { label: string, value: any, kind?: "primary"|"danger"|"" }[], cancelValue?: any, focusValue?: any }} o
+ * @returns {Promise<any>} 押したボタンの value（Esc・背景・強制的に閉じたときは cancelValue）
+ */
+function ask({ title, lines = [], note = null, warnings = [], detail = [], buttons, cancelValue = false, focusValue = cancelValue }) {
+  if (askDone) askDone(undefined);
+  const back = document.activeElement;
+  return new Promise((resolve) => {
+    let settled = false;
+    askDone = (v) => {
+      if (settled) return;
+      settled = true;
+      askDone = null;
+      if (askEl.open) askEl.close();
+      resolve(v === undefined ? cancelValue : v);
+      if (back && back.isConnected && typeof back.focus === "function") back.focus();
+    };
+    const btns = buttons.map((b) =>
+      el("button", {
+        type: "button",
+        className: `btn ${b.kind === "danger" ? "danger-fill" : b.kind === "primary" ? "primary" : ""}`,
+        text: b.label,
+        onclick: () => askDone?.(b.value),
+      })
+    );
+    askEl.replaceChildren(
+      el(
+        "div",
+        { className: "ask-body" },
+        el("h2", { id: "ask-title", text: title }),
+        ...lines.map((t) => el("p", { text: t })),
+        ...warnings.map((w) => el("p", { className: "warn-line", role: "alert" }, el("span", { "aria-hidden": "true", text: "⚠" }), el("span", { text: w }))),
+        detail.length ? el("div", { className: "ask-detail" }, el("ul", {}, ...detail.map((d) => el("li", { text: d })))) : null,
+        note ? el("p", { className: "ask-note", text: note }) : null,
+      ),
+      el("div", { className: "ask-foot" }, ...btns),
+    );
+    askEl.showModal();
+    const i = buttons.findIndex((b) => b.value === focusValue);
+    (btns[i >= 0 ? i : 0]).focus();
+  });
+}
+askEl.addEventListener("cancel", (e) => {
+  e.preventDefault();
+  askDone?.(undefined);
+});
+askEl.addEventListener("click", (e) => {
+  if (e.target === askEl) askDone?.(undefined);
+});
+// ブラウザが閉じた（Esc の連打など）ときも、安全な側で終える。
+// close は後のタスクで届く。前の確認を閉じた直後に次の確認が開いていたら（askEl.open）、その close は前の確認のものなので無視する
+// （そうしないと、続けて出した確認〔モードが 0 になる警告のあとの保存など〕が、押す前に取り消される。Codex TASK-0092 F1）
+askEl.addEventListener("close", () => {
+  if (askEl.open) return;
+  askDone?.(undefined);
+});
+
+/** 保存していない変更を捨ててよいか（［編集を続ける］が既定） */
+function askDiscard(what = "入力した値", okLabel = "破棄して閉じる") {
+  return ask({
+    title: "保存していない変更を破棄しますか？",
+    lines: [`${what}は、まだ保存していません。`],
+    buttons: [{ label: "編集を続ける", value: false }, { label: okLabel, value: true, kind: "danger" }],
+    cancelValue: false,
+  });
+}
+
+/** data-focus-key でフォーカスを移す（描き直したあと、閉じたあと） */
+function focusKey(key, root = document) {
+  if (!key) return false;
+  const node = [...root.querySelectorAll("[data-focus-key]")].find((n) => n.dataset.focusKey === key && !n.closest("[hidden]"));
+  if (!node) return false;
+  node.focus();
+  return true;
 }
 
 // ---- ログイン ----
@@ -592,9 +772,19 @@ async function logoutIfIdle() {
   const last = lastActive();
   if (!idleExpired(last, Date.now(), ADMIN_IDLE_LIMIT_MS)) return false;
   stopIdleWatch();
+  appClosed = true;
+  askDone?.(undefined);
   await endSession();
   if (sheet.open) closeSheet();
   clearNotice();
+  // 前の人の値・編集中の内容を残さない
+  state.rows = [];
+  state.settings.info = null;
+  state.settings.models = null;
+  state.settings.history = [];
+  state.settings.edit = null;
+  state.settings.drafts = null;
+  for (const id of ["settings-summary", "settings-main", "settings-models", "settings-templates", "settings-history", "settings-aside", "settings-bar", "roster-list", "roster-aside", "cohorts-main", "cohort-aside", "overview"]) $(id).replaceChildren();
   showLoginNote(
     last === null
       ? "ログインの記録を確かめられなかったため、ログアウトしました。もう一度ログインしてください。"
@@ -637,7 +827,7 @@ function applyRows(data) {
   state.rows = sortByLastUsed(data ?? []);
   state.rowsStatus = "ok";
   state.rowsError = "";
-  state.updatedAt = new Date().toISOString();
+  state.fresh.rows = { at: Date.now(), stale: false };
   for (const email of [...state.selected]) {
     const r = state.rows.find((x) => x.email === email);
     if (!r || !hasWindow(r)) state.selected.delete(email);
@@ -645,10 +835,14 @@ function applyRows(data) {
 }
 
 async function loadUsage() {
+  const ticket = gates.rows.begin();
   const { data, error } = await supabase.rpc("admin_usage");
+  // より新しい読み込みの応答をもう受け取っている：この古い応答は捨てる（値も確認の時刻も変えない）
+  if (!gates.rows.accept(ticket)) return true;
   if (error) {
     state.rowsError = explainError(error);
     if (state.rowsStatus !== "ok") state.rowsStatus = "error";
+    state.fresh.rows.stale = true;
     notify(`名簿を読み込めませんでした。${state.rowsError}`, "error");
     return false;
   }
@@ -662,45 +856,75 @@ function no013() {
 }
 
 async function loadCohorts() {
+  const ticket = gates.cohorts.begin();
   const [c, v] = await Promise.all([
     supabase.rpc("admin_cohorts"),
     supabase.from("venues").select("no, name, note, active").order("no"),
   ]);
+  if (!gates.cohorts.accept(ticket)) return true;
   const error = c.error || v.error;
   state.cohortsErrorRaw = error ?? null;
   if (error) {
     state.cohortsError = explainError(error);
     if (state.cohortsStatus !== "ok") state.cohortsStatus = "error";
+    state.fresh.cohorts.stale = true;
     return false;
   }
   state.cohorts = c.data ?? [];
   state.venues = v.data ?? [];
   state.cohortsStatus = "ok";
   state.cohortsError = "";
+  state.fresh.cohorts = { at: Date.now(), stale: false };
   return true;
 }
 
-/** 名簿・回・会場を読み直して、画面を作り直す */
+/** 読み込み中の数（更新のボタンを回す・続けて押せないようにする） */
+let refreshing = 0;
+
+function setReloadBusy() {
+  for (const b of document.querySelectorAll("[data-reload]")) {
+    b.classList.toggle("busy", refreshing > 0);
+    b.setAttribute("aria-disabled", String(refreshing > 0));
+  }
+}
+
+/** 名簿・回・会場（と、開いたことのある設定）を読み直して、画面を作り直す */
 async function refresh() {
-  $("reload-btn").disabled = true;
+  refreshing++;
+  setReloadBusy();
   try {
     await Promise.all([loadUsage(), loadCohorts(), loadStageInfo(), state.settings.status !== "idle" ? loadSettingsAll() : null]);
   } finally {
-    $("reload-btn").disabled = false;
+    refreshing--;
+    setReloadBusy();
   }
   renderAll();
 }
 
-/** その人の最新の行（今の枠）を読み直す。{ ok: false } は読み直しの失敗、row が無ければ名簿に無い */
+/** 更新のボタン（ヘッダーの ⟳・設定の要約の ⟳・アカウントのシート）。読み込み中は重ねない */
+function onReload() {
+  if (refreshing > 0) return;
+  clearNotice();
+  refresh();
+}
+
+/**
+ * その人の最新の行（今の枠）を読み直す。{ ok: false } は読み直しの失敗、row が無ければ名簿に無い。
+ * 名簿の読み込みと同じ番人（gates.rows）を通し、券（ticket）を返す。受け取ってから当てるまでの間（呼び出し元の await）に、
+ * より新しい名簿の応答が当たることがあるので、当てる側は当てる直前に gates.rows.current(ticket) を確かめる（Codex TASK-0093 R1・TASK-0095）
+ */
 async function freshRow(email) {
+  const ticket = gates.rows.begin();
   const { data, error } = await supabase.rpc("admin_usage");
-  if (error) return { ok: false };
-  return { ok: true, rows: data ?? [], row: (data ?? []).find((x) => x.email === email) ?? null };
+  gates.rows.accept(ticket);
+  if (error) return { ok: false, ticket };
+  return { ok: true, ticket, rows: data ?? [], row: (data ?? []).find((x) => x.email === email) ?? null };
 }
 
 // ---- 全体の描画 ----
 
 function renderAll() {
+  if (appClosed) return;
   document.body.classList.toggle("selecting", state.selecting && state.tab === "roster");
   for (const [id, tab] of [["tab-roster", "roster"], ["tab-cohorts", "cohorts"], ["tab-settings", "settings"]]) {
     if (state.tab === tab) $(id).setAttribute("aria-current", "page");
@@ -723,14 +947,72 @@ function renderAll() {
   renderCohortAside();
   renderSelectBar();
   renderFab();
-  $("updated-at").textContent = state.updatedAt ? formatShortDateTime(state.updatedAt) : "—";
-  const me = state.rows.find((r) => r.email === myEmail);
-  $("account-btn").textContent = (displayName(me ?? { email: myEmail }) || "?").slice(0, 1).toUpperCase();
-  if (sheet.open && sheetRender) sheetRender();
+  renderHeader();
+  if (sheet.open && sheetRender && sheetKind !== "setting") sheetRender();
 }
 
-function switchTab(tab) {
-  if (state.tab === tab) return;
+/** タブごとに、画面に出している読み込みの部分（確認の時刻は、このうち最も古い成功の時刻） */
+function tabParts(tab) {
+  const S = state.settings;
+  const F = state.fresh;
+  const stages = stagesAvailable() || F.stages.stale ? [F.stages] : [];
+  if (tab === "roster") return [F.rows];
+  if (tab === "cohorts") return [F.cohorts, ...stages];
+  return [
+    { at: S.infoAt, stale: !!S.error },
+    { at: S.modelsAt, stale: !!S.modelsError },
+    { at: S.historyAt, stale: !!S.historyError },
+    ...stages,
+  ];
+}
+
+/** ヘッダーの「確認 13:42」（今のタブの部分の、最も古い成功）。どれかを読み直せていなければ印を添える */
+function renderHeader() {
+  const v = freshnessView(tabParts(state.tab));
+  const node = $("checked-at");
+  node.replaceChildren(
+    ...[
+      v.text ?? (v.failed ? "" : "読み込み中…"),
+      v.stale || v.failed
+        ? el("span", { className: "stale-mark" }, el("span", { "aria-hidden": "true", text: " ⚠" }), v.text ? "一部は前に読んだ値" : "読み込めていない部分があります")
+        : null,
+    ].filter(Boolean),
+  );
+}
+
+/** 設定に、保存していない変更があるか（数値の編集・モデル・テンプレートの編集） */
+function unsavedSettings() {
+  const S = state.settings;
+  const parts = [];
+  if (editDirty(S.edit)) parts.push(`${settingLabel(S.edit.key, S.info?.settings)}の新しい値`);
+  if (modelDraftCount() > 0) parts.push(`モデルの変更（${modelDraftCount()} 件）`);
+  if (templateDirty?.()) parts.push("テンプレートの編集");
+  return parts;
+}
+
+/** 設定のタブを離れる前：保存していない変更があれば、編集を続けるか捨てるかを選んでもらう。移ってよければ true */
+async function confirmLeaveSettings() {
+  const parts = unsavedSettings();
+  if (!parts.length) return true;
+  const ok = await ask({
+    title: "保存していない変更を破棄しますか？",
+    lines: [`${parts.join("・")}を、まだ保存していません。`, "破棄すると、設定は今のままです。"],
+    buttons: [{ label: "編集を続ける", value: false }, { label: "破棄して移る", value: true, kind: "danger" }],
+    cancelValue: false,
+  });
+  if (!ok) return false;
+  discardSettingDrafts();
+  return true;
+}
+
+async function switchTab(tab) {
+  if (state.tab === tab) return true;
+  if (state.settings.busy) {
+    notify("設定の保存の結果を待っています。終わってから移ってください。");
+    return false;
+  }
+  if (state.tab === "settings" && !(await confirmLeaveSettings())) return false;
+  state.scroll[state.tab] = window.scrollY;
   state.tab = tab;
   if (tab !== "roster" && state.selecting) {
     state.selecting = false;
@@ -738,8 +1020,25 @@ function switchTab(tab) {
     state.selectCohortTarget = null;
   }
   renderAll();
-  window.scrollTo(0, 0);
+  // 戻ったときは、前に見ていた位置へ（選択も state に残っている）
+  window.scrollTo(0, state.scroll[tab] ?? 0);
   if (tab === "settings" && state.settings.status === "idle") loadSettingsAll();
+  return true;
+}
+
+/** 設定の要約の［今日の利用を見る］：名簿の今日の概要へ */
+async function goTodayUsage() {
+  if (!(await switchTab("roster"))) return;
+  window.scrollTo(0, 0);
+  $("overview").setAttribute("tabindex", "-1");
+  $("overview").focus({ preventScroll: true });
+}
+
+/** 名簿の概要の［直近 24 時間の利用と上限］：設定の要約へ */
+async function goSettingsSummary() {
+  if (!(await switchTab("settings"))) return;
+  window.scrollTo(0, 0);
+  $("sum-h")?.focus({ preventScroll: true });
 }
 
 function renderFab() {
@@ -763,6 +1062,11 @@ function ovItem({ label, value, unit, sub = null, subClass = "", sub2 = null, su
 function renderOverview() {
   const box = $("overview");
   const line = $("overview-line");
+  const link = $("overview-link");
+  link.hidden = state.tab !== "roster";
+  if (!link.firstChild) {
+    link.append(el("button", { type: "button", className: "link-btn", text: "直近 24 時間の利用と上限を見る（設定）", onclick: goSettingsSummary }));
+  }
   // 設定の画面は、直近 24 時間の利用を画面の中に出すので、概要は出さない
   box.hidden = state.tab === "settings";
   if (state.tab === "settings") {
@@ -1234,15 +1538,19 @@ async function openMember(email) {
   if (seq !== detailSeq) return;
   state.detailLoading = false;
   if (!isDesktop() && sheetKind !== "member") return; // 読み込み中に閉じられた
-  if (!fresh.ok) {
+  // 当てる直前に、この応答がまだ最新か確かめる。古ければ（より新しい名簿の応答が当たった）当てず、最新の名簿からその人を選び直す。
+  // 古い成功で一覧・確認の時刻・前に読んだ値の印を戻さず、古い失敗で詳細を閉じない
+  const current = gates.rows.current(fresh.ticket);
+  const row = current ? fresh.row : (state.rows.find((x) => x.email === email) ?? null);
+  if (!fresh.ok && current) {
     notify("最新の状態を読めませんでした。一覧を読み込み直してください。", "error");
     closeMember();
     return;
   }
-  applyRows(fresh.rows);
-  if (fresh.row) await loadMemberFlag(email);
+  if (fresh.ok && current) applyRows(fresh.rows);
+  if (row) await loadMemberFlag(email);
   if (seq !== detailSeq) return;
-  if (!fresh.row) {
+  if (!row) {
     closeMember();
     notify(`${email} は名簿に見つからなかったため、一覧を読み込み直しました。`, "error");
     renderAll();
@@ -3139,15 +3447,21 @@ async function removeVenue(v) {
   await refresh();
 }
 
-// ---- 設定（利用の上限・モデルのオン・オフ・変更の履歴） ----
+// ---- 設定（提案書 11 章。①直近 24 時間の要約 → ②上限と枠 → ③モデル → ④段階テンプレート → ⑤変更履歴） ----
 // 上限と履歴は DB の RPC（014：admin_get_settings・admin_update_settings・admin_settings_history）、
 // モデルの一覧は Edge Function admin-api の GET /models（カタログは TS にしか無いため）。保存はどちらも admin_update_settings。
+// 呼び出し・保存する値・範囲・確認の条件は今までと同じ。この単位で変えたのは、並べ方・「読む → ［変更］で直す」・自前の確かめ・部分ごとの状態。
+// 選んだ項目は、広い幅（1,100px 以上）は右の欄、狭い幅は下の帯「詳細を開く」からシート。編集の下書きは state に持ち、明示して捨てるまで残す。
 
 const ADMIN_API_URL = `${SUPABASE_URL}/functions/v1/admin-api`;
 
 async function loadSettingsInfo() {
   const S = state.settings;
+  const ticket = gates.info.begin();
   const { data, error } = await supabase.rpc("admin_get_settings");
+  if (appClosed) return false;
+  // 保存より前に出した読み込み・より新しい読み込みに追い越された応答は捨てる（保存のあとの値を古い値に戻さない。Codex TASK-0092 F2）
+  if (!gates.info.accept(ticket)) return true;
   if (error) {
     S.error = explainError(error);
     if (S.status !== "ok") S.status = "error";
@@ -3156,12 +3470,16 @@ async function loadSettingsInfo() {
   S.info = data;
   S.status = "ok";
   S.error = "";
+  S.infoAt = Date.now();
   return true;
 }
 
 async function loadSettingsHistory() {
   const S = state.settings;
+  const ticket = gates.history.begin();
   const { data, error } = await supabase.rpc("admin_settings_history", { p_limit: 50 });
+  if (appClosed) return false;
+  if (!gates.history.accept(ticket)) return true;
   if (error) {
     S.historyError = explainError(error);
     if (S.historyStatus !== "ok") S.historyStatus = "error";
@@ -3170,12 +3488,14 @@ async function loadSettingsHistory() {
   S.history = data ?? [];
   S.historyStatus = "ok";
   S.historyError = "";
+  S.historyAt = Date.now();
   return true;
 }
 
 /** モデルの一覧（admin-api。管理者本人のログインのトークンで呼ぶ）。resetDraft なら未保存のオン・オフを捨てる */
 async function loadModels({ resetDraft = false } = {}) {
   const S = state.settings;
+  const ticket = gates.models.begin();
   let status = 0;
   let body = null;
   try {
@@ -3189,6 +3509,8 @@ async function loadModels({ resetDraft = false } = {}) {
   } catch {
     status = 0;
   }
+  if (appClosed) return false;
+  if (!gates.models.accept(ticket)) return true;
   if (status !== 200 || !Array.isArray(body?.models)) {
     S.modelsError = status === 200 ? "モデルの一覧の形が正しくありません。" : explainApiError(status, body);
     if (S.modelsStatus !== "ok") S.modelsStatus = "error";
@@ -3205,21 +3527,30 @@ async function loadModels({ resetDraft = false } = {}) {
   for (const sc of MODEL_SCOPES) {
     pendingBy[sc.key] = !resetDraft && prev && prevDrafts && !carry.keep.includes(sc.key) && !carry.lost.includes(sc.key) ? modelChanges(prev.models, scopeSelection(prev.models, sc.key), prevDrafts[sc.key]).count : 0;
   }
-  S.models = body;
   const next = Object.fromEntries(MODEL_SCOPES.map((sc) => [sc.key, scopeSelection(body.models, sc.key)]));
   // ほかの管理者が変えた区分（基準の一覧が変わった）で、未保存の変更があるもの
   const conflicts = MODEL_SCOPES.filter((sc) => pendingBy[sc.key] > 0 && !sameIdSet(scopeList(prev, sc.key), scopeList(body, sc.key)));
   let keep = true;
   if (conflicts.length) {
-    // 基準だけが黙って新しくならないよう、乗せ直すか捨てるかを選ばせる
+    // 基準だけが黙って新しくならないよう、乗せ直すか捨てるかを選ばせる。Esc・背景は「乗せ直す」（下書きを捨てない側。保存はまだしない）
     const n = conflicts.reduce((sum, sc) => sum + pendingBy[sc.key], 0);
-    keep = confirm(
-      `読み込み直したところ、ほかの管理者がモデルの設定（${conflicts.map((sc) => sc.label).join("・")}）を変えていました。\n` +
-        `未保存の変更（${n} 件）を、新しい設定に乗せ直しますか？\n` +
-        "・OK：あなたが変えたところだけを、新しい設定に当てる\n" +
-        "・キャンセル：未保存の変更を捨てて、新しい設定を表示する",
-    );
+    keep = await ask({
+      title: "未保存のモデルの変更を、新しい設定に乗せ直しますか？",
+      lines: [
+        `読み込み直したところ、ほかの管理者がモデルの設定（${conflicts.map((sc) => sc.label).join("・")}）を変えていました。`,
+        `あなたの未保存の変更は ${n} 件です。乗せ直すと、あなたが変えたところだけを新しい設定に当てます（保存はまだしません）。`,
+      ],
+      buttons: [
+        { label: "破棄して新しい設定を表示", value: false, kind: "danger" },
+        { label: "新しい設定に乗せ直す", value: true, kind: "primary" },
+      ],
+      cancelValue: true,
+    });
+    if (appClosed) return false;
+    // 確かめているあいだに、保存や新しい読み込みで古くなった応答は当てない
+    if (!gates.models.current(ticket)) return true;
   }
+  S.models = body;
   for (const sc of MODEL_SCOPES) {
     // 未保存の変更がある区分は乗せ直す（捨てるを選んだときの、ほかの管理者が変えた区分は新しい設定のまま）。基準が同じ区分は、カタログが変わった分だけ合わせて残す
     if (pendingBy[sc.key] > 0 && (keep || !conflicts.includes(sc))) {
@@ -3234,250 +3565,776 @@ async function loadModels({ resetDraft = false } = {}) {
   }
   S.modelsStatus = "ok";
   S.modelsError = "";
+  S.modelsAt = Date.now();
   return true;
 }
 
-/** 設定の画面の 3 つを読み直す。前に読めていた部分の読み直しに失敗したら知らせる（画面は前の値のまま） */
+/**
+ * 設定の画面の 3 つを読み直す。前に読めていた部分の読み直しに失敗したら知らせる（画面は前の値のまま。その部分に「前に読んだ値」と再試行を出す）。
+ * 返り値：部分ごとに読めたか
+ */
 async function loadSettingsAll(options = {}) {
   const S = state.settings;
   for (const k of ["status", "historyStatus", "modelsStatus"]) if (S[k] === "idle") S[k] = "loading";
   renderSettings();
-  const [a, b, c] = await Promise.all([loadSettingsInfo(), loadSettingsHistory(), loadModels(options)]);
+  const [info, history, models] = await Promise.all([loadSettingsInfo(), loadSettingsHistory(), loadModels(options)]);
+  if (appClosed) return { info: false, history: false, models: false };
   const stale = [];
-  if (!a && S.status === "ok") stale.push(`上限：${S.error}`);
-  if (!b && S.historyStatus === "ok") stale.push(`履歴：${S.historyError}`);
-  if (!c && S.modelsStatus === "ok") stale.push(`モデル：${S.modelsError}`);
+  if (!info && S.status === "ok") stale.push(`上限と枠：${S.error}`);
+  if (!history && S.historyStatus === "ok") stale.push(`履歴：${S.historyError}`);
+  if (!models && S.modelsStatus === "ok") stale.push(`モデル：${S.modelsError}`);
   if (stale.length) notify("設定の一部を読み直せませんでした（前に読んだ値を出しています）。", "error", stale);
   renderSettings();
+  renderHeader();
+  return { info, history, models };
+}
+
+/** その部分だけを読み直す（部分の失敗の［再試行］） */
+function retryPart(load) {
+  return async (e) => {
+    if (e?.currentTarget) e.currentTarget.disabled = true;
+    await load();
+    if (appClosed) return;
+    renderSettings();
+    renderHeader();
+  };
+}
+const retryInfo = retryPart(loadSettingsInfo);
+const retryModels = retryPart(() => loadModels());
+const retryHistory = retryPart(loadSettingsHistory);
+const retryStages = retryPart(async () => {
+  await loadStageInfo();
+  renderAll();
+});
+
+// ---- 設定：描画 ----
+
+const settingsRow = () => state.settings.info?.settings ?? {};
+const currentOf = (key) => settingsRow()[key] ?? null;
+const labelOf = (key) => settingLabel(key, state.settings.info?.settings);
+
+/** 選んだ項目の行のフォーカスの鍵（閉じたあとに戻る入口） */
+function selFocusKey(sel) {
+  if (!sel) return null;
+  return sel.kind === "limit" ? `sel:${sel.key}` : `tpl:${sel.id}`;
+}
+
+function selName(sel) {
+  if (!sel) return "";
+  if (sel.kind === "limit") return labelOf(sel.key);
+  return state.stages.templates.find((t) => t.id === sel.id)?.name ?? "テンプレート";
+}
+
+/** 描き直しの前後で、フォーカスとカーソルの位置を保つ（data-focus-key の付いた部品） */
+function keepFocus(hosts, fn) {
+  const a = document.activeElement;
+  const inside = !!a && hosts.some((h) => h && h.contains(a));
+  const key = inside ? a.dataset?.focusKey : null;
+  const caret = inside && typeof a.selectionStart === "number" ? [a.selectionStart, a.selectionEnd] : null;
+  fn();
+  if (!key || (a.isConnected && document.activeElement === a)) return;
+  for (const h of hosts) {
+    if (h && focusKey(key, h)) {
+      const n = document.activeElement;
+      if (caret && typeof n.setSelectionRange === "function") {
+        try {
+          n.setSelectionRange(...caret);
+        } catch {
+          // 数値以外の入力欄では位置を戻せないことがある
+        }
+      }
+      return;
+    }
+  }
+}
+
+/** 選んでいた項目が無くなった（列の無いサーバー・削除されたテンプレート）なら、選択と編集を外す */
+function pruneSelection() {
+  const S = state.settings;
+  const sel = S.sel;
+  if (!sel) return;
+  if (sel.kind === "limit" && S.status === "ok" && !availableLimits(settingsRow()).some((l) => l.key === sel.key)) {
+    S.sel = null;
+    S.edit = null;
+  } else if (sel.kind === "template" && state.stages.loaded && !state.stages.templates.some((t) => t.id === sel.id)) {
+    S.sel = null;
+    notify("選んでいたテンプレートは見つかりません（削除された可能性があります）。", "warn");
+  }
 }
 
 function renderSettings() {
-  if (state.tab !== "settings") return;
-  $("settings-main").replaceChildren(usageBox(), limitsBox(), ...canvasLimitsBoxes(), ...(stagesAvailable() ? [templatesBox()] : []));
-  renderModelsBox();
-  $("settings-history").replaceChildren(historyBox());
+  if (appClosed) return;
+  pruneSelection();
+  if (state.tab !== "settings") {
+    $("settings-aside").hidden = true;
+    renderSettingsBar();
+    return;
+  }
+  keepFocus([$("view-settings"), $("settings-bar"), sheetKind === "setting" ? sheet : null], () => {
+    $("settings-summary").replaceChildren(...summaryContent().filter(Boolean));
+    $("settings-main").replaceChildren(limitsSection());
+    $("settings-models").replaceChildren(modelsSection());
+    $("settings-templates").replaceChildren(...(stagesAvailable() || state.fresh.stages.stale ? [templatesSection()] : []));
+    $("settings-history").replaceChildren(historySection());
+    renderSettingsAside();
+    renderSettingsBar();
+    if (sheet.open && sheetKind === "setting" && sheetRender) sheetRender();
+  });
+  setReloadBusy();
 }
 
-/** 見出しつきの面。読み込み中・エラーのときは中身の代わりに状態を出す */
-function settingsBox(id, title, status, error, aside, content) {
+/** 見出しつきの面。読み込み中・失敗（一度も読めていない）は中身の代わりに状態を、前に読んだ値なら上に印と再試行を出す */
+function partBox({ id, title, status, error, at, retry, side = null, content }) {
   let body;
-  if (status === "ok") body = content();
-  else if (status === "error") body = [errorBox(error, () => loadSettingsAll())];
+  if (status === "ok") body = [error ? staleLine(error, at, retry) : null, ...content()];
+  else if (status === "error") body = [errorBox(error, retry)];
   else body = [el("p", { className: "muted", text: "読み込み中…" })];
   return el(
     "section",
     { className: "box", "aria-labelledby": id },
-    el("div", { className: "box-head baseline" }, el("h3", { id, text: title }), status === "ok" ? aside : null),
+    el("div", { className: "box-head" }, el("h3", { id, text: title }), status === "ok" && side ? el("div", { className: "head-side" }, side) : null),
     ...body,
   );
 }
 
-function usageBox() {
-  const S = state.settings;
-  return settingsBox("usage-h", "直近 24 時間の利用（全体）", S.status, S.error, el("span", { className: "small muted", text: "見積額" }), () => {
-    const u = globalUsageView(S.info);
-    const out = [
-      el(
-        "div",
-        { className: "bignum num" },
-        el("span", { className: `big-n mid ${u.low ? "low" : ""}`, text: formatUsdShort(u.cost) }),
-        el("span", { className: "muted", text: u.limit === null ? `上限は${DEFAULT_SETTING_TEXT}` : `/ 上限 ${formatUsdShort(u.limit)}` }),
-      ),
-    ];
-    if (u.pct !== null) {
-      out.push(
-        bar(u.pct, u.low, "thick"),
-        el("p", { className: `small num ${u.low ? "low-text" : ""}`, text: `上限の ${u.pct}% を使用・生成 ${formatCredits(u.count)} 回` }),
-      );
-    } else {
-      out.push(el("p", { className: "small num", text: `生成 ${formatCredits(u.count)} 回。上限が既定のため、割合は出せません。` }));
-    }
-    out.push(el("p", { className: "hint", text: "全員の合計です（はっきり投入されなかったものは除く）。上限を超えると、全員が生成できなくなります。" }));
-    const top = Array.isArray(S.info?.top_users) ? S.info.top_users : [];
-    out.push(el("h4", { className: "group-title", text: "回数の多い利用者（上位 5 人）" }));
-    if (!top.length) {
-      out.push(el("p", { className: "muted small", text: "直近 24 時間の生成はありません。" }));
-    } else {
-      out.push(
-        el(
-          "ol",
-          { className: "top-users", "aria-label": "回数の多い利用者" },
-          ...top.map((t, i) => {
-            const r = state.rows.find((x) => x.email === t.email);
-            const named = r?.display_name?.trim();
-            return el(
-              "li",
-              {},
-              el("span", { className: "rank num", text: `${i + 1}` }),
-              el(
-                "span",
-                { className: "who" },
-                el("span", { className: "strong ellipsis", text: named ? r.display_name : (t.email ?? "（不明）") }),
-                named ? el("span", { className: "small muted ellipsis", text: t.email }) : null,
-              ),
-              el("span", { className: "val num", text: `${formatCredits(t.count)} 回 · ${formatUsdShort(Number(t.cost_usd ?? 0).toFixed(2))}` }),
-            );
-          }),
-        ),
-      );
-    }
-    return out;
-  });
-}
-
-function limitsBox() {
-  const S = state.settings;
-  const updated = S.info?.settings?.updated_at;
-  return settingsBox(
-    "limits-h",
-    "利用の上限",
-    S.status,
-    S.error,
-    updated ? el("span", { className: "small muted num", text: `最終変更 ${formatShortDateTime(updated)}` }) : null,
-    () => {
-      const row = S.info?.settings ?? {};
-      // 015 より前のサーバー（設定の行に新しい列が無い）では、1 回の生成の上限の欄を出さない。
-      // 019 の項目（canvas）は、次の「短い時間と Canvas の上限」の枠に出す
-      const limits = availableLimits(row).filter((l) => !l.canvas);
-      return [
-        el("div", {}, ...limits.map((spec) => limitRow(spec, row[spec.key] ?? null))),
-        el("p", {
-          className: "hint",
-          text: "「既定」はサーバーの環境変数の値です（その数値はこのコンソールからは見えません）。" +
-            "「既定に戻す」は DB の値を消して、環境変数の値に戻します。変更は次の生成からすぐに効きます。" +
-            (limits.some((l) => l.key === "job_max_credits") ? "「1 回の生成の上限」だけは環境変数の既定がなく、空欄は「上限なし」です。" : "") +
-            (limits.some((l) => l.defaultValue !== undefined && l.key !== "lipsync_max_audio_seconds")
-              ? "段階の回・講師の追加の項目は、「既定」のとき括弧の中の値で動きます（講師の 3 つの既定は仮の値です）。"
-              : "") +
-            (limits.some((l) => l.key === "lipsync_max_audio_seconds") ? "「口パクの音声の長さの上限」は、空欄（既定）のとき 60 秒です。" : ""),
-        }),
-      ];
-    },
+/** 前に読んだ値を出しているときの印（全体を最新に見せない）。その部分だけの再試行 */
+function staleLine(error, at, retry) {
+  return el(
+    "div",
+    { className: "stale-line", role: "status" },
+    el("p", {}, el("span", { "aria-hidden": "true", text: "⚠ " }), `前に読んだ値です（${checkedText(at) ?? "確認の時刻なし"}）。最新を読めませんでした：${error}`),
+    el("button", { type: "button", className: "btn", text: "再試行", onclick: retry }),
   );
 }
 
-/**
- * 019 の項目（2 分の上限・上限を数える時間・Canvas の 1 回の実行の上限）の枠。019 の前の DB（設定の行に列が無い）・読み込み前・失敗のときは枠ごと出さない
- * （読み込みの失敗は「利用の上限」の枠が出す）
- */
-function canvasLimitsBoxes() {
+function warnLine(text) {
+  return el("p", { className: "warn-line" }, el("span", { "aria-hidden": "true", text: "⚠" }), el("span", { text }));
+}
+
+/** ① 直近 24 時間の利用の要約（全員の合計の見積額・上限・割合・回数・注意・内訳）。費用はドル */
+function summaryContent() {
   const S = state.settings;
-  if (S.status !== "ok") return [];
-  const row = S.info?.settings ?? {};
-  const limits = availableLimits(row).filter((l) => l.canvas);
-  if (!limits.length) return [];
+  const head = el(
+    "div",
+    { className: "box-head" },
+    el("h3", { id: "sum-h", tabindex: "-1", text: "直近 24 時間の利用" }),
+    el(
+      "div",
+      { className: "head-side" },
+      S.infoAt ? el("span", { className: "checked num", text: checkedText(S.infoAt) }) : null,
+      // 狭い幅はヘッダーに更新のボタンが無いので、ここに置く
+      el("button", {
+        type: "button",
+        className: "icon-btn mobile-only",
+        "data-reload": "",
+        "aria-label": "最新の状態を読み込む",
+        "data-tip": "最新にする",
+        "data-focus-key": "sum-reload",
+        onclick: onReload,
+      }, icon("refresh", 18)),
+    ),
+  );
+  if (S.status === "error") return [head, errorBox(S.error, retryInfo)];
+  if (S.status !== "ok") return [head, el("p", { className: "muted", text: "読み込み中…" })];
+  const u = usageSummaryView(S.info);
+  const hasGlobal = availableLimits(settingsRow()).some((l) => l.key === "global_daily_cost_limit_usd");
   return [
-    settingsBox("canvas-limits-h", "短い時間と Canvas の上限", S.status, S.error, null, () => [
-      el("div", {}, ...limits.map((spec) => limitRow(spec, row[spec.key] ?? null))),
-      el("p", {
-        className: "hint",
-        text: "短い時間の上限は、短い時間に大量に使うのを止めます。Canvas の生成と、ChatGPT・Codex からの生成の両方に効きます。" +
-          "空欄で保存すると、既定の値（括弧の中）に戻ります。変更は次の生成からすぐに効きます。",
-      }),
-    ]),
+    head,
+    S.error ? staleLine(S.error, S.infoAt, retryInfo) : null,
+    el(
+      "div",
+      { className: "sum-figures" },
+      el("span", { className: `sum-cost num ${u.low ? "low" : ""}`, text: u.costText }),
+      el("span", { className: "sum-limit num", text: u.limitText }),
+    ),
+    u.pct !== null ? bar(u.pct, u.low, "thick") : null,
+    el(
+      "p",
+      { className: "sum-sub num" },
+      el("span", { text: "全員の合計の見積額（ドル）" }),
+      u.pctText ? el("span", { text: u.pctText }) : null,
+      el("span", { text: u.countText }),
+    ),
+    u.warn ? warnLine(u.warn) : null,
+    breakdownFold(),
+    el(
+      "div",
+      { className: "sum-actions" },
+      el("button", { type: "button", className: "link-btn", text: "今日の利用を見る（名簿）", "data-focus-key": "sum-today", onclick: goTodayUsage }),
+      hasGlobal
+        ? el("button", {
+          type: "button",
+          className: "link-btn",
+          text: "全体の上限を変更",
+          "data-focus-key": "sum-limit",
+          onclick: () => startEdit("global_daily_cost_limit_usd"),
+        })
+        : null,
+    ),
   ];
 }
 
-function limitRow(spec, current) {
-  const label = settingLabel(spec.key, state.settings.info?.settings);
-  const src = settingSource(current, spec.key);
-  const input = textInput({
-    id: `f-${++fieldSeq}`,
-    inputmode: spec.integer ? "numeric" : "decimal",
-    className: "input num",
-    placeholder: current === null
-      ? (spec.usd ? `例：${spec.min * 10}` : spec.defaultValue !== undefined ? `例：${spec.defaultValue}` : spec.credits ? "例：1,500" : "例：200")
-      : String(current),
+/** 要約の［内訳］：回数の多い利用者（上位 5 人。回数順のまま）。名簿にいる人は、押すと名簿の詳細へ */
+function breakdownFold() {
+  const S = state.settings;
+  const top = Array.isArray(S.info?.top_users) ? S.info.top_users : [];
+  const list = top.length
+    ? el(
+      "ol",
+      { className: "top-users", "aria-label": "回数の多い利用者" },
+      ...top.map((t, i) => {
+        const r = state.rows.find((x) => x.email === t.email);
+        const named = r?.display_name?.trim();
+        const name = named ? r.display_name : (t.email ?? "（不明）");
+        const who = el(
+          "span",
+          { className: "who" },
+          el("span", { className: "strong ellipsis", text: name }),
+          named ? el("span", { className: "small muted ellipsis", text: t.email }) : null,
+        );
+        return el(
+          "li",
+          {},
+          el("span", { className: "rank num", text: `${i + 1}` }),
+          r
+            ? el("button", { type: "button", className: "who-btn", "aria-label": `${name}（${t.email}）の名簿の詳細を開く`, onclick: () => openMemberFromSettings(t.email) }, who)
+            : who,
+          el("span", { className: "val num", text: `${formatCredits(t.count)} 回 · ${formatUsdShort(Number(t.cost_usd ?? 0).toFixed(2))}` }),
+        );
+      }),
+    )
+    : el("p", { className: "muted", text: "直近 24 時間の生成はありません。" });
+  const d = el(
+    "details",
+    { className: "plain-fold minor", open: S.breakdownOpen },
+    el("summary", { "data-focus-key": "sum-breakdown" }, "内訳：回数の多い利用者（上位 5 人）"),
+    el("div", { className: "fold-in" }, list),
+  );
+  d.addEventListener("toggle", () => {
+    S.breakdownOpen = d.open;
   });
-  const save = el("button", {
-    type: "button",
-    className: "btn primary",
-    text: "保存",
-    "aria-label": `${label}を保存`,
-    onclick: () => saveLimit(spec, input.value, current),
+  return d;
+}
+
+async function openMemberFromSettings(email) {
+  if (!(await switchTab("roster"))) return;
+  openMember(email);
+}
+
+/** ② 上限と枠：まとまりごとに 1 件 1 行（項目名・今の値と単位・短い対象・［変更］）。行を押すと選ぶ */
+function limitsSection() {
+  const S = state.settings;
+  const updated = S.info?.settings?.updated_at;
+  return partBox({
+    id: "limits-h",
+    title: "上限と枠",
+    status: S.status,
+    error: S.error,
+    at: S.infoAt,
+    retry: retryInfo,
+    side: updated ? el("span", { className: "meta num", text: `設定の最終変更 ${formatShortDateTime(updated)}` }) : null,
+    content: () =>
+      groupSettingLimits(availableLimits(settingsRow())).map((g) =>
+        el(
+          "div",
+          { className: "set-group" },
+          el("h4", { id: `grp-${g.id}`, text: g.label }),
+          el("ul", { className: "set-rows", "aria-labelledby": `grp-${g.id}` }, ...g.items.map(limitListRow)),
+        )
+      ),
   });
-  input.addEventListener("keydown", (e) => {
-    if (e.key === "Enter") save.click();
-  });
+}
+
+function limitListRow(spec) {
+  const S = state.settings;
+  const key = spec.key;
+  const label = labelOf(key);
+  const selected = S.sel?.kind === "limit" && S.sel.key === key;
+  const editing = S.edit?.key === key;
   return el(
-    "div",
-    { className: "set-row", "data-setting": spec.key },
-    el("div", { className: "set-head" }, el("h4", { text: label }), el("span", { className: `badge ${src.kind}`, text: src.label })),
-    el("p", { className: "set-now num" }, "今の値：", el("b", { text: formatSettingValue(spec.key, current) })),
-    el("p", { className: "hint", text: `${settingDesc(spec.key, state.settings.info?.settings)}範囲：${settingRangeText(spec.key)}。` }),
-    el("label", { for: input.id, className: "field-label", text: `新しい値（${settingRangeText(spec.key)}）` }),
+    "li",
+    { className: `set-li ${selected ? "is-selected" : ""}`, "data-setting": key },
     el(
-      "div",
-      { className: "set-edit" },
-      input,
-      save,
+      "button",
+      {
+        type: "button",
+        className: "set-item",
+        "aria-current": selected ? "true" : null,
+        "data-focus-key": `sel:${key}`,
+        onclick: () => selectSetting({ kind: "limit", key }),
+      },
+      el("span", { className: "set-name", text: label }),
+      el(
+        "span",
+        { className: "set-line" },
+        el("span", { className: "set-val num", text: settingValueText(key, currentOf(key)) + (editing ? (editDirty(S.edit) ? "（変更中・未保存）" : "（変更中）") : "") }),
+        el("span", { className: "set-target", text: settingTarget(key) }),
+      ),
+    ),
+    el("button", {
+      type: "button",
+      className: "btn set-change",
+      text: "変更",
+      "aria-label": `${label}を変更`,
+      "data-focus-key": `chg:${key}`,
+      disabled: S.busy,
+      onclick: () => startEdit(key),
+    }),
+  );
+}
+
+// ---- 設定：選ぶ・読む・直す（共通の部品：下書き・確かめ・保存。提案書 11.7・11.8） ----
+
+/** 数値の編集の下書きを捨ててよいか（保存していない入力があれば確かめる） */
+async function confirmLeaveEdit() {
+  const S = state.settings;
+  if (!S.edit) return true;
+  if (S.edit.saving) return false;
+  if (editDirty(S.edit) && !(await askDiscard(`${labelOf(S.edit.key)}の新しい値`))) return false;
+  S.edit = null;
+  return true;
+}
+
+async function selectSetting(sel) {
+  const S = state.settings;
+  if (S.busy) return;
+  const same = S.sel && S.sel.kind === sel.kind && S.sel.key === sel.key && S.sel.id === sel.id;
+  if (same) {
+    // 選んである行をもう一度押す：狭い幅はシートを開く
+    if (!isWide()) openSettingSheet();
+    return;
+  }
+  if (S.edit && !(sel.kind === "limit" && S.edit.key === sel.key) && !(await confirmLeaveEdit())) return;
+  S.sel = sel;
+  renderSettings();
+}
+
+/** ［変更］：選んで、読む欄を編集の形にする（狭い幅は編集のシートを開く） */
+async function startEdit(key) {
+  const S = state.settings;
+  if (S.busy || S.status !== "ok") return;
+  if (state.tab !== "settings" && !(await switchTab("settings"))) return;
+  if (!(S.edit && S.edit.key === key)) {
+    if (S.edit && !(await confirmLeaveEdit())) return;
+    const cur = currentOf(key);
+    S.edit = { key, text: settingInitialText(cur), initial: settingInitialText(cur), base: cur, error: "", saving: false };
+  }
+  S.sel = { kind: "limit", key };
+  renderSettings();
+  if (isWide()) focusEditInput();
+  else openSettingSheet();
+}
+
+function focusEditInput() {
+  const input = [...document.querySelectorAll("#edit-input")].find((n) => !n.closest("[hidden]"));
+  if (!input) return;
+  input.focus();
+  input.select?.();
+}
+
+/** 編集をやめる（保存していない入力があれば確かめる）。読む形に戻り、［変更］へフォーカスを戻す */
+async function cancelEdit() {
+  const S = state.settings;
+  if (!S.edit || S.edit.saving) return false;
+  if (!(await confirmLeaveEdit())) {
+    focusEditInput();
+    return false;
+  }
+  renderSettings();
+  focusKey("panel-change", isWide() ? $("settings-aside") : sheet);
+  return true;
+}
+
+/** 選択を外す（右の欄・下の帯を閉じる）。編集中なら先に確かめる。入口の行へフォーカスを戻す */
+async function closeSelection() {
+  const S = state.settings;
+  if (S.busy || !S.sel) return;
+  if (S.edit && !(await confirmLeaveEdit())) {
+    focusEditInput();
+    return;
+  }
+  const back = selFocusKey(S.sel);
+  S.sel = null;
+  if (sheet.open && sheetKind === "setting") closeSheet();
+  renderSettings();
+  focusKey(back);
+}
+
+function showEditError(message) {
+  const S = state.settings;
+  if (!S.edit) return;
+  S.edit.error = message;
+  renderSettings();
+  focusEditInput();
+}
+
+/** 保存：検査 → 今の値が読み込み直しで変わっていないか → 必要なら確かめる → 送る。失敗しても入力を残す。成功するまで今の値は変えない */
+async function saveEdit() {
+  const S = state.settings;
+  const e = S.edit;
+  if (!e || e.saving || S.busy) return;
+  const key = e.key;
+  const label = labelOf(key);
+  const r = parseSettingInput(key, e.text, label);
+  if (r.problem) return showEditError(`${r.problem}。`);
+  const cur = currentOf(key);
+  if (!sameSettingValue(cur, e.base)) {
+    e.base = cur;
+    return showEditError(`読み込み直したところ、今の値が ${settingValueText(key, cur)} に変わっていました。確かめてから、もう一度保存してください。`);
+  }
+  if (sameSettingValue(r.value, cur)) return showEditError(`今の値と同じです（${settingValueText(key, cur)}）。`);
+  // 全体の額（常に）・回数・1 回の上限・厳しくなる向きの上限は確かめる（条件は limitChangeCheck のまま）
+  const check = limitChangeCheck(key, cur, r.value, S.info);
+  if (check.confirm) {
+    const v = limitConfirmView(key, label, cur, r.value, check);
+    const ok = await ask({
+      title: v.title,
+      lines: v.lines,
+      warnings: v.warnings,
+      buttons: [{ label: "やめる", value: false }, { label: v.ok, value: true, kind: v.warnings.length ? "danger" : "primary" }],
+    });
+    if (S.edit !== e || appClosed) return;
+    if (!ok) return focusEditInput();
+    // 確かめているあいだに今の値が変わった（読み込み直し）なら、保存しない
+    if (!sameSettingValue(currentOf(key), cur)) {
+      e.base = currentOf(key);
+      return showEditError(`確かめているあいだに、今の値が ${settingValueText(key, currentOf(key))} に変わりました。もう一度確かめてから保存してください。`);
+    }
+  }
+  await commitSetting(key, r.value, `${label}を ${settingValueText(key, r.value)} にしました。`, e);
+}
+
+/** ［既定に戻す］［上限なしに戻す］：いつも確かめる（既定の数値は分からないことがある）。今が null なら出さない */
+async function resetSetting(key) {
+  const S = state.settings;
+  if (S.busy) return;
+  const cur = currentOf(key);
+  if (cur === null) return;
+  const label = labelOf(key);
+  const v = resetConfirmView(key, label, cur);
+  const ok = await ask({ title: v.title, lines: v.lines, buttons: [{ label: "やめる", value: false }, { label: v.ok, value: true, kind: "primary" }] });
+  if (!ok || appClosed) return;
+  if (!sameSettingValue(currentOf(key), cur)) {
+    notify("確かめているあいだに、今の値が変わりました。もう一度確かめてください。", "error");
+    return;
+  }
+  await commitSetting(key, null, `${label}を「${settingValueText(key, null)}」にしました。`, S.edit?.key === key ? S.edit : null);
+}
+
+/**
+ * 1 つの数値の設定を送る。送っている間は二重の操作・ほかの項目の編集・タブの移動を止める。
+ * 失敗：入力と編集の形を残し、理由を欄のそばと（閉じるまで残る）お知らせに出す。自動で送り直さない。
+ * 成功：編集を閉じ、正本を読み直してから今の値を出す。読み直せなければ「保存済み・再確認できません」と分けて知らせる
+ */
+async function commitSetting(key, value, doneMessage, edit) {
+  const S = state.settings;
+  S.busy = true;
+  if (edit) {
+    edit.saving = true;
+    edit.error = "";
+  }
+  renderSettings();
+  gates.info.invalidate();
+  gates.history.invalidate();
+  const { error } = await supabase.rpc("admin_update_settings", { p_changes: { [key]: value } });
+  gates.info.invalidate();
+  gates.history.invalidate();
+  if (appClosed) return;
+  if (error) {
+    S.busy = false;
+    const msg = `保存できませんでした。${explainError(error)}`;
+    if (edit) {
+      edit.saving = false;
+      if (S.edit === edit) edit.error = `${msg}入力は残してあります。`;
+    }
+    notify(msg, "error");
+    renderSettings();
+    focusEditInput();
+    // 保存の前後で、読み込み中だった上限・履歴の応答を捨てた。代わりを読み直して「読み込み中」のまま止めない（入力は残す。Codex TASK-0093 R2）
+    await Promise.all([loadSettingsInfo(), loadSettingsHistory()]);
+    if (appClosed) return;
+    renderSettings();
+    renderHeader();
+    return;
+  }
+  if (S.edit && S.edit.key === key) S.edit = null;
+  const read = await loadSettingsAll();
+  S.busy = false;
+  if (appClosed) return;
+  if (!read.info) {
+    notify(`${doneMessage}ただし、最新の値を読み直せませんでした（表示は前に読んだ値です）。同じ変更を送り直す必要はありません。`, "warn");
+  } else {
+    notify(doneMessage, "ok", [], { label: "変更履歴を見る", onClick: openHistory });
+  }
+  renderSettings();
+  if (!focusKey("panel-change", isWide() ? $("settings-aside") : sheet)) focusKey(`sel:${key}`);
+}
+
+/** 選んだ項目の中身（右の欄・シートで共通）。{ title, body, foot } */
+function settingPanel() {
+  const S = state.settings;
+  const sel = S.sel;
+  if (!sel) return { title: "", body: [], foot: [] };
+  if (sel.kind === "template") return templatePanel(sel.id);
+  if (S.status !== "ok") return { title: labelOf(sel.key), body: [el("p", { className: "muted", text: "読み込み中…" })], foot: [] };
+  return S.edit?.key === sel.key ? limitEditPanel(sel.key) : limitReadPanel(sel.key);
+}
+
+/** 読む形：何に効くか・今の値・適用対象・範囲・設定全体の最終変更・詳しい情報。［変更］を押すまで入力欄は出さない */
+function limitReadPanel(key) {
+  const S = state.settings;
+  const spec = settingSpec(key);
+  const cur = currentOf(key);
+  const src = settingSource(cur, key);
+  const updated = S.info?.settings?.updated_at;
+  const u = key === "global_daily_cost_limit_usd" ? usageSummaryView(S.info) : null;
+  const credits = spec?.usd && cur !== null ? usdCreditsText(cur) : null;
+  return {
+    title: labelOf(key),
+    body: [
+      el("p", { className: "read-value num", text: settingValueText(key, cur) }),
+      el(
+        "dl",
+        { className: "read-kv" },
+        el("dt", { text: "効く対象" }),
+        el("dd", { text: settingDesc(key, S.info?.settings) }),
+        el("dt", { text: "範囲" }),
+        el("dd", { className: "num", text: settingRangeText(key) }),
+        el("dt", { text: "設定の種類" }),
+        el("dd", { text: src.kind === "db" ? "個別設定（この画面で決めた値）" : `既定（個別設定なし）` }),
+        credits ? el("dt", { text: "クレジットの目安" }) : null,
+        credits ? el("dd", { className: "num", text: `${credits}（1 クレジット＝0.01 ドルの単純な換算。実際の消費は生成ごとに切り上げます）` }) : null,
+        u ? el("dt", { text: "今の利用" }) : null,
+        u ? el("dd", { className: "num", text: `直近 24 時間の見積額 ${u.costText}${u.pctText ? `（${u.pctText}）` : ""}` }) : null,
+        el("dt", { text: "最終変更" }),
+        el("dd", { className: "num", text: updated ? `${formatShortDateTime(updated)}（設定全体）` : "—" }),
+      ),
+      techDetails(key, cur),
+    ],
+    foot: [
       el("button", {
         type: "button",
-        className: "link-btn reset",
-        text: current === null ? (spec.nullText ? `${spec.nullText}のまま` : "既定のまま") : (spec.resetLabel ?? "既定に戻す"),
-        "aria-label": `${label}を${spec.resetLabel ?? "既定に戻す"}`,
-        disabled: current === null,
-        onclick: () => resetLimit(spec, current),
+        className: "btn primary",
+        text: "変更",
+        "aria-label": `${labelOf(key)}を変更`,
+        "data-focus-key": "panel-change",
+        disabled: S.busy,
+        onclick: () => startEdit(key),
+      }),
+    ],
+  };
+}
+
+/** 詳しい情報（開発の言葉・設定キー・既定の出どころ。普段は閉じる。11.3） */
+function techDetails(key, cur) {
+  const spec = settingSpec(key);
+  const since = spec?.canvas
+    ? "019"
+    : key === "lipsync_max_audio_seconds"
+    ? "017"
+    : spec?.defaultValue !== undefined
+    ? "016"
+    : key === "job_max_credits"
+    ? "015"
+    : "014";
+  const lines = [
+    el("p", { className: "tech" }, "設定キー：", el("code", { text: key }), `（DB の app_settings。admin_update_settings で保存。DB の更新 ${since} の項目）`),
+    el("p", { className: "tech", text: cur === null ? "今は DB の値が空（null）です。" : `今の DB の値：${cur}` }),
+  ];
+  if (spec && !spec.nullText) lines.push(el("p", { className: "tech", text: "空（null）のときは、サーバーの環境変数の値で動きます。その数値は、この画面からは読めません。" }));
+  else if (key === "job_max_credits") lines.push(el("p", { className: "tech", text: "空（null）は上限なしです（環境変数の既定はありません）。" }));
+  else if (spec?.defaultValue !== undefined) lines.push(el("p", { className: "tech", text: `空（null）のときの値は ${spec.defaultValue} です（DB の既定と同じ）。` }));
+  return el("details", { className: "plain-fold minor" }, el("summary", { "data-focus-key": "panel-tech" }, "詳しい情報"), el("div", { className: "fold-in" }, ...lines));
+}
+
+/** 直す形：今の値 → 新しい値（単位・範囲・空欄の意味・効く対象を入力のそばに）→［保存］［既定に戻す］［やめる］ */
+function limitEditPanel(key) {
+  const S = state.settings;
+  const e = S.edit;
+  const spec = settingSpec(key);
+  const cur = currentOf(key);
+  const label = labelOf(key);
+  const input = el("input", {
+    type: "text",
+    id: "edit-input",
+    className: "input num",
+    inputmode: spec?.integer ? "numeric" : "decimal",
+    autocomplete: "off",
+    enterkeyhint: "done",
+    "aria-describedby": "edit-hint edit-desc edit-error",
+    "aria-invalid": e.error ? "true" : "false",
+    "data-focus-key": "edit-input",
+    readonly: e.saving,
+  });
+  input.value = e.text;
+  const errorNode = el("p", { className: "field-error", id: "edit-error", role: "alert", hidden: !e.error, text: e.error });
+  input.addEventListener("input", () => {
+    const wasDirty = editDirty(e);
+    e.text = input.value;
+    if (e.error) {
+      e.error = "";
+      errorNode.hidden = true;
+      input.setAttribute("aria-invalid", "false");
+    }
+    // 下の帯・一覧の「変更中・未保存」は、変わったときだけ描き直す（入力のたびに描き直さない）
+    if (wasDirty !== editDirty(e)) {
+      renderSettingsBar();
+      const row = $("settings-main").querySelector(`[data-setting="${key}"] .set-val`);
+      if (row) row.textContent = settingValueText(key, cur) + (editDirty(e) ? "（変更中・未保存）" : "（変更中）");
+    }
+  });
+  input.addEventListener("keydown", (ev) => {
+    if (ev.key === "Enter" && !ev.isComposing) {
+      ev.preventDefault();
+      saveEdit();
+    }
+  });
+  return {
+    title: `${label}を変更`,
+    body: [
+      el("dl", { className: "read-kv" }, el("dt", { text: "今の値" }), el("dd", { className: "num strong", text: settingValueText(key, cur) })),
+      el(
+        "div",
+        { className: "edit-form" },
+        el("label", { for: "edit-input", className: "field-label", text: `新しい値（${settingUnitText(key)}）` }),
+        input,
+        el("p", { className: "hint num", id: "edit-hint", text: `範囲：${settingRangeText(key)}。${settingEmptyText(key)}` }),
+        el("p", { className: "hint", id: "edit-desc", text: settingDesc(key, S.info?.settings) }),
+        errorNode,
+      ),
+    ],
+    foot: [
+      el("button", {
+        type: "button",
+        className: "btn primary",
+        text: e.saving ? "保存中…" : "保存",
+        "data-focus-key": "panel-save",
+        disabled: e.saving,
+        onclick: saveEdit,
+      }),
+      cur !== null
+        ? el("button", {
+          type: "button",
+          className: "btn",
+          text: spec?.resetLabel ?? "既定に戻す",
+          "data-focus-key": "panel-reset",
+          disabled: e.saving,
+          onclick: () => resetSetting(key),
+        })
+        : null,
+      el("button", { type: "button", className: "btn", text: "やめる", "data-focus-key": "panel-cancel", disabled: e.saving, onclick: cancelEdit }),
+    ],
+  };
+}
+
+/** 広い幅の右の欄（何も選んでいなければ出さない。空の欄を取っておかない） */
+function renderSettingsAside() {
+  const aside = $("settings-aside");
+  const S = state.settings;
+  const show = state.tab === "settings" && !!S.sel && isWide();
+  aside.hidden = !show;
+  if (!show) {
+    aside.replaceChildren();
+    return;
+  }
+  const p = settingPanel();
+  aside.replaceChildren(
+    el(
+      "div",
+      { className: "aside-head" },
+      el("h2", { id: "aside-title", tabindex: "-1", text: p.title }),
+      el("button", {
+        type: "button",
+        className: "icon-btn",
+        "aria-label": "閉じる",
+        "data-tip": "閉じる",
+        "data-focus-key": "aside-close",
+        disabled: S.busy,
+        onclick: closeSelection,
+      }, icon("close", 18, 2.2)),
+    ),
+    ...[...p.body, p.foot.length ? el("div", { className: "edit-actions" }, ...p.foot) : null, ...(p.after ?? [])].filter(Boolean),
+  );
+}
+
+/** 狭い幅の下の帯：選んだ項目の名前と［詳細を開く］（編集中は［変更を続ける］） */
+function renderSettingsBar() {
+  const bar = $("settings-bar");
+  const S = state.settings;
+  const show = state.tab === "settings" && !!S.sel && !isWide() && !appClosed;
+  bar.hidden = !show;
+  document.body.classList.toggle("setbar", show);
+  if (!show) {
+    bar.replaceChildren();
+    return;
+  }
+  const editing = S.edit && S.sel.kind === "limit" && S.edit.key === S.sel.key;
+  bar.replaceChildren(
+    el(
+      "div",
+      { className: "selectbar-inner" },
+      el(
+        "p",
+        { className: "bar-title" },
+        el("span", { className: "muted", text: editing ? (editDirty(S.edit) ? "変更中（未保存）" : "変更中") : "選択中" }),
+        selName(S.sel),
+      ),
+      el("button", {
+        type: "button",
+        className: "icon-btn",
+        "aria-label": "選択を外す",
+        "data-tip": "選択を外す",
+        "data-focus-key": "bar-close",
+        disabled: S.busy,
+        onclick: closeSelection,
+      }, icon("close", 18, 2.2)),
+      el("button", {
+        type: "button",
+        className: "btn primary",
+        text: editing ? "変更を続ける" : "詳細を開く",
+        "data-focus-key": "bar-open",
+        onclick: openSettingSheet,
       }),
     ),
   );
 }
 
-async function saveLimit(spec, text, current) {
-  clearNotice();
-  const label = settingLabel(spec.key, state.settings.info?.settings);
-  const r = parseSettingInput(spec.key, text, label);
-  if (r.problem) {
-    notify(`保存できません。${r.problem}。`, "error");
+/** 狭い幅：選んだ項目のシート（読む形・直す形。Esc は 編集 → 読む → 閉じる の順） */
+function openSettingSheet() {
+  const S = state.settings;
+  if (!S.sel) return;
+  if (isWide()) {
+    $("aside-title")?.focus();
     return;
   }
-  if (sameSettingValue(r.value, current)) {
-    notify(`${label}は既に ${formatSettingValue(spec.key, r.value)} です。`);
-    return;
-  }
-  const to = formatSettingValue(spec.key, r.value);
-  // 全体の額（常に）と 1 人の回数（下げるとき）は、生成を止めうるので確認する。すぐに止まる人がいれば警告を添える
-  const check = limitChangeCheck(spec.key, current, r.value, state.settings.info);
-  if (check.confirm) {
-    const lines = [
-      `${label}を ${formatSettingValue(spec.key, current)} → ${to} にしますか？`,
-      ...(check.note ? [check.note] : []),
-      ...check.warnings.map((w) => `注意：${w}`),
-      "（次の生成から、すぐに効きます）",
-    ];
-    if (!confirm(lines.join("\n"))) return;
-  }
-  await updateSettings({ [spec.key]: r.value }, `${label}を ${to} にしました。`);
+  openSheet("setting", () => {
+    const p = settingPanel();
+    // 取り消せない操作（p.after）があるときは、主の操作を本文の中に置き、取り消せない操作をいちばん下に分ける
+    if (p.after?.length) setSheet({ head: el("h2", { id: "sheet-title", text: p.title }), body: [...p.body, el("div", { className: "edit-actions" }, ...p.foot), ...p.after] });
+    else setSheet({ head: el("h2", { id: "sheet-title", text: p.title }), body: p.body, foot: p.foot });
+  });
+  sheetGuard = settingSheetGuard;
+  if (S.edit && S.sel.kind === "limit" && S.edit.key === S.sel.key) focusEditInput();
 }
 
-async function resetLimit(spec, current) {
-  clearNotice();
-  const label = settingLabel(spec.key, state.settings.info?.settings);
-  // 既定の数値はコンソールから見えない（今より下がるかもしれない）ので、どの項目も確認する
-  if (spec.nullText) {
-    // 環境変数の既定が無い項目（null は「上限なし」）
-    if (!confirm(`${label}を「${spec.nullText}」に戻しますか？\n今の値：${formatSettingValue(spec.key, current)}\n（次の生成から、すぐに効きます）`)) return;
-    await updateSettings({ [spec.key]: null }, `${label}を「${spec.nullText}」に戻しました。`);
-    return;
+async function settingSheetGuard(reason) {
+  const S = state.settings;
+  if (S.busy) return false;
+  if (S.edit) {
+    if (reason === "esc") {
+      // Esc の 1 回目は編集をやめて読む形へ（保存していない入力があれば確かめる）
+      await cancelEdit();
+      return false;
+    }
+    if (!(await confirmLeaveEdit())) {
+      focusEditInput();
+      return false;
+    }
   }
-  if (!confirm(`${label}を既定（サーバーの環境変数の値）に戻しますか？\n今の値：${formatSettingValue(spec.key, current)}\n（既定の数値はこのコンソールからは見えません）`)) return;
-  await updateSettings({ [spec.key]: null }, `${label}を既定に戻しました。`);
+  return true;
 }
 
-async function updateSettings(changes, doneMessage) {
-  const { error } = await supabase.rpc("admin_update_settings", { p_changes: changes });
-  if (error) notify(`保存できませんでした。${explainError(error)}`, "error");
-  else notify(doneMessage);
-  await loadSettingsAll();
-}
-
-/** モデルの面だけを描き直す（オン・オフのたびに。押したスイッチ・タブにフォーカスを戻す） */
-function renderModelsBox() {
-  const host = $("settings-models");
-  const focused = document.activeElement?.closest?.("#settings-models") ? document.activeElement.dataset?.focusKey : null;
-  host.replaceChildren(modelsBox());
-  if (focused) [...host.querySelectorAll("[data-focus-key]")].find((n) => n.dataset.focusKey === focused)?.focus();
-}
+// ---- 設定：モデル（読む表示 →［モデルを変更］で 3 区分のタブ・種類別の切り替え・保存の帯） ----
 
 /** 区分のタブを出すか（古い admin-api・古い設定の行のときは出さず、全体だけ） */
 function rolesOn() {
@@ -3492,6 +4349,94 @@ function currentScope() {
 
 function scopeLabel(key) {
   return MODEL_SCOPES.find((s) => s.key === key)?.label ?? key;
+}
+
+/** モデルの未保存の変更の数（区分の合計） */
+function modelDraftCount() {
+  const S = state.settings;
+  if (!S.models || !S.drafts) return 0;
+  return buildModelSave(S.models, effectiveDrafts(S.models, S.drafts, S.resetNull), rolesOn(), S.resetNull).count;
+}
+
+/** 設定の未保存の下書きを捨てる（タブを移るときに［破棄して移る］を選んだ） */
+function discardSettingDrafts() {
+  const S = state.settings;
+  S.edit = null;
+  if (S.models) {
+    S.drafts = Object.fromEntries(MODEL_SCOPES.map((sc) => [sc.key, scopeSelection(S.models.models ?? [], sc.key)]));
+    S.resetNull = {};
+  }
+  S.modelsEditing = false;
+}
+
+/** モデルの面だけを描き直す（オン・オフのたびに。押したスイッチ・タブにフォーカスを戻す） */
+function renderModelsBox() {
+  if (appClosed) return;
+  const host = $("settings-models");
+  keepFocus([host], () => host.replaceChildren(modelsSection()));
+}
+
+function openModelEdit() {
+  const S = state.settings;
+  if (S.busy) return;
+  S.modelsEditing = true;
+  renderModelsBox();
+  if (!focusKey(`tab:${currentScope()}`, $("settings-models"))) focusKey("models-close");
+}
+
+async function closeModelEdit() {
+  const S = state.settings;
+  if (S.modelSaving) return;
+  if (modelDraftCount() > 0) {
+    if (!(await askDiscard("モデルの変更"))) return;
+    S.drafts = Object.fromEntries(MODEL_SCOPES.map((sc) => [sc.key, scopeSelection(S.models?.models ?? [], sc.key)]));
+    S.resetNull = {};
+  }
+  S.modelsEditing = false;
+  renderModelsBox();
+  focusKey("models-edit");
+}
+
+function modelsSection() {
+  const S = state.settings;
+  const count = S.modelsStatus === "ok" ? modelDraftCount() : 0;
+  const side = S.modelsEditing
+    ? el("button", { type: "button", className: "btn", text: "編集を閉じる", "data-focus-key": "models-close", disabled: S.modelSaving, onclick: closeModelEdit })
+    : el("button", { type: "button", className: "btn", text: count ? "変更を続ける" : "モデルを変更", "data-focus-key": "models-edit", disabled: S.busy, onclick: openModelEdit });
+  return partBox({
+    id: "models-h",
+    title: "モデル",
+    status: S.modelsStatus,
+    error: S.modelsError,
+    at: S.modelsAt,
+    retry: retryModels,
+    side,
+    content: () => {
+      const roles = rolesOn();
+      const out = [
+        el(
+          "ul",
+          { className: "scope-sum", "aria-label": "区分ごとの使えるモード（保存されている設定）" },
+          ...modelScopeSummary(S.models, roles).map((x) =>
+            el(
+              "li",
+              {},
+              el("span", { className: "sname", text: x.label }),
+              el("span", { className: "snum", text: `使える ${x.usable} / ${x.total}` }),
+              el("span", { className: "spolicy", text: x.policy }),
+            )
+          ),
+        ),
+      ];
+      const unknown = activeScopes(roles).reduce((n, sc) => n + unknownList(S.models, sc.key).length, 0);
+      if (!S.modelsEditing) {
+        if (count) out.push(warnLine(`保存していないモデルの変更が ${count} 件あります。［変更を続ける］から保存するか、元に戻してください。`));
+        if (unknown) out.push(warnLine(`今のカタログに無いモデルが ${unknown} 件、設定に残っています（効果はありません。次に保存すると外します）。`));
+        return out;
+      }
+      return [...out, ...modelEditor()];
+    },
+  });
 }
 
 function modelTabs(plan) {
@@ -3529,142 +4474,149 @@ function modelTabs(plan) {
   return el("div", { className: "seg model-tabs", role: "tablist", "aria-label": "モデルの設定の対象" }, ...buttons);
 }
 
-function modelsBox() {
+/** モデルの編集の中身（今までのモデルの面と同じ操作。開発の言葉と生の ID は「詳しい情報」へ） */
+function modelEditor() {
   const S = state.settings;
   const list = S.models?.models ?? [];
   const modes = catalogModes(list);
   const roles = rolesOn();
   const scope = currentScope();
   const sLabel = scopeLabel(scope);
-  const drafts = S.drafts ? effectiveDrafts(S.models, S.drafts, S.resetNull) : null;
-  const usable = drafts ? scopeUsable(list, scope, drafts) : 0;
-  return settingsBox(
-    "models-h",
-    "モデルのオン・オフ",
-    S.modelsStatus,
-    S.modelsError,
-    el("span", { className: "small muted num", text: `${scope === "all" ? "使える" : `${sLabel}が使える`} ${usable} / ${modes.length}` }),
-    () => {
-      const plan = buildModelSave(S.models, drafts, roles, S.resetNull);
-      const draft = drafts[scope];
-      const out = [];
-      if (roles) out.push(modelTabs(plan));
-      const panel = [];
-      if (scope === "all") {
-        panel.push(
-          el("p", {
-            className: "hint",
-            text: "サーバーの環境変数で許可されたものだけをオンにできます（「サーバー側で無効」は押せません）。保存するまで反映されません。",
-          }),
-        );
-        if (S.models.console_enabled_models === null) {
-          panel.push(el("p", { className: "note-box", text: "今は制限なしです（サーバーで許可されたモデルがすべてオン）。" }));
-        }
-        const notice = roleListNotice(S.models);
-        if (notice) panel.push(el("p", { className: "note-box", text: notice }));
-      } else {
-        panel.push(
-          el("p", {
-            className: "hint",
-            text: `${sLabel}が使えるモデルを選びます。全体でオフのモデルは、ここでは変えられません。管理者には区分の制限はかかりません（全体の設定に従います）。`,
-          }),
-        );
-        if (scopeList(S.models, scope) === null) {
-          panel.push(el("p", { className: "note-box", text: `今は制限なしです（全体でオンのモデルは、これから足すモデルも含めて、${sLabel}もすべて使えます。口パクなど明示が要るモデルは、このタブでオンにしたものだけ）。` }));
-        }
-        // 保存されている一覧が明示（null でない）のときは、全部オンに見えても出す（古い ID を外すだけの保存は明示の一覧のまま残るため）。
-        // 一覧が null で未保存のオフがあるだけなら「元に戻す」で足りる
-        if (Array.isArray(scopeList(S.models, scope)) && !S.resetNull[scope]) {
-          panel.push(
-            el("p", { className: "small muted", text: "今は一覧で決めています。新しく足したモデルは自動では使えるようになりません。" }),
-            el("button", {
-              type: "button",
-              className: "btn restore-null",
-              text: "制限なしに戻す",
-              onclick: () => {
-                if (!confirm(`${sLabel}の制限をなくしますか？\n全体でオンのモデルは、これから足すモデルも含めて、${sLabel}もすべて使えるようになります。\n口パクなど、明示が要るモデルは使えなくなります（使わせるには、このタブでオンにして保存します）。\n（保存するまで反映されません）`)) return;
-                // 印だけを持つ。この区分の下書きは、表示・件数・確認の文・保存のたびに、今の全体の下書きから作る（effectiveDrafts）
-                S.resetNull[scope] = true;
-                renderModelsBox();
-              },
-            }),
-          );
-        }
-      }
-      // 今のカタログに無いモデルの ID（どの区分の一覧にも）。次に保存すると外す
-      let unknownCount = 0;
-      for (const sc of activeScopes(roles)) {
-        const unknown = unknownList(S.models, sc.key);
-        unknownCount += unknown.length;
-        if (unknown.length) {
-          const where = sc.key === "all" ? "設定" : `${sc.label}の一覧`;
-          panel.push(warnBox(`今のカタログに無いモデルの ID が ${unknown.length} 件、${where}に残っています（効果はありません。次に保存すると外します）：${listText(unknown, 6)}`));
-        }
-      }
-      if (!list.length) panel.push(el("p", { className: "muted", text: "モデルがありません。" }));
-      for (const g of groupModels(list)) {
-        panel.push(
-          el(
-            "div",
-            { className: "model-group" },
-            el("h4", { className: "group-title", text: `${g.label}（${g.models.length}）` }),
-            el("div", { className: "menu" }, ...g.models.map((m) => modelItem(m, scope))),
-          ),
-        );
-      }
-      out.push(
-        roles
-          ? el("div", { id: "model-panel", className: "model-panel", role: "tabpanel", "aria-labelledby": `model-tab-${scope}` }, ...panel)
-          : el("div", { className: "model-panel" }, ...panel),
+  const drafts = effectiveDrafts(S.models, S.drafts, S.resetNull);
+  const usable = scopeUsable(list, scope, drafts);
+  const plan = buildModelSave(S.models, drafts, roles, S.resetNull);
+  const out = [];
+  if (roles) out.push(modelTabs(plan));
+  const panel = [el("p", { className: "set-target num", text: `${scope === "all" ? "使える" : `${sLabel}が使える`}モード ${usable} / ${modes.length}（未保存の変更を含む）` })];
+  if (scope === "all") {
+    panel.push(el("p", { className: "hint", text: "サーバーで許可されたものだけをオンにできます（「サーバー側で無効」は押せません）。保存するまで反映されません。" }));
+    if (S.models.console_enabled_models === null) {
+      panel.push(el("p", { className: "note-box", text: "今は制限なしです（サーバーで許可されたモデルがすべてオン）。" }));
+    }
+    const notice = roleListNotice(S.models);
+    if (notice) panel.push(el("p", { className: "note-box", text: notice }));
+  } else {
+    panel.push(
+      el("p", {
+        className: "hint",
+        text: `${sLabel}が使えるモデルを選びます。全体でオフのモデルは、ここでは変えられません。管理者には区分の制限はかかりません（全体の設定に従います）。`,
+      }),
+    );
+    if (scopeList(S.models, scope) === null) {
+      panel.push(el("p", { className: "note-box", text: `今は制限なしです（全体でオンのモデルは、これから足すモデルも含めて、${sLabel}もすべて使えます。口パクなど明示が要るモデルは、このタブでオンにしたものだけ）。` }));
+    }
+    // 保存されている一覧が明示（null でない）のときは、全部オンに見えても出す（古い ID を外すだけの保存は明示の一覧のまま残るため）。
+    // 一覧が null で未保存のオフがあるだけなら「元に戻す」で足りる
+    if (Array.isArray(scopeList(S.models, scope)) && !S.resetNull[scope]) {
+      panel.push(
+        el("p", { className: "hint", text: "今は一覧で決めています。新しく足したモデルは自動では使えるようになりません。" }),
+        el("button", {
+          type: "button",
+          className: "btn restore-null",
+          text: "制限なしに戻す",
+          disabled: S.modelSaving,
+          onclick: async () => {
+            const ok = await ask({
+              title: `${sLabel}の制限をなくしますか？`,
+              lines: [
+                `全体でオンのモデルは、これから足すモデルも含めて、${sLabel}もすべて使えるようになります。`,
+                "口パクなど、明示が要るモデルは使えなくなります（使わせるには、このタブでオンにして保存します）。",
+                "保存するまで反映されません。",
+              ],
+              buttons: [{ label: "やめる", value: false }, { label: "制限なしに戻す", value: true, kind: "primary" }],
+            });
+            if (!ok) return;
+            // 印だけを持つ。この区分の下書きは、表示・件数・確認の文・保存のたびに、今の全体の下書きから作る（effectiveDrafts）
+            S.resetNull[scope] = true;
+            renderModelsBox();
+          },
+        }),
       );
-      const dirty = plan.count > 0;
-      const on = plan.entries.reduce((n, e) => n + e.on.length, 0);
-      const off = plan.entries.reduce((n, e) => n + e.off.length, 0);
-      const detail = roles
-        ? `全体 ${plan.counts.all}・受講者 ${plan.counts.student}・AIKENメンバー ${plan.counts.member}`
-        : `オン ${on}・オフ ${off}`;
-      out.push(
+    }
+  }
+  // 今のカタログに無いモデルの ID（どの区分の一覧にも）。次に保存すると外す。件数と影響はここ、ID は詳しい情報へ
+  let unknownCount = 0;
+  const unknownIds = [];
+  for (const sc of activeScopes(roles)) {
+    const unknown = unknownList(S.models, sc.key);
+    unknownCount += unknown.length;
+    if (unknown.length) {
+      const where = sc.key === "all" ? "設定" : `${sc.label}の一覧`;
+      panel.push(warnBox(`今のカタログに無いモデルが ${unknown.length} 件、${where}に残っています（効果はありません。次に保存すると外します）。`));
+      unknownIds.push(`${where}：${unknown.join("、")}`);
+    }
+  }
+  if (!list.length) panel.push(el("p", { className: "muted", text: "モデルがありません。" }));
+  for (const g of groupModels(list)) {
+    panel.push(
+      el(
+        "div",
+        { className: "model-group" },
+        el("h4", { className: "group-title", text: `${g.label}（${g.models.length}）` }),
+        el("div", { className: "menu" }, ...g.models.map((m) => modelItem(m, scope))),
+      ),
+    );
+  }
+  panel.push(
+    el(
+      "details",
+      { className: "plain-fold minor" },
+      el("summary", {}, "詳しい情報（モデルの ID など）"),
+      el(
+        "div",
+        { className: "fold-in" },
+        el("p", { className: "tech", text: "「サーバー側で無効」は、サーバーの環境変数 ENABLED_PROVIDER_MODELS で許可されていないモデルです。「参照から動画」は fal の経路だけで使えます。" }),
+        ...unknownIds.map((t) => el("p", { className: "tech", text: `カタログに無い ID（${t}）` })),
         el(
-          "div",
-          { className: "save-bar" },
-          el("span", {
-            className: `save-state num ${dirty ? "dirty" : ""}`,
-            role: "status",
-            text: dirty ? `未保存の変更 ${plan.count} 件（${detail}）` : "未保存の変更はありません",
-          }),
-          el("button", {
-            type: "button",
-            className: "btn",
-            text: "元に戻す",
-            disabled: !dirty,
-            onclick: () => {
-              S.drafts = Object.fromEntries(MODEL_SCOPES.map((sc) => [sc.key, scopeSelection(list, sc.key)]));
-              S.resetNull = {};
-              renderModelsBox();
-            },
-          }),
-          el("button", {
-            type: "button",
-            className: "btn primary",
-            text: "モデルの設定を保存",
-            disabled: !dirty && !unknownCount,
-            onclick: saveModels,
-          }),
+          "ul",
+          { className: "tech" },
+          ...modes.map(({ model, mode }) => el("li", {}, `${model.label}（${mode.label}）：`, el("code", { text: mode.model_id }))),
         ),
-      );
-      return out;
-    },
+      ),
+    ),
   );
-}
-
-const LOCKED_TITLE = "サーバーの環境変数（ENABLED_PROVIDER_MODELS）で許可されていないため、ここでは変えられません";
-
-/** 押せない理由（title の文）。kind は scopeModeStatus の kind */
-function lockedTitle(kind, scope) {
-  if (kind === "global_off") return `全体でオフのため、${scopeLabel(scope)}のタブでは変えられません。全体のタブでオンにしてください`;
-  if (kind === "server_off") return LOCKED_TITLE;
-  if (kind === "route_off") return "今の振り分け・設定では使えないため、オンにできません（「参照から動画」は fal の経路だけで使えます）";
-  return "サーバー側で無効、または全体でオフのため、ここでは変えられません";
+  out.push(
+    roles
+      ? el("div", { id: "model-panel", className: "model-panel", role: "tabpanel", "aria-labelledby": `model-tab-${scope}` }, ...panel)
+      : el("div", { className: "model-panel" }, ...panel),
+  );
+  const dirty = plan.count > 0;
+  const on = plan.entries.reduce((n, e) => n + e.on.length, 0);
+  const off = plan.entries.reduce((n, e) => n + e.off.length, 0);
+  const detail = roles
+    ? `全体 ${plan.counts.all}・受講者 ${plan.counts.student}・AIKENメンバー ${plan.counts.member}`
+    : `オン ${on}・オフ ${off}`;
+  out.push(
+    el(
+      "div",
+      { className: "save-bar" },
+      el("span", {
+        className: `save-state num ${dirty ? "dirty" : ""}`,
+        role: "status",
+        text: dirty ? `未保存の変更 ${plan.count} 件（${detail}）` : "未保存の変更はありません",
+      }),
+      el("button", {
+        type: "button",
+        className: "btn",
+        text: "元に戻す",
+        disabled: !dirty || S.modelSaving,
+        onclick: () => {
+          S.drafts = Object.fromEntries(MODEL_SCOPES.map((sc) => [sc.key, scopeSelection(list, sc.key)]));
+          S.resetNull = {};
+          renderModelsBox();
+        },
+      }),
+      el("button", {
+        type: "button",
+        className: "btn primary",
+        text: S.modelSaving ? "保存中…" : "モデルの設定を保存",
+        "data-focus-key": "models-save",
+        disabled: (!dirty && !unknownCount) || S.modelSaving || S.busy,
+        onclick: saveModels,
+      }),
+    ),
+  );
+  return out;
 }
 
 /** 開閉の領域の id を重ねないための連番 */
@@ -3690,7 +4642,8 @@ function modelItem(m, scope) {
   // 数える行（「○ つのうち ○ つ」）：押せる行すべて（参照を含む）
   const free = modes.filter((mode) => !lockedFn(mode));
   const single = modes.length === 1 ? modes[0] : null;
-  const sub = [single?.label, m.provider, m.price?.text, single?.model_id].filter(Boolean).join(" · ");
+  // 生の ID（model_id）は詳しい情報へ。提供元と価格はここに残す
+  const sub = [single?.label, m.provider, m.price?.text].filter(Boolean).join(" · ");
   const lockKinds = [...new Set(core.map((mode) => statusOf(mode, false)).filter((st) => st.locked).map((st) => st.kind))];
 
   let stateKind;
@@ -3724,8 +4677,9 @@ function modelItem(m, scope) {
     type: "checkbox",
     role: "switch",
     checked: ms === "on" || (ms === "locked" && core.some((mode) => draft.has(mode.model_id))),
-    disabled: ms === "locked",
-    "aria-label": single ? `${m.label}：${single.label}` : `${m.label}：まとめて`,
+    disabled: ms === "locked" || S.modelSaving,
+    // 押せない理由は、となりの状態の文字（「サーバー側で無効」「全体でオフ」など）でも見える。読み上げにも添える
+    "aria-label": `${single ? `${m.label}：${single.label}` : `${m.label}：まとめて`}${ms === "locked" ? `（${stateText}）` : ""}`,
   });
   input.indeterminate = ms === "mixed";
   input.setAttribute("aria-checked", ms === "mixed" ? "mixed" : String(input.checked));
@@ -3737,23 +4691,20 @@ function modelItem(m, scope) {
     renderModelsBox();
   });
 
-  let title = null;
-  if (ms === "locked") title = modes.length ? lockedTitle(lockKinds.length === 1 ? lockKinds[0] : "", scope) : "振り分け先の経路が無いため、切り替えられません";
-  else if (free.length < modes.length) title = "押せないモード（サーバー側で無効・全体でオフ）は変わりません";
-
   // 一部だけオンのとき、閉じていても分かるよう「2 つのうち 1 つ」を添える
   const onCount = free.filter((mode) => draft.has(mode.model_id)).length;
   const multi = modes.length > 1;
   const tstate = el(
     "span",
-    { className: `tstate mstate ${multi ? "clickable" : ""} ${stateKind}`, title },
+    { className: `tstate mstate ${multi ? "clickable" : ""} ${stateKind}` },
     stateText,
     changed ? el("span", { className: "changed", text: "（未保存）" }) : null,
     ms === "mixed" ? el("span", { className: "tcount small muted", text: `${free.length} つのうち ${onCount} つ` }) : null,
+    free.length < modes.length && ms !== "locked" && multi ? el("span", { className: "tcount small muted", text: "押せないモードは変わりません" }) : null,
   );
   const nameBlock = el("span", { className: "tlabel" }, el("span", { className: "model-name", text: m.label }), sub ? el("span", { className: "small muted ellipsis", text: sub }) : null);
   // スイッチを切り替えるのは、スイッチそのものを押したときだけ（label の範囲はスイッチだけ。名前は aria-label で付けている）
-  const switchLabel = (extra = "") => el("label", { className: `toggle master switch-only ${extra} ${ms === "locked" ? "locked" : ""}`, title }, input);
+  const switchLabel = (extra = "") => el("label", { className: `toggle master switch-only ${extra} ${ms === "locked" ? "locked" : ""}` }, input);
 
   let row;
   let wrap = null;
@@ -3823,8 +4774,8 @@ function modeToggle(m, mode, scope) {
     type: "checkbox",
     role: "switch",
     checked: on && mode.collided !== true, // 重なって使えない行は、同じ ID の行の状態を映さない（チェックなし）。使えない行でも、保存済みの一覧に残っていればチェックのまま（文言で「一覧には残っています」と示し、オフにはできる）
-    disabled: st.locked,
-    "aria-label": `${m.label}：${mode.label}`,
+    disabled: st.locked || S.modelSaving,
+    "aria-label": `${m.label}：${mode.label}${st.locked ? `（${st.text}）` : ""}`,
   });
   input.dataset.focusKey = mode.model_id;
   input.addEventListener("change", () => {
@@ -3838,83 +4789,150 @@ function modeToggle(m, mode, scope) {
   });
   return el(
     "label",
-    {
-      className: `toggle sub ${st.locked ? "locked" : ""}`,
-      title: st.locked ? lockedTitle(st.kind, scope) : null,
-    },
-    el("span", { className: "tlabel" }, el("span", { className: "mode-name", text: mode.label }), el("span", { className: "small muted ellipsis", text: mode.model_id })),
+    { className: `toggle sub ${st.locked ? "locked" : ""}` },
+    el("span", { className: "tlabel" }, el("span", { className: "mode-name", text: mode.label })),
     el("span", { className: `tstate ${st.kind}` }, st.text, on !== modeBaseOn(mode, scope) && (!st.locked || st.kind === "route_off") ? el("span", { className: "changed", text: "（未保存）" }) : null),
     input,
   );
 }
 
+/** モデルの保存：自前の確かめ（変えた区分とモデルは同じダイアログの内訳に）→ 直前の読み直しで競合を見る → 送る。送っている間は重ねない */
 async function saveModels() {
   clearNotice();
   const S = state.settings;
+  if (S.busy || S.modelSaving) return;
   const roles = rolesOn();
   const plan = buildModelSave(S.models, effectiveDrafts(S.models, S.drafts, S.resetNull), roles, S.resetNull);
   if (!plan.entries.length) return;
-  const labelOf = modelLabeler(S.models.models);
-  if (!confirm(saveConfirmLines(plan, labelOf).join("\n"))) return;
-  for (const warning of emptyScopeWarnings(plan)) if (!confirm(warning)) return;
-  // 保存の直前に読み直す（確認のダイアログの間に、ほかの管理者が変えていないか）。3 つの一覧のどれかが変わっていたら保存しない
-  const fresh = await supabase.rpc("admin_get_settings");
-  if (fresh.error) {
-    notify(`保存できませんでした。${explainError(fresh.error)}`, "error");
-    return;
+  const labelOfModel = modelLabeler(S.models.models);
+  const lines = saveConfirmLines(plan, labelOfModel);
+  const ok = await ask({
+    title: lines[0],
+    lines: ["変えた区分とモデルは、下の内訳のとおりです。", "次の生成から、すぐに効きます。"],
+    detail: lines.slice(1, -1),
+    buttons: [{ label: "やめる", value: false }, { label: "保存する", value: true, kind: "primary" }],
+  });
+  if (!ok || appClosed) return;
+  for (const warning of emptyScopeWarnings(plan)) {
+    const sure = await ask({
+      title: "生成できなくなる区分があります。保存しますか？",
+      lines: [warning.replace(/本当に保存しますか？$/, "").trim()],
+      buttons: [{ label: "やめる", value: false }, { label: "それでも保存する", value: true, kind: "danger" }],
+    });
+    if (!sure || appClosed) return;
   }
-  const drift = changedScopes(fresh.data?.settings, S.models, roles);
-  if (drift.length) {
-    notify(`読み込んだあとに、ほかの管理者がモデルの設定（${drift.join("・")}）を変えたため、保存しませんでした。最新の設定を読み込み直しました。`, "error");
-    await loadSettingsAll();
-    return;
+  S.busy = true;
+  S.modelSaving = true;
+  renderModelsBox();
+  let saved = false;
+  try {
+    // 保存の直前に読み直す（確認のダイアログの間に、ほかの管理者が変えていないか）。3 つの一覧のどれかが変わっていたら保存しない
+    const fresh = await supabase.rpc("admin_get_settings");
+    if (appClosed) return;
+    if (fresh.error) {
+      notify(`保存できませんでした。${explainError(fresh.error)}（変更は残してあります）`, "error");
+      return;
+    }
+    const drift = changedScopes(fresh.data?.settings, S.models, roles);
+    if (drift.length) {
+      notify(`読み込んだあとに、ほかの管理者がモデルの設定（${drift.join("・")}）を変えたため、保存しませんでした。最新の設定を読み込み直しました。`, "error");
+      S.busy = false;
+      S.modelSaving = false;
+      await loadSettingsAll();
+      return;
+    }
+    for (const g of [gates.info, gates.models, gates.history]) g.invalidate();
+    const { error } = await supabase.rpc("admin_update_settings", { p_changes: plan.changes });
+    for (const g of [gates.info, gates.models, gates.history]) g.invalidate();
+    if (appClosed) return;
+    if (error) {
+      notify(`保存できませんでした。${explainError(error)}（変更は残してあります）`, "error");
+      S.busy = false;
+      S.modelSaving = false;
+      await loadSettingsAll();
+      return;
+    }
+    saved = true;
+    const on = plan.entries.reduce((n, e) => n + e.on.length, 0);
+    const off = plan.entries.reduce((n, e) => n + e.off.length, 0);
+    const where = roles ? `${plan.entries.map((e) => e.label).join("・")}：` : "";
+    const read = await loadSettingsAll({ resetDraft: true });
+    if (appClosed) return;
+    S.modelsEditing = false;
+    if (!read.models) notify(`モデルの設定を保存しました（${where}オン ${on} 件・オフ ${off} 件）。ただし、最新の一覧を読み直せませんでした。同じ変更を送り直す必要はありません。`, "warn");
+    else notify(`モデルの設定を保存しました（${where}オン ${on} 件・オフ ${off} 件）。`, "ok", [], { label: "変更履歴を見る", onClick: openHistory });
+  } finally {
+    S.busy = false;
+    S.modelSaving = false;
+    if (!appClosed) {
+      renderSettings();
+      focusKey(saved ? "models-edit" : "models-save");
+    }
   }
-  const { error } = await supabase.rpc("admin_update_settings", { p_changes: plan.changes });
-  if (error) {
-    notify(`保存できませんでした。${explainError(error)}`, "error");
-    await loadSettingsAll();
-    return;
-  }
-  const on = plan.entries.reduce((n, e) => n + e.on.length, 0);
-  const off = plan.entries.reduce((n, e) => n + e.off.length, 0);
-  const where = roles ? `${plan.entries.map((e) => e.label).join("・")}：` : "";
-  notify(`モデルの設定を保存しました（${where}オン ${on} 件・オフ ${off} 件）。`);
-  await loadSettingsAll({ resetDraft: true });
 }
 
-function historyBox() {
+// ---- 設定：変更履歴（初めは閉じる。読むだけ） ----
+
+function historySection() {
   const S = state.settings;
-  return settingsBox("history-h", "変更の履歴", S.historyStatus, S.historyError, el("span", { className: "small muted", text: "新しい順・直近 50 件" }), () => {
-    if (!S.history.length) return [el("p", { className: "muted small", text: "まだ変更はありません。" })];
-    const labelOf = S.models ? modelLabeler(S.models.models) : (id) => id;
+  let content;
+  if (S.historyStatus === "ok") {
+    const labelOfModel = S.models ? modelLabeler(S.models.models) : (id) => id;
     const shown = S.history.slice(0, S.historyShown);
     const rest = S.history.length - shown.length;
-    return [
-      el(
-        "ol",
-        { className: "history", "aria-label": "変更の履歴" },
-        ...shown.map((h) =>
-          el(
-            "li",
-            {},
-            el("span", { className: "hmeta num", text: `${formatDateTime(h.changed_at)} · ${h.changed_by_email ?? "変更した人は不明"}` }),
-            el("ul", {}, ...settingsDiff(h.before_values, h.after_values, labelOf).map((t) => el("li", { text: t }))),
-          )
-        ),
-      ),
+    content = [
+      S.historyError ? staleLine(S.historyError, S.historyAt, retryHistory) : null,
+      S.history.length
+        ? el(
+          "ol",
+          { className: "history", "aria-label": "変更履歴" },
+          ...shown.map((h) =>
+            el(
+              "li",
+              {},
+              el("span", { className: "hmeta num", text: `${formatDateTime(h.changed_at)} · ${h.changed_by_email ?? "変更した人は不明"}` }),
+              el("ul", {}, ...settingsDiff(h.before_values, h.after_values, labelOfModel).map((t) => el("li", { text: t }))),
+            )
+          ),
+        )
+        : el("p", { className: "muted", text: "まだ変更はありません。" }),
       rest > 0
         ? el("button", {
           type: "button",
           className: "link-btn",
           text: `さらに表示（残り ${rest} 件）`,
+          "data-focus-key": "history-more",
           onclick: () => {
             S.historyShown += 10;
-            $("settings-history").replaceChildren(historyBox());
+            renderSettings();
           },
         })
         : null,
     ];
+  } else if (S.historyStatus === "error") {
+    content = [errorBox(S.historyError, retryHistory)];
+  } else {
+    content = [el("p", { className: "muted", text: "読み込み中…" })];
+  }
+  const d = el(
+    "details",
+    { className: "plain-fold", id: "history-fold", open: S.historyOpen },
+    el("summary", { "data-focus-key": "history" }, el("span", { text: "変更履歴" }), el("span", { className: "meta", text: "新しい順・直近 50 件" })),
+    el("div", { className: "fold-in" }, ...content),
+  );
+  d.addEventListener("toggle", () => {
+    S.historyOpen = d.open;
   });
+  return el("section", { className: "box tight", "aria-label": "変更履歴" }, d);
+}
+
+/** 保存のお知らせの［変更履歴を見る］：設定の変更履歴を開いて、そこへ移る */
+async function openHistory() {
+  if (state.tab !== "settings" && !(await switchTab("settings"))) return;
+  state.settings.historyOpen = true;
+  renderSettings();
+  $("history-fold")?.scrollIntoView({ block: "start" });
+  focusKey("history");
 }
 
 // ---- 段階（016：セミナーの段階）----
@@ -3926,6 +4944,9 @@ function emptyStageState() {
   return {
     available: false,
     loaded: false,
+    /** テンプレートの一覧（名前と段階）を最後に読めた時刻（ms）と、最後の読み込みの失敗 */
+    templatesAt: null,
+    templatesError: "",
     /** cohorts の新しい列：id → { id, credit_mode, stage_template_id, stages_applied_at } */
     cohortInfo: new Map(),
     stages: [],
@@ -3985,11 +5006,16 @@ const memberHasStageGrants = (email) => state.stages.memberFlags.get(email) ?? f
  */
 async function loadStageInfo() {
   const S = state.stages;
+  const ticket = gates.stages.begin();
   const c = await supabase.from("cohorts").select("id, credit_mode, stage_template_id, stages_applied_at");
   if (c.error) {
+    if (!gates.stages.accept(ticket)) return true;
     if (isMissingSchemaError(c.error)) {
       Object.assign(S, emptyStageState(), { loaded: true });
       setStageDbReady(false);
+      state.fresh.stages = { at: Date.now(), stale: false };
+    } else {
+      state.fresh.stages.stale = true;
     }
     return false;
   }
@@ -4000,6 +5026,7 @@ async function loadStageInfo() {
     supabase.from("cohort_instructors").select("cohort_id, email"),
     supabase.rpc("admin_get_settings"),
   ]);
+  if (!gates.stages.accept(ticket)) return true;
   S.available = true;
   S.loaded = true;
   setStageDbReady(true);
@@ -4007,8 +5034,13 @@ async function loadStageInfo() {
   if (!st.error) S.stages = st.data ?? [];
   if (!tp.error) S.templates = tp.data ?? [];
   if (!ti.error) S.templateItems = ti.data ?? [];
+  // テンプレート（名前と段階）の読み込みの成功は、段階の情報全体とは別に持つ（一度も読めていないのに「前に読んだ値」「まだありません」と出さない）
+  if (!tp.error && !ti.error) S.templatesAt = Date.now();
+  S.templatesError = tp.error || ti.error ? explainError(tp.error || ti.error) : "";
   if (!ins.error) S.instructors = ins.data ?? [];
   if (!set.error) S.limitT = set.data?.settings?.stage_grant_total_limit ?? 10000;
+  const partial = [st, tp, ti, ins, set].some((x) => x.error);
+  state.fresh.stages = partial ? { at: state.fresh.stages.at ?? null, stale: true } : { at: Date.now(), stale: false };
   return true;
 }
 
@@ -4384,36 +5416,133 @@ async function saveInstructors(c, section) {
   await refresh();
 }
 
-// ---- テンプレート（設定の画面） ----
+// ---- テンプレート（設定の画面。一覧 → 選ぶと読む欄（［変更］［削除］）→ 編集のシート） ----
 
-function templatesBox() {
+/** テンプレートの編集のシートに、保存していない入力があるか（開いている間だけ関数が入る） */
+let templateDirty = null;
+
+function templateCounts(id) {
+  const its = templateItemsOf(id);
+  const count = (k) => its.filter((i) => i.day_kind === k).length;
+  return `Day1 ${count("day1")} 段階・ブリッジワーク ${count("bridge")} 段階・Day2 ${count("day2")} 段階`;
+}
+
+function templatesSection() {
   const S = state.stages;
+  const sel = state.settings.sel;
   const items = S.templates.map((t) => {
-    const its = templateItemsOf(t.id);
-    const count = (k) => its.filter((i) => i.day_kind === k).length;
+    const selected = sel?.kind === "template" && sel.id === t.id;
     return el(
       "li",
-      { className: "template-item" },
+      { className: `set-li ${selected ? "is-selected" : ""}` },
       el(
-        "div",
-        { className: "template-text" },
-        el("span", { className: "strong ellipsis", text: t.name }, t.active ? null : el("span", { className: "small muted", text: "（使わない）" })),
-        el("span", { className: "small muted num", text: `Day1 ${count("day1")} 段階・ブリッジワーク ${count("bridge")} 段階・Day2 ${count("day2")} 段階` }),
-        t.note ? el("span", { className: "small muted ellipsis", text: t.note, title: t.note }) : null,
+        "button",
+        {
+          type: "button",
+          className: "set-item",
+          "aria-current": selected ? "true" : null,
+          "data-focus-key": `tpl:${t.id}`,
+          onclick: () => selectSetting({ kind: "template", id: t.id }),
+        },
+        el("span", { className: "set-name", text: t.name }),
+        el(
+          "span",
+          { className: "set-line" },
+          el("span", { className: "set-val num", text: templateCounts(t.id) }),
+          el("span", { className: "set-target", text: t.active ? "回の候補に出す" : "回の候補に出さない" }),
+        ),
       ),
-      el("button", { type: "button", className: "btn small-btn", text: "編集", onclick: () => openTemplateEditor(t) }),
     );
   });
   return el(
     "section",
     { className: "box", "aria-labelledby": "templates-h" },
-    el("div", { className: "box-head baseline" }, el("h3", { id: "templates-h", text: "段階のテンプレート" }), el("button", { type: "button", className: "btn small-btn", text: "テンプレートを作る", onclick: () => openTemplateEditor(null) })),
-    items.length ? el("ul", { className: "templates" }, ...items) : el("p", { className: "muted small", text: "テンプレートがまだありません。" }),
-    el("p", { className: "hint", text: "テンプレートは、回の「段階」から当てます。当てると、段階の内容が回に写されます（そのあとテンプレートを直しても、すでに当てた回は変わりません）。" }),
+    el(
+      "div",
+      { className: "box-head" },
+      el("h3", { id: "templates-h", text: "段階テンプレート" }),
+      el(
+        "div",
+        { className: "head-side" },
+        el("button", { type: "button", className: "btn", text: "新しく作る", "data-focus-key": "tpl-new", disabled: state.settings.busy, onclick: () => openTemplateEditor(null) }),
+      ),
+    ),
+    ...templatesBody(items),
   );
 }
 
+/** テンプレートの一覧の中身：一度も読めていない失敗は「読み込めませんでした」＋再試行、前に読めていれば「前に読んだ値」＋再試行 */
+function templatesBody(items) {
+  const S = state.stages;
+  if (S.templatesAt === null) {
+    if (S.templatesError || state.fresh.stages.stale) return [errorBox(`テンプレートの一覧を読み込めませんでした。${S.templatesError}`, retryStages)];
+    return [el("p", { className: "muted", text: "読み込み中…" })];
+  }
+  return [
+    S.templatesError || state.fresh.stages.stale ? staleLine(S.templatesError || "段階の情報を読めませんでした（通信の失敗など）。", S.templatesAt, retryStages) : null,
+    items.length ? el("ul", { className: "set-rows", "aria-label": "段階テンプレート" }, ...items) : el("p", { className: "muted", text: "テンプレートがまだありません。" }),
+  ];
+}
+
+/** 選んだテンプレートの読む欄：候補に出すか・メモ・各日の段階と合計・［変更］、一番下に分けて［削除］ */
+function templatePanel(id) {
+  const t = state.stages.templates.find((x) => x.id === id);
+  if (!t) return { title: "テンプレート", body: [el("p", { className: "muted", text: "このテンプレートは見つかりません（削除された可能性があります）。" })], foot: [] };
+  const items = templateItemsOf(id);
+  const g = groupStagesByDay(items);
+  const totals = dayTotals(items);
+  const busy = state.settings.busy;
+  return {
+    title: t.name,
+    body: [
+      el("p", {}, el("span", { className: `badge ${t.active ? "ok" : "default"}`, text: t.active ? "回の候補に出す" : "回の候補に出さない" })),
+      t.note ? el("p", { text: t.note }) : null,
+      el(
+        "ul",
+        { className: "tpl-days" },
+        ...DAY_KINDS.map((kind) =>
+          el(
+            "li",
+            {},
+            el("span", { className: "strong", text: DAY_KIND_LABELS[kind] }),
+            el("span", { className: "credits", text: g[kind].length ? `合計 ${formatCredits(totals[kind])} クレジット` : "段階なし" }),
+            g[kind].length
+              ? el("ol", {}, ...g[kind].map((s) => el("li", {}, stageName(s), el("span", { className: "credits", text: `${formatCredits(s.credits)} クレジット` }))))
+              : null,
+          )
+        ),
+      ),
+      el("p", { className: "hint", text: "テンプレートは、回の「段階」から当てます。変えても削除しても、すでに当てた回の段階は変わりません。" }),
+      el(
+        "details",
+        { className: "plain-fold minor" },
+        el("summary", {}, "詳しい情報"),
+        el(
+          "div",
+          { className: "fold-in" },
+          el("p", { className: "tech" }, "テンプレートの ID：", el("code", { text: t.id })),
+          el("p", { className: "tech num", text: `最終更新：${formatShortDateTime(t.updated_at)}` }),
+        ),
+      ),
+    ],
+    foot: [
+      el("button", { type: "button", className: "btn primary", text: "変更", "aria-label": `${t.name}を変更`, "data-focus-key": "panel-change", disabled: busy, onclick: () => openTemplateEditor(t) }),
+    ],
+    // 取り消せない操作は、欄の一番下に分けて置く
+    after: [
+      el(
+        "div",
+        { className: "danger-zone" },
+        el("p", { className: "hint", text: "削除は取り消せません。すでに当てた回は変わりません。" }),
+        el("button", { type: "button", className: "btn danger", text: "このテンプレートを削除", disabled: busy, onclick: () => deleteTemplate(t) }),
+      ),
+    ],
+  };
+}
+
+/** テンプレートの編集（全部の幅でシート。段階の行の入力が右の欄には入りきらないため） */
 function openTemplateEditor(t) {
+  if (state.settings.busy) return;
   const items = t ? templateItemsOf(t.id) : [];
   const name = textInput({ maxlength: "60", placeholder: "例：標準（Day1 に 3 つ・Day2 に 2 つ）" });
   name.value = t?.name ?? "";
@@ -4422,9 +5551,32 @@ function openTemplateEditor(t) {
   const active = el("input", { type: "checkbox", checked: t ? t.active : true });
   const g = groupStagesByDay(items);
   const editors = Object.fromEntries(DAY_KINDS.map((k) => [k, rowsEditor(k, g[k], { canStructure: true })]));
+  const snapshot = () => JSON.stringify([name.value, note.value, active.checked, DAY_KINDS.map((k) => editors[k].read())]);
+  const first = snapshot();
+  let saving = false;
+  const saveBtn = el("button", {
+    type: "button",
+    className: "btn primary big",
+    text: "保存",
+    onclick: async () => {
+      if (saving) return;
+      saving = true;
+      saveBtn.disabled = true;
+      saveBtn.textContent = "保存中…";
+      try {
+        await saveTemplate(t, { name, note, active, editors });
+      } finally {
+        saving = false;
+        if (saveBtn.isConnected) {
+          saveBtn.disabled = false;
+          saveBtn.textContent = "保存";
+        }
+      }
+    },
+  });
   openSheet("template-editor", () =>
     setSheet({
-      title: t ? "テンプレートを編集" : "テンプレートを作る",
+      title: t ? "テンプレートを変更" : "テンプレートを作る",
       body: [
         field("テンプレートの名前", name),
         field("メモ（任意）", note),
@@ -4438,15 +5590,18 @@ function openTemplateEditor(t) {
             editors[kind].node,
           )
         ),
-        el("p", { className: "hint", text: "1 つの段階の上限は 0〜10,000、1 日の合計は 10,000 までです。" }),
+        el("p", { className: "hint", text: "1 つの段階の上限は 0〜10,000、1 日の合計は 10,000 までです。保存しても、すでに当てた回は変わりません。" }),
       ],
-      foot: [
-        el("button", { type: "button", className: "btn primary big", text: "保存", onclick: () => saveTemplate(t, { name, note, active, editors }) }),
-        t ? el("button", { type: "button", className: "btn big danger-btn", text: "削除", onclick: () => deleteTemplate(t) }) : null,
-        cancelButton(),
-      ],
+      foot: [saveBtn, cancelButton("やめる")],
     })
   );
+  templateDirty = () => snapshot() !== first;
+  // 閉じる・Esc・背景：保存していない入力があれば、編集を続けるか破棄するかを選んでもらう
+  sheetGuard = async () => {
+    if (saving) return false;
+    if (templateDirty?.() && !(await askDiscard("テンプレートの入力"))) return false;
+    return true;
+  };
 }
 
 async function saveTemplate(t, f) {
@@ -4461,6 +5616,8 @@ async function saveTemplate(t, f) {
     notify("保存できません。次の項目を確認してください。", "error", problems);
     return;
   }
+  state.settings.busy = true;
+  gates.stages.invalidate();
   const { error } = await supabase.rpc("admin_save_stage_template", {
     p_template_id: t?.id ?? null,
     p_name: value.name,
@@ -4468,31 +5625,61 @@ async function saveTemplate(t, f) {
     p_active: value.active,
     p_items: value.items,
   });
+  gates.stages.invalidate();
+  state.settings.busy = false;
+  if (appClosed) return;
   if (error) {
-    notify(explainError(error), "error");
+    // シートは閉じず、入力を残す。捨てた段階の読み込みの代わりを読み直す（読み込み中のまま止めない）
+    notify(`保存できませんでした。${explainError(error)}（入力は残してあります）`, "error");
+    await loadStageInfo();
+    if (!appClosed) renderSettings();
     return;
   }
   notify(`テンプレート「${value.name}」を保存しました。`);
   closeSheet();
   await refresh();
+  focusKey(t ? `tpl:${t.id}` : "tpl-new");
 }
 
 async function deleteTemplate(t) {
-  if (!confirm(`テンプレート「${t.name}」を削除しますか？${String.fromCharCode(10)}（すでに当てた回は、段階の内容を持っているので変わりません）`)) return;
+  if (state.settings.busy) return;
+  const ok = await ask({
+    title: `テンプレート「${t.name}」を削除しますか？`,
+    lines: ["削除は取り消せません。", "すでに当てた回は、段階の内容を持っているので変わりません。"],
+    buttons: [{ label: "やめる", value: false }, { label: "削除する", value: true, kind: "danger" }],
+  });
+  if (!ok || appClosed) return;
+  state.settings.busy = true;
+  renderSettings();
+  gates.stages.invalidate();
   const { error } = await supabase.rpc("admin_delete_stage_template", { p_template_id: t.id });
+  gates.stages.invalidate();
+  state.settings.busy = false;
+  if (appClosed) return;
   if (error) {
-    notify(explainError(error), "error");
+    notify(`削除できませんでした。${explainError(error)}`, "error");
+    await loadStageInfo();
+    if (!appClosed) renderSettings();
     return;
   }
   notify(`テンプレート「${t.name}」を削除しました。`);
-  closeSheet();
+  // 消した対象の欄は閉じて、安全な入口（［新しく作る］）へ
+  if (state.settings.sel?.kind === "template" && state.settings.sel.id === t.id) state.settings.sel = null;
+  if (sheet.open) closeSheet();
   await refresh();
+  focusKey("tpl-new");
 }
 
-// ---- アカウント（スマホ） ----
+// ---- アカウント（スマホは ☰、広い幅は右上の本人のボタンから。メール・部分ごとの確認の時刻・更新・ログアウト） ----
 
 function openAccount() {
-  openSheet("account", () =>
+  openSheet("account", () => {
+    // 部分ごとの時刻は、描くたびに読み直す（シートの中で更新したあとも新しい時刻を出す。Codex TASK-0092 F3）
+    const parts = [
+      ["名簿", tabParts("roster")],
+      ["回", tabParts("cohorts")],
+      ...(state.settings.status !== "idle" ? [["設定", tabParts("settings")]] : []),
+    ];
     setSheet({
       title: "アカウント",
       body: [
@@ -4501,16 +5688,23 @@ function openAccount() {
           { className: "kv boxed num" },
           el("dt", { text: "ログイン中" }),
           el("dd", { text: myEmail }),
-          el("dt", { text: "最終更新" }),
-          el("dd", { text: state.updatedAt ? formatDateTime(state.updatedAt) : "—" }),
+          ...parts.flatMap(([label, p]) => {
+            const v = freshnessView(p);
+            return [
+              el("dt", { text: label }),
+              el("dd", { text: `${v.text ?? (v.failed ? "読み込めていません" : "読み込み中…")}${v.stale ? "（一部は前に読んだ値）" : ""}` }),
+            ];
+          }),
         ),
       ],
       foot: [
         el("button", {
           type: "button",
           className: "btn primary big",
-          text: "再読み込み",
+          text: "最新の状態を読み込む",
+          "data-reload": "",
           onclick: async () => {
+            if (refreshing > 0) return;
             clearNotice();
             await refresh();
             notify("最新の状態にしました。");
@@ -4518,8 +5712,8 @@ function openAccount() {
         }),
         el("button", { type: "button", className: "btn big", text: "ログアウト", onclick: signOut }),
       ],
-    })
-  );
+    });
+  });
 }
 
 // ---- 起動 ----
@@ -4564,7 +5758,8 @@ async function main() {
   }
 
   $("me-email").textContent = myEmail;
-  $("account-btn").setAttribute("aria-label", `アカウント（${myEmail}）`);
+  $("me-btn").setAttribute("aria-label", `アカウント（${myEmail}）：メール・確認の時刻・ログアウト`);
+  $("account-btn").setAttribute("aria-label", `アカウントと更新（${myEmail}）`);
   show("app");
   renderAll();
   await Promise.all([loadUsage(), loadCohorts(), loadStageInfo()]);
@@ -4572,13 +5767,11 @@ async function main() {
 }
 
 $("login-btn").addEventListener("click", signIn);
-$("logout-btn").addEventListener("click", signOut);
 $("denied-logout-btn").addEventListener("click", signOut);
-$("reload-btn").addEventListener("click", () => {
-  clearNotice();
-  refresh();
-});
+$("reload-btn").setAttribute("data-reload", "");
+$("reload-btn").addEventListener("click", onReload);
 $("account-btn").addEventListener("click", openAccount);
+$("me-btn").addEventListener("click", openAccount);
 $("tab-roster").addEventListener("click", () => switchTab("roster"));
 $("tab-cohorts").addEventListener("click", () => switchTab("cohorts"));
 $("tab-settings").addEventListener("click", () => switchTab("settings"));
@@ -4595,6 +5788,31 @@ desktopMq.addEventListener("change", () => {
   if (sheet.open && ["member", "cohort", "account"].includes(sheetKind)) closeSheet();
   placeNotice();
   renderAll();
+});
+// 設定の右の欄（1,100px 以上）とシートの切り替え。選択と編集の下書きは state にあるので、閉じても消えない
+wideMq.addEventListener("change", () => {
+  if (sheet.open && sheetKind === "setting" && isWide()) closeSheet();
+  renderSettings();
+});
+// 設定の Esc（シート・ダイアログが無いとき）：上から 1 つずつ（編集をやめる → 右の欄を閉じる・選択を外す）
+document.addEventListener("keydown", (e) => {
+  if (e.key !== "Escape" || e.defaultPrevented || e.isComposing) return;
+  if (sheet.open || askEl.open || state.tab !== "settings" || appClosed) return;
+  const S = state.settings;
+  if (S.busy) return;
+  if (S.edit && isWide()) {
+    e.preventDefault();
+    cancelEdit();
+  } else if (S.sel) {
+    e.preventDefault();
+    closeSelection();
+  }
+});
+// 保存していない設定の変更があるまま、ページを離れる・閉じるときは知らせる（ブラウザの確かめ）
+window.addEventListener("beforeunload", (e) => {
+  if (appClosed || !unsavedSettings().length) return;
+  e.preventDefault();
+  e.returnValue = "";
 });
 
 main().catch((e) => fatal(`エラーが発生しました：${e?.message || e}`));

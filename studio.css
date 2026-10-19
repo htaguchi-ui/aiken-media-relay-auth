@@ -1,6 +1,7 @@
 /* A.I.KEN Studio の共通の見た目（デザインの変数と部品）。
-   今これを読むのは、マイページ（index.html。/・/mypage・/mypage.html）と案内のページ（about.html。/about）だけ。
-   管理コンソール（admin.html）と講師の画面（instructor.html）は、まだそれぞれの HTML の中の CSS のまま（見た目を変えないため）。
+   これを読むのは、マイページ（index.html。/・/mypage・/mypage.html）・案内のページ（about.html。/about）・管理コンソール（admin.html。/admin）。
+   管理コンソールは、このファイルの変数と部品の上に、admin.html の中の CSS で一覧・表・シートの形を足す（同じ名前の部品は admin.html の側が勝つ）。
+   講師の画面（instructor.html）は、まだ HTML の中の CSS のまま（見た目を変えないため）。
    - 変数の名前は Canvas（canvas-app/src/styles.css）にそろえる：余白 --s1〜--s5、角丸 --r-s／--r-m／--r-l、状態の色 .tone-ok／.tone-warn など。
      値は管理コンソールの見た目（紺・IBM Plex Sans JP・角丸の大きさ）を基準にする。Canvas と 1 対 1 に対応しない色（区分の色・--low など）は管理コンソールの名前のまま。
    - 色は admin.html の値。ただし明るい配色の --muted と --low-text だけは、判断に使う数字（残り・上限・使用・目安）を明暗とも 7:1 以上にするために暗くした
@@ -88,7 +89,8 @@ code { font-family: ui-monospace, SFMono-Regular, Consolas, "Liberation Mono", m
 .badge.member { background: var(--member-bg); color: var(--member-fg); }
 .badge.admin { background: var(--admin-bg); color: var(--admin-fg); }
 .badge.instructor { background: var(--instructor-bg); color: var(--instructor-fg); }
-.badge:not(.student):not(.member):not(.admin):not(.instructor) { background: var(--seg); color: var(--text); }
+/* 知らない区分の印。:where で詳しさ（specificity）を .badge と同じにする：管理コンソールの .badge.ok・.badge.stage などの色を上書きしないため（マイページの見た目は同じ） */
+.badge:where(:not(.student):not(.member):not(.admin):not(.instructor)) { background: var(--seg); color: var(--text); }
 .tone-ok { background: var(--ok-bg); color: var(--ok-fg); }
 .tone-warn { background: var(--warn-bg); color: var(--warn-fg); }
 .tag { display: inline-block; font-size: 12px; font-weight: 600; padding: 0 8px; border-radius: var(--r-pill); white-space: nowrap; line-height: 1.6; vertical-align: 1px; }

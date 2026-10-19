@@ -1910,3 +1910,230 @@ export function explainApiError(status, body) {
   if (status === 503 && typeof body?.message === "string" && /[^\x00-\x7F]/.test(body.message)) return body.message;
   return `モデルの一覧を読み込めませんでした（HTTP ${status}）。`;
 }
+
+// ---- 設定タブの見せ方（提案書 11 章。表示と確認の文だけ。保存の単位・範囲・既定・確認の条件は上の SETTING_LIMITS・limitChangeCheck のまま） ----
+
+/**
+ * 数値の設定のまとまり（11.4 の読む順）。並べ替えるだけで、項目は減らさない。
+ * ここに無い項目（これから足す列）は、最後の「その他」に入れて出す
+ */
+export const SETTING_GROUPS = [
+  { id: "overall", label: "全体の利用", keys: ["global_daily_cost_limit_usd", "user_daily_cost_limit_usd", "daily_job_limit"] },
+  { id: "job", label: "1 回の生成", keys: ["job_max_credits", "lipsync_max_audio_seconds"] },
+  { id: "burst", label: "短い時間", keys: [CANVAS_COLUMNS.burstStudent, CANVAS_COLUMNS.burstMember, CANVAS_COLUMNS.burstWindow] },
+  { id: "canvas", label: "Canvas の 1 回の実行", keys: [CANVAS_COLUMNS.runStudent, CANVAS_COLUMNS.runMember] },
+  {
+    id: "grant",
+    label: "追加クレジット",
+    keys: ["stage_grant_total_limit", "instructor_grant_max_credits", "instructor_grant_max_per_student_stage", "instructor_grant_max_per_cohort_day"],
+  },
+];
+
+/** 画面に出す上限の項目（availableLimits の結果）を、SETTING_GROUPS の順のまとまりに分ける。空のまとまりは出さない */
+export function groupSettingLimits(limits) {
+  const used = new Set();
+  const groups = [];
+  for (const g of SETTING_GROUPS) {
+    const items = g.keys.map((k) => limits.find((s) => s.key === k)).filter(Boolean);
+    for (const s of items) used.add(s.key);
+    if (items.length) groups.push({ id: g.id, label: g.label, items });
+  }
+  const rest = limits.filter((s) => !used.has(s.key));
+  if (rest.length) groups.push({ id: "other", label: "その他", items: rest });
+  return groups;
+}
+
+/** 一覧の行に添える、短い適用対象（詳しい説明は settingDesc） */
+const SETTING_TARGETS = {
+  global_daily_cost_limit_usd: "全員の合計",
+  user_daily_cost_limit_usd: "クレジット枠のない管理者",
+  daily_job_limit: "1 人ずつ（全員）",
+  job_max_credits: "全員（管理者を含む）",
+  lipsync_max_audio_seconds: "口パクの生成",
+  [CANVAS_COLUMNS.burstStudent]: "受講者 1 人",
+  [CANVAS_COLUMNS.burstMember]: "メンバー・講師・管理者 1 人",
+  [CANVAS_COLUMNS.burstWindow]: "短い時間の上限の数え方",
+  [CANVAS_COLUMNS.runStudent]: "受講者",
+  [CANVAS_COLUMNS.runMember]: "メンバー・講師・管理者",
+  stage_grant_total_limit: "段階の回の受講者 1 人",
+  instructor_grant_max_credits: "講師の 1 回の操作",
+  instructor_grant_max_per_student_stage: "講師・1 人・1 段階",
+  instructor_grant_max_per_cohort_day: "講師・1 回の授業・1 日",
+};
+
+export function settingTarget(key) {
+  return SETTING_TARGETS[key] ?? "";
+}
+
+/** 既定（null）で、実際の数値がこの画面では分からない項目（全体の利用の 3 つ）の表示（main の決定の言い方） */
+export const DEFAULT_UNKNOWN_TEXT = "サービスの既定値（実際の値はここでは確認できません）";
+
+/**
+ * 一覧・詳細・確認に出す今の値。formatSettingValue と同じだが、既定の数値が分からない項目の null は
+ * 「サービスの既定値（実際の値はここでは確認できません）」にする（仮の数値・割合を作らない。11.3）。変更の履歴の文は formatSettingValue のまま
+ */
+export function settingValueText(key, value) {
+  const spec = settingSpec(key);
+  if ((value === null || value === undefined) && spec && !spec.nullText) return DEFAULT_UNKNOWN_TEXT;
+  return formatSettingValue(key, value);
+}
+
+/** 入力の単位の名前（入力欄の見出しに添える） */
+export function settingUnitText(key) {
+  const spec = settingSpec(key);
+  if (!spec) return "";
+  if (spec.usd) return "ドル・小数 2 桁まで";
+  if (spec.unit) return spec.unit;
+  return spec.credits ? "クレジット" : "回";
+}
+
+/** 空欄の意味（入力のそばに出す。0 と空欄を混ぜない） */
+export function settingEmptyText(key) {
+  const spec = settingSpec(key);
+  if (!spec) return "";
+  if (spec.emptyIsNull) return `空欄で保存すると「${spec.nullText}」になります。`;
+  const reset = spec.resetLabel ?? "既定に戻す";
+  return `空欄では保存できません。${spec.nullText ? `「${spec.nullText}」` : "既定"}にするときは［${reset}］を押します。`;
+}
+
+/** 変更がいつ効くか（追加の上限は、次の追加の操作から。それ以外は次の生成から） */
+export function settingTimingText(key) {
+  const spec = settingSpec(key);
+  const grant = !!spec && spec.defaultValue !== undefined && !spec.canvas && key !== "lipsync_max_audio_seconds";
+  return grant ? "すでに追加した分は変わらず、次の追加の操作から効きます。" : "次の生成から、すぐに効きます。";
+}
+
+/**
+ * 数値の設定を保存する前の確認の中身（3.4 の 4：見出しは問い、本文は 3 行まで、注意は別に出す）。
+ * check は limitChangeCheck の結果（確認するかどうかもそちらで決める）
+ */
+export function limitConfirmView(key, label, current, next, check) {
+  const target = settingTarget(key);
+  const lines = [
+    `${settingValueText(key, current)} → ${settingValueText(key, next)}`,
+    `${target ? `対象は${target}です。` : ""}${settingTimingText(key)}`,
+  ];
+  if (check?.note) lines.push(check.note);
+  return { title: `${label}を変えますか？`, lines, warnings: [...(check?.warnings ?? [])], ok: "変更する" };
+}
+
+/** 既定（または上限なし）に戻す前の確認の中身。既定の数値が分からない項目は、分からないことを書く */
+export function resetConfirmView(key, label, current) {
+  const spec = settingSpec(key);
+  const reset = spec?.resetLabel ?? "既定に戻す";
+  const target = settingTarget(key);
+  const lines = [
+    `${settingValueText(key, current)} → ${settingValueText(key, null)}`,
+    `${target ? `対象は${target}です。` : ""}${settingTimingText(key)}`,
+  ];
+  if (spec && !spec.nullText) lines.push("既定の数値は、この画面では分かりません（今より下がることもあります）。");
+  else if (key === "job_max_credits") lines.push("1 回の生成の上限がなくなります（高い生成も受け付けるようになります）。");
+  return { title: `${label}を${reset.replace(/戻す$/, "戻しますか？")}`, lines, warnings: [], ok: reset };
+}
+
+/** 数値の編集に、保存していない入力があるか（edit：{ text, initial }） */
+export function editDirty(edit) {
+  return !!edit && String(edit.text ?? "") !== String(edit.initial ?? "");
+}
+
+/** 入力欄に最初に入れておく文字（今の値。null は空欄） */
+export function settingInitialText(value) {
+  return value === null || value === undefined ? "" : String(value);
+}
+
+/** 「確認 13:42」（日本時間。最後に読み込みに成功した時刻。ms が無い・不正なら null） */
+export function checkedText(ms) {
+  if (typeof ms !== "number" || !Number.isFinite(ms)) return null;
+  const parts = Object.fromEntries(
+    new Intl.DateTimeFormat("en-US", { timeZone: "Asia/Tokyo", hour: "2-digit", minute: "2-digit", hourCycle: "h23" })
+      .formatToParts(new Date(ms))
+      .map((p) => [p.type, p.value]),
+  );
+  return `確認 ${parts.hour}:${parts.minute}`;
+}
+
+/**
+ * 読み込みの部分ごとの状態（{ at: 最後に成功した時刻 ms か null, stale: 最後の読み込みが失敗したか }）から、まとめた表示を作る。
+ * 時刻はいちばん古い成功（全体を最新に見せない）。どれかが失敗していれば stale。まだ 1 つも読めていなければ text は null
+ */
+export function freshnessView(parts) {
+  const list = (parts ?? []).filter(Boolean);
+  const ok = (n) => typeof n === "number" && Number.isFinite(n);
+  const ats = list.map((p) => p.at).filter(ok);
+  const at = ats.length ? Math.min(...ats) : null;
+  return {
+    at,
+    text: checkedText(at),
+    stale: list.some((p) => p.stale && ok(p.at)),
+    failed: list.some((p) => p.stale && !ok(p.at)),
+    pending: list.some((p) => !ok(p.at) && !p.stale),
+  };
+}
+
+/**
+ * 設定の先頭の、直近 24 時間の利用の要約（globalUsageView に文を足したもの）。
+ * 上限が既定（数値が分からない）なら割合と棒を出さない。80% 以上で注意、100% 以上は届いている注意
+ */
+export function usageSummaryView(info) {
+  const u = globalUsageView(info);
+  let warn = null;
+  if (u.pct !== null && u.pct >= 100) warn = "上限に届いています。直近 24 時間の利用が減るまで、全員が生成できません。";
+  else if (u.low) warn = "上限の 80% を超えています。上限に届くと、全員が生成できなくなります。";
+  return {
+    ...u,
+    costText: formatUsdShort(u.cost),
+    limitText: u.limit === null ? "上限は既定" : `/ 上限 ${formatUsdShort(u.limit)}`,
+    pctText: u.pct === null ? null : `上限の ${u.pct}%`,
+    countText: `生成 ${formatCredits(u.count)} 回`,
+    warn,
+  };
+}
+
+/** ドルの額のクレジットの目安（詳しく読む欄だけで出す。1 クレジット＝0.01 ドルの単純な換算。生成ごとの切り上げは入らない） */
+export function usdCreditsText(usd) {
+  if (usd === null || usd === undefined || usd === "") return null;
+  const n = Number(usd);
+  if (!Number.isFinite(n)) return null;
+  return `約 ${formatCredits(creditsOf(n))} クレジット`;
+}
+
+/**
+ * モデルの読む表示：区分ごとの「使えるモード数／全モード数」と設定の方針（保存されている値。未保存の下書きは入れない）。
+ * total は分母（モデルの数ではなくモードの数）
+ */
+export function modelScopeSummary(body, roles) {
+  const list = body?.models ?? [];
+  const total = catalogModes(list).length;
+  const base = Object.fromEntries(MODEL_SCOPES.map((sc) => [sc.key, scopeSelection(list, sc.key)]));
+  return activeScopes(roles).map((sc) => ({
+    key: sc.key,
+    label: sc.label,
+    usable: scopeUsable(list, sc.key, base),
+    total,
+    policy: scopeList(body, sc.key) === null ? "制限なし" : "一覧で決めています",
+  }));
+}
+
+/**
+ * 読み込みの応答の順番の番人（読み込みの部分ごとに 1 つ。Codex TASK-0092 F2）。begin() で券を受け取り、応答が届いたら accept(券) で受け取ってよいかを決める。
+ * ・より新しい読み込みの応答（成功でも失敗でも）をもう受け取っていたら、古い応答は捨てる（遅れて届いた保存の前の値で、保存のあとの値を戻さない）。
+ * ・invalidate()（保存を始めた・保存が終わった）より前に出した読み込みの応答は捨てる。
+ * 捨てた応答では、値も「確認」の時刻も変えない。current(券) は、その券がいま受け取られている最新のものか（確かめのあいだに古くなっていないか）
+ */
+export function createLoadGate() {
+  let issued = 0;
+  let epoch = 0;
+  let accepted = 0;
+  return {
+    begin: () => ({ n: ++issued, epoch }),
+    invalidate: () => {
+      epoch++;
+    },
+    accept: (t) => {
+      if (!t || t.epoch !== epoch || t.n <= accepted) return false;
+      accepted = t.n;
+      return true;
+    },
+    current: (t) => !!t && t.epoch === epoch && t.n === accepted,
+  };
+}
