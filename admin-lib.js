@@ -959,7 +959,7 @@ export const SETTING_LIMITS = [
     key: "global_daily_cost_limit_usd",
     label: "全体の 24 時間の額",
     min: 10,
-    max: 2000,
+    max: 10000,
     integer: false,
     usd: true,
     confirm: true,
