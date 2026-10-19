@@ -39,8 +39,9 @@
   .who dd:last-child { margin-bottom: 0; }
   .who dd.dest { font-size: 1.15rem; }
   .who .name-note { color: var(--muted); font-size: 0.8rem; font-weight: 400; }
-  .warn { border: 2px solid var(--danger); border-radius: 10px; padding: 10px 12px; margin: 0 0 16px; }
-  .warn p { margin: 0 0 6px; color: var(--danger); font-weight: 600; }
+  /* 許可の前の注意：赤い太字をやめ、ふつうの文字の色と淡い枠で 1 文にまとめる（2026-10-19 田口さん「赤文字がくどい」） */
+  .warn { border: 1px solid var(--border); border-radius: 10px; padding: 10px 12px; margin: 0 0 16px; font-size: 0.9rem; }
+  .warn p { margin: 0 0 6px; color: var(--text); }
   .warn p:last-child { margin-bottom: 0; }
   .actions { display: flex; gap: 12px; flex-wrap: wrap; }
   button {
@@ -105,9 +106,8 @@
       <dd id="user-email"></dd>
     </dl>
     <div class="warn" role="note">
-      <p>人から送られてきたリンクで開いた場合は、許可しないでください。</p>
-      <p id="loopback-warning" hidden>いまこの PC で、あなたが自分で Codex・Claude Code などのアプリを操作していて、その流れでこの画面が開いた場合だけ、許可してください。</p>
-      <p>許可したあとの画面（エラーの画面も）の URL は、人に送らないでください。</p>
+      <p>ⓘ 自分で始めた接続のときだけ、許可してください。この画面と、許可したあとの画面の URL は、人に送らないでください。</p>
+      <p id="loopback-warning" hidden>この画面は、この PC であなた自身が Codex・Claude Code などを操作している流れで開いたときだけ許可します。</p>
     </div>
     <div class="actions">
       <button class="primary" id="approve-btn">許可する</button>
