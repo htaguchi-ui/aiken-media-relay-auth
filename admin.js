@@ -749,13 +749,14 @@ function renderFab() {
   fab.hidden = (state.selecting && roster) || state.tab === "settings";
 }
 
-function ovItem({ label, value, unit, sub = null, subClass = "", className = "", warn = false, onclick = null, title = null }) {
+function ovItem({ label, value, unit, sub = null, subClass = "", sub2 = null, sub2Class = "", className = "", warn = false, onclick = null, title = null }) {
   return el(
     onclick ? "button" : "div",
     { type: onclick ? "button" : null, className: `ov-item ${warn ? "warn" : ""} ${className}`, onclick, title },
     el("span", { className: "ov-label", text: label }),
     el("span", { className: "ov-value num" }, String(value), el("span", { className: "unit", text: unit })),
     sub ? el("span", { className: `ov-sub num ${subClass}`, text: sub }) : null,
+    sub2 ? el("span", { className: `ov-sub num ${sub2Class}`, text: sub2 }) : null,
   );
 }
 
@@ -786,21 +787,33 @@ function renderOverview() {
         sub: ok ? `有効 ${rows.filter((r) => r.status === "active").length} 人` : null,
         subClass: "desk-only",
       }),
-      // スマホは 2 列 × 2 行（ov-4）で、今日・今月の生成と、クレジットの目安（sub）を見せる。PC は下の「消費（目安）」のカードにも出す
-      ovItem({ label: "今日の生成", value: ok ? t.today_count : "—", unit: "回", sub: ok ? approxCreditsText(t.today_cost_usd) : null, subClass: "mobile-only", className: "ov-r" }),
+      // スマホは 2 列 × 2 行（ov-4）で、今日・今月の生成と、クレジットの目安（sub）・見積額のドル（sub2）を見せる。PC は下の「消費（目安）」のカードにも出す
+      ovItem({
+        label: "今日の生成",
+        value: ok ? t.today_count : "—",
+        unit: "回",
+        sub: ok ? approxCreditsText(t.today_cost_usd) : null,
+        subClass: "mobile-only",
+        sub2: ok ? `見積額 ${formatUsd(t.today_cost_usd)}` : null,
+        sub2Class: "mobile-only",
+        className: "ov-r",
+      }),
       ovItem({
         label: "今月の生成",
         value: ok && month.has ? month.count : "—",
         unit: "回",
         sub: ok && month.has ? month.credits : null,
         subClass: "mobile-only",
+        sub2: ok && month.has ? month.usd : null,
+        sub2Class: "mobile-only",
         title: "今月は日本時間の 1 日 0 時から",
       }),
       ovItem({
         label: "今日の消費（目安）",
         value: ok ? formatCredits(creditsOf(t.today_cost_usd)) : "—",
         unit: "クレジット",
-        sub: ok ? `24時間 約 ${formatCredits(creditsOf(t.day_cost_usd))}・累計 約 ${formatCredits(creditsOf(t.total_cost_usd))}` : null,
+        sub: ok ? `見積額 ${formatUsd(t.today_cost_usd)}` : null,
+        sub2: ok ? `24時間 約 ${formatCredits(creditsOf(t.day_cost_usd))}・累計 約 ${formatCredits(creditsOf(t.total_cost_usd))}` : null,
         className: "desk-only",
         title: `見積額：今日 ${formatUsd(t.today_cost_usd)}・24時間 ${formatUsd(t.day_cost_usd)}・累計 ${formatUsd(t.total_cost_usd)}`,
       }),
@@ -808,7 +821,8 @@ function renderOverview() {
         label: "今月の消費（目安）",
         value: ok && month.has ? formatCredits(creditsOf(t.month_cost_usd)) : "—",
         unit: "クレジット",
-        sub: ok && month.has ? "日本時間の 1 日 0 時から" : null,
+        sub: ok && month.has ? month.usd : null,
+        sub2: ok && month.has ? "日本時間の 1 日 0 時から" : null,
         className: "desk-only",
         title: ok && month.has ? `見積額：今月 ${formatUsd(t.month_cost_usd)}（日本時間の 1 日 0 時から）` : "今月の集計はまだ使えません（DB の更新待ち）",
       }),
@@ -1445,6 +1459,7 @@ function usageSection(r) {
       el("div", { className: "small muted", text: label }),
       el("div", { className: "stat-v num" }, v.count, v.has ? el("span", { className: "unit", text: " 回" }) : null),
       el("div", { className: "small muted num", text: v.credits }),
+      el("div", { className: "small muted num", text: v.usd }),
     );
   };
   return el(
@@ -1469,7 +1484,7 @@ function usageSection(r) {
       r.note ? el("dt", { text: "メモ" }) : null,
       r.note ? el("dd", { text: r.note }) : null,
     ),
-    el("p", { className: "hint", text: "「今日」は日本時間の 0 時から、「24時間」は直近 24 時間、「今月」は日本時間の 1 日 0 時から。クレジットは見積額からの目安です。" }),
+    el("p", { className: "hint", text: "「今日」は日本時間の 0 時から、「24時間」は直近 24 時間、「今月」は日本時間の 1 日 0 時から。見積額（ドル）は生成のときの見積もりで、クレジットは見積額からの目安です。" }),
   );
 }
 
