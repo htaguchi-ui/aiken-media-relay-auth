@@ -282,6 +282,17 @@ ul.models .name { font-weight: 600; }
 .links a { min-height: 44px; display: inline-flex; align-items: center; font-weight: 600; }
 .foot { font-size: 14px; color: var(--muted); }
 
+/* ---- ログイン前のトップ（.welcome）：上から ロゴ・名前・ログイン・方針と規約・小さな A.I.KEN を中央に並べる ---- */
+.center-card.welcome { align-items: center; text-align: center; gap: var(--s4); padding-top: 40px; }
+/* ロゴの周りは、ほかの要素から 16px 以上あける（ガイドラインに余白の決まりは無い。画面の格子に合わせた値） */
+.brand-logo { display: block; margin-bottom: var(--s2); }
+.brand-logo img { display: block; width: 120px; height: auto; }
+.welcome h1 { font-size: 24px; letter-spacing: 0.01em; }
+.welcome .btn { align-self: stretch; }
+.welcome .links { justify-content: center; }
+.welcome .foot { font-size: 13px; letter-spacing: 0.08em; margin-top: var(--s2); }
+@media (max-width: 480px) { .center-card.welcome { padding-top: 32px; } }
+
 /* 動きを減らす設定：開閉・回転の動きを止める */
 @media (prefers-reduced-motion: reduce) {
   .fold > summary::before, .sub-fold > summary::before, .icon-btn[data-tip]::after { transition: none; }

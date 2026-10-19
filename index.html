@@ -19,46 +19,40 @@
 <body>
 <div id="status" class="center-card" role="status"><p class="muted">読み込み中…</p></div>
 
-<!-- スクリプトが動かないとき（確認の仕組みが読むときなど）も、サービスの説明と方針・規約へのリンクは読めるようにする -->
+<!-- ログイン前のトップ（2026-10-19 田口さん：名前・ログイン・方針と規約のリンクだけ、中央の上にロゴ、いちばん下に小さく A.I.KEN）。
+     ロゴは明るい配色で色の版、暗い配色で白の版（img/。元は DesignSystem 2 の logo/basic/tate.png と logo/1c_white/ の縦組み）。
+     スクリプトが動かないとき（確認の仕組みが読むときなど）も、名前と方針・規約へのリンクは読めるようにする（ログインのボタンの代わりに 1 行） -->
 <noscript>
-  <section class="center-card">
+  <!-- スクリプトが動かないときは「読み込み中…」のまま止まるので隠す（style-src は 'unsafe-inline' を許している） -->
+  <style>#status { display: none !important; }</style>
+  <section class="center-card welcome">
+    <picture class="brand-logo">
+      <source srcset="/img/aiken-logo-white.png" media="(prefers-color-scheme: dark)">
+      <img src="/img/aiken-logo.png" alt="A.I.KEN" width="120" height="118">
+    </picture>
     <h1>A.I.KEN Studio</h1>
-    <p>A.I.KEN の研修で使う、動画・画像・音声の生成サービスです。</p>
-    <p>使えるのは、研修の受講者と関係者で、当社が発行した Google アカウントをお持ちの方です。</p>
     <p class="muted">この画面を使うには、JavaScript を有効にしてください。</p>
-    <nav class="links" aria-label="サービスの情報">
+    <nav class="links" aria-label="方針と規約">
       <a href="https://a-i-ken.com/privacy/">プライバシーポリシー</a>
       <a href="/terms.html">利用規約</a>
-      <a href="/about">サービスの案内</a>
     </nav>
-    <p class="foot">運営：A.I.KEN（株式会社ORENDA WORLD）</p>
+    <p class="foot">A.I.KEN</p>
   </section>
 </noscript>
 
-<!-- ログイン前のトップ：今の案内（/about）の要点・Google でログイン・方針と規約へのリンク -->
-<section id="login" class="center-card" hidden aria-labelledby="login-title">
-  <span class="brand-sub">マイページ</span>
+<section id="login" class="center-card welcome" hidden aria-labelledby="login-title">
+  <picture class="brand-logo">
+    <source srcset="/img/aiken-logo-white.png" media="(prefers-color-scheme: dark)">
+    <img src="/img/aiken-logo.png" alt="A.I.KEN" width="120" height="118">
+  </picture>
   <h1 id="login-title">A.I.KEN Studio</h1>
   <p class="warn-text" id="login-note" role="status" hidden></p>
-  <div class="prose">
-    <p>A.I.KEN の研修で使う、動画・画像・音声の生成サービスです。</p>
-    <p>使えるのは、研修の受講者と関係者で、当社が発行した Google アカウントをお持ちの方です。</p>
-    <p>ログインすると、自分の残りクレジットと使えるモデルを確かめ、Canvas を開けます。</p>
-  </div>
   <button type="button" class="btn primary big" id="login-btn">Google でログイン</button>
-  <details class="sub-fold">
-    <summary>ログインについて</summary>
-    <div class="sub-body">
-      <p class="small">このページを閉じたり、ほかのページへ移ったりすると、ログアウトします（再読み込みのときは自動でログインし直します）。</p>
-      <p class="small">30 分操作しないときも、ログアウトします。</p>
-    </div>
-  </details>
-  <nav class="links" aria-label="サービスの情報">
+  <nav class="links" aria-label="方針と規約">
     <a href="https://a-i-ken.com/privacy/">プライバシーポリシー</a>
     <a href="/terms.html">利用規約</a>
-    <a href="/about">サービスの案内</a>
   </nav>
-  <p class="foot">運営：A.I.KEN（株式会社ORENDA WORLD）</p>
+  <p class="foot">A.I.KEN</p>
 </section>
 
 <section id="denied" class="center-card" hidden aria-labelledby="denied-title">
