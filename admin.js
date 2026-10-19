@@ -4132,7 +4132,7 @@ function stagesSection(c) {
         className: "hint",
         text: "段階の名前・題名・クレジットは、授業の途中でも変えられます。順番と数は、その日が始まる前だけ変えられます。段階を進める・戻すのは、講師の画面で行います。",
       }),
-      el("a", { className: "link-btn", href: "instructor.html", target: "_blank", rel: "noopener", text: "講師の画面を開く（別のタブ）" }),
+      el("a", { className: "link-btn", href: "instructor", target: "_blank", rel: "noopener", text: "講師の画面を開く（別のタブ）" }),
     );
   } else {
     out.push(el("p", { className: "small", text: "今は Day ごとの枠です（Day1・ブリッジワーク・Day2 の 1 人あたりの上限）。" }));
