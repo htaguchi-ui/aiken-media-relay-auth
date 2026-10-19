@@ -1,0 +1,1 @@
+import{l as e}from"./index-Drp8PEqd.js";var t=e({CONFIG:()=>n,canvasApiBase:()=>r}),n={apiMode:`http`,supabaseUrl:`https://tnzwhwitgnzoehbjrmoy.supabase.co`,publishableKey:`sb_publishable_KRY7iSTi9d_z9EwW0KuDwg_ooUqGvDN`,apiBase:null};function r(){return n.apiBase??`${n.supabaseUrl}/functions/v1/canvas`}export{t as n,n as t};

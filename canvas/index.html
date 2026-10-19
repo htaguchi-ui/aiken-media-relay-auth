@@ -1,0 +1,22 @@
+<!doctype html>
+<html lang="ja" data-theme="dark">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <meta name="referrer" content="no-referrer" />
+    <link rel="icon" href="data:," />
+    <title>A.I.KEN Studio Canvas</title>
+    <script>
+      // 最初の描画から、選んだ配色で描く（既定は暗い。明るいを選んでいれば明るい。決定 41）
+      try {
+        var p = JSON.parse(localStorage.getItem('aiken-canvas:prefs-v1') || '{}');
+        if (p && p.theme === 'light') document.documentElement.dataset.theme = 'light';
+      } catch (e) {}
+    </script>
+    <script type="module" crossorigin src="/canvas/assets/index-Drp8PEqd.js"></script>
+    <link rel="stylesheet" crossorigin href="/canvas/assets/index-C3YGWtUi.css">
+  </head>
+  <body>
+    <div id="root"></div>
+  </body>
+</html>
