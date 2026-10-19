@@ -337,6 +337,9 @@ ul.models .name { font-weight: 600; }
 .welcome h1 { font-size: 24px; letter-spacing: 0.01em; }
 .welcome .btn { align-self: stretch; }
 .welcome .links { justify-content: center; }
+/* ログインのボタンの下の小さな「別のアカウントでログイン」（Google のアカウントを選ぶ画面を出す。決定 70） */
+.welcome .alt-login { min-height: 44px; margin-top: calc(-1 * var(--s2)); padding: 0 var(--s2); border: 0; background: none; color: var(--accent); font-size: 14px; font-weight: 600; text-decoration: underline; text-underline-offset: 3px; }
+.welcome .alt-login:disabled { opacity: 0.55; }
 .welcome .foot { font-size: 13px; letter-spacing: 0.08em; margin-top: var(--s2); }
 @media (max-width: 480px) { .center-card.welcome { padding-top: 32px; } }
 

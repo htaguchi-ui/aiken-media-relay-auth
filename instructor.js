@@ -1,28 +1,19 @@
 // 講師の画面。担当する回の「段階」を進める・戻す、受講者の使用量を見る、一時追加と自分の追加の取り消しを、本人のログインで行う。
 // 書き込みはすべて DB の RPC（cohort_stage_move・instructor_grant・revoke_stage_grant。権限・上限・段階の判定は DB が決める）。
-// ログインの守りはマイページ（mypage.js）と同じ作り：保存はこのタブの間だけ（sessionStorage）・30 分操作しなければログアウト・
-// 画面を離れたらログアウト（再読み込みだけは自動でログインし直す）。
+// ログインはマイページ（mypage.js）・Canvas と共有する（決定 70。localStorage の共有の鍵・最長 14 日）。ページを離れても、
+// 操作しなくてもログアウトしない。ほかのタブでログアウトしたら、この画面も中身を消して読み込み直す。
 // 表示はすべて textContent / createElement で組み立てる（データを innerHTML に入れない）。
 // supabase-js は instructor.html で版を固定し、integrity（SRI）を付けて読み込む（window.supabase）
 import {
+  authEventKind,
   browserStorage,
   clearStoredSession,
-  idleExpired,
-  INSTRUCTOR_ACTIVITY_KEY,
-  INSTRUCTOR_IDLE_LIMIT_MS,
-  INSTRUCTOR_RELOAD_GRACE_MS,
-  INSTRUCTOR_RELOAD_HINT_KEY,
-  INSTRUCTOR_STORAGE_KEY,
+  discardOldTabSessions,
   LEGACY_STORAGE_PREFIX,
-  storedAccessToken,
+  sessionChangeKind,
+  STUDIO_STORAGE_KEY,
 } from "./auth-storage.js";
-import {
-  clearStaleSession,
-  decideOnOpen,
-  hadActiveSession,
-  MSG_CODE_FAILED,
-  parseReloadHint,
-} from "./mypage-lib.js";
+import { MSG_CODE_FAILED, oauthOptions } from "./mypage-lib.js";
 import {
   cohortStatus,
   explainError,
@@ -66,14 +57,19 @@ const SUPABASE_PUBLISHABLE_KEY = "sb_publishable_KRY7iSTi9d_z9EwW0KuDwg_ooUqGvDN
 const $ = (id) => document.getElementById(id);
 const SECTIONS = ["status", "login", "denied", "failed", "app"];
 
+/** ログインを終えている途中（このタブのログアウト・ほかのタブからの知らせ）。この間は本人の画面を描き直さない */
+let ending = false;
+
 function show(id) {
+  // ログインを終えている途中（ending）は、遅れて届いた応答で本人の画面に戻さない
+  if (id === "app" && ending) return;
   for (const s of SECTIONS) $(s).hidden = s !== id;
 }
 
-// 研修用の Mac にログインを残さない：保存はこのタブの間だけ（sessionStorage）、ほかの画面とは別の鍵。
-// 以前の版が localStorage に残したセッションは、開いた時点で消す
-const sessionStore = browserStorage("session");
-clearStoredSession(browserStorage("local"), LEGACY_STORAGE_PREFIX);
+// ログインはこの端末（ブラウザ）で保つ（決定 70）：保存先は localStorage の共有の鍵（マイページ・Canvas・許可の画面と同じ）。
+// 以前の版が localStorage（sb-…）・sessionStorage（画面ごとの鍵）に残したセッションは、開いた時点で捨てる（移さない）
+const localStore = browserStorage("local");
+clearStoredSession(localStore, LEGACY_STORAGE_PREFIX);
 
 /** この端末のセッションだけをサーバーで無効にする（keepalive。失敗しても先へ進む。global だと本人の ChatGPT・Codex・Claude Code の接続まで切れる） */
 function sendLocalLogout(token) {
@@ -85,35 +81,13 @@ function sendLocalLogout(token) {
       headers: { apikey: SUPABASE_PUBLISHABLE_KEY, Authorization: `Bearer ${token}` },
     }).catch(() => {});
   } catch {
-    // 送れなくても、タブの保存先は呼び出し側で消す
+    // 送れなくても、保存先は呼び出し側で消す
   }
 }
 
-// ページを開いた時点（マイページと同じ手順）：保存先に残っているセッションがあれば、この端末だけのログアウトを送って消す
-// （?code 付きのときは、Google の往復に要る code verifier と操作時刻だけ残す）。再読み込みの手がかりと開き方から、
-// "code"（Google から戻った）・"relogin"（再読み込み。Google のログインを自動でやり直す）・"login"（ログイン前の画面）を決める
-const openDecision = (() => {
-  const hasCode = !!new URLSearchParams(location.search).get("code");
-  sendLocalLogout(storedAccessToken(sessionStore, INSTRUCTOR_STORAGE_KEY));
-  clearStaleSession(sessionStore, INSTRUCTOR_STORAGE_KEY, INSTRUCTOR_ACTIVITY_KEY, hasCode);
-  let raw = null;
-  try {
-    raw = sessionStore?.getItem(INSTRUCTOR_RELOAD_HINT_KEY) ?? null;
-    sessionStore?.removeItem(INSTRUCTOR_RELOAD_HINT_KEY);
-  } catch {
-    // 読めなければ、手がかりが無い扱い（ログイン前の画面）
-  }
-  const nav = typeof performance?.getEntriesByType === "function" ? performance.getEntriesByType("navigation")[0] : null;
-  return decideOnOpen({
-    hasCode,
-    navType: nav?.type ?? null,
-    hint: parseReloadHint(raw),
-    now: Date.now(),
-    graceMs: INSTRUCTOR_RELOAD_GRACE_MS,
-  });
-})();
+discardOldTabSessions(browserStorage("session"), sendLocalLogout);
 
-// 読み込めない（通信の失敗・integrity の不一致）ときは先へ進まない（自動のログインもしない）
+// 読み込めない（通信の失敗・integrity の不一致）ときは先へ進まない
 if (typeof window.supabase?.createClient !== "function") {
   $("status").textContent = "画面の部品を読み込めませんでした。通信状態を確認して、ページを開き直してください。";
   throw new Error("supabase-js を読み込めませんでした");
@@ -124,8 +98,9 @@ const supabase = window.supabase.createClient(SUPABASE_URL, SUPABASE_PUBLISHABLE
     flowType: "pkce",
     detectSessionInUrl: true,
     persistSession: true,
-    storageKey: INSTRUCTOR_STORAGE_KEY,
-    ...(sessionStore ? { storage: sessionStore } : {}),
+    autoRefreshToken: true,
+    storageKey: STUDIO_STORAGE_KEY,
+    ...(localStore ? { storage: localStore } : {}),
   },
 });
 
@@ -171,27 +146,21 @@ const state = {
 
 // ---- ログイン・ログアウト ----
 
-let leavingForLogin = false;
-
-async function signIn() {
-  // Google のログインへ移るときは、戻ったときに要る PKCE の code_verifier と時刻の記録を残す（pagehide で消さない）
-  leavingForLogin = true;
-  markActive(true);
-  await supabase.auth.signInWithOAuth({
-    provider: "google",
-    options: { redirectTo: returnUrl(), queryParams: { prompt: "select_account" } },
-  });
+/** Google のログインへ移る。ふつうはアカウントを選ぶ画面を出さず、「別のアカウントでログイン」のときだけ出す（決定 70） */
+async function signIn({ selectAccount = false } = {}) {
+  await supabase.auth.signInWithOAuth({ provider: "google", options: oauthOptions(returnUrl(), selectAccount) });
 }
 
-/** ログアウトして、タブに残る分（セッション・最後の操作の時刻）も消す（通信できなくても消す） */
+/** ログアウトして、この端末の共有のログインを消す（通信できなくても消す。マイページ・Canvas のタブもログインの画面になる） */
 async function endSession() {
+  ending = true;
   try {
     // この端末のセッションだけを切る（global だと、本人の ChatGPT・Codex・Claude Code の接続まで切れる）
     await supabase.auth.signOut({ scope: "local" });
   } catch {
     // 下で消す
   }
-  clearStoredSession(sessionStore, INSTRUCTOR_STORAGE_KEY);
+  clearStoredSession(localStore, STUDIO_STORAGE_KEY);
 }
 
 /** 本人のデータを画面から消して、読み込み中の表示にする（ログアウトの通信を待つ間・画面を離れるときに、前の人の画面を残さない） */
@@ -216,7 +185,6 @@ function hideContent(message = "ログアウトしています…") {
 }
 
 async function signOut() {
-  stopIdleWatch();
   hideContent();
   await endSession();
   location.replace(returnUrl());
@@ -227,66 +195,27 @@ function showLoginNote(text) {
   $("login-note").hidden = !text;
 }
 
-// ---- 操作が無いときのログアウト（30 分。マイページ・管理コンソールと同じ） ----
+// ---- ほかのタブでのログアウト・アカウントの切り替え（マイページと同じ） ----
 
-let lastActiveWrite = 0;
-let idleTimer = null;
-let idleListening = false;
+/** このタブが表示している利用者の ID（ログイン前は null） */
+let shownUser = null;
 
-/** 操作したことを記録する（書き込みは 15 秒に 1 回まで） */
-function markActive(force = false) {
-  const now = Date.now();
-  if (!force && now - lastActiveWrite < 15000) return;
-  lastActiveWrite = now;
-  try {
-    sessionStore?.setItem(INSTRUCTOR_ACTIVITY_KEY, String(now));
-  } catch {
-    // 記録できなくても続ける
-  }
+/** ほかのタブでログアウトした・別のアカウントに替わった：中身を消して、ページを読み込み直す */
+function onSessionChanged(kind) {
+  if (!kind || ending) return;
+  ending = true;
+  hideContent(kind === "signed-out" ? "ログアウトしました。" : "読み込み中…");
+  location.replace(returnUrl());
 }
 
-function lastActive() {
-  try {
-    return sessionStore?.getItem(INSTRUCTOR_ACTIVITY_KEY) ?? null;
-  } catch {
-    return null;
-  }
-}
-
-/** 30 分操作が無ければログアウトして、ログインの画面に戻す。ログアウトしたら true */
-async function logoutIfIdle() {
-  const last = lastActive();
-  if (!idleExpired(last, Date.now(), INSTRUCTOR_IDLE_LIMIT_MS)) return false;
-  stopIdleWatch();
-  hideContent();
-  await endSession();
-  showLoginNote(
-    last === null
-      ? "ログインの記録を確かめられなかったため、ログアウトしました。もう一度ログインしてください。"
-      : `${INSTRUCTOR_IDLE_LIMIT_MS / 60000} 分間操作が無かったため、ログアウトしました。`,
-  );
-  show("login");
-  return true;
-}
-
-function startIdleWatch() {
-  markActive(true);
-  if (!idleListening) {
-    idleListening = true;
-    for (const type of ["pointerdown", "keydown", "wheel", "touchstart", "input"]) {
-      document.addEventListener(type, () => markActive(), { capture: true, passive: true });
-    }
-    // スリープ・背面のタブではタイマーが遅れるので、前に出たときにも確かめる
-    document.addEventListener("visibilitychange", () => {
-      if (document.visibilityState === "visible" && idleTimer) logoutIfIdle();
-    });
-  }
-  if (!idleTimer) idleTimer = setInterval(logoutIfIdle, 30000);
-}
-
-function stopIdleWatch() {
-  if (idleTimer) clearInterval(idleTimer);
-  idleTimer = null;
+function startWatch(userId) {
+  shownUser = userId;
+  window.addEventListener("storage", (e) => onSessionChanged(sessionChangeKind(e, STUDIO_STORAGE_KEY, shownUser)));
+  // supabase-js の知らせ（ほかのタブの BroadcastChannel・このタブのトークンの更新の失敗）。知らせの中では supabase を待たない
+  supabase.auth.onAuthStateChange((event, session) => {
+    const kind = authEventKind(event, session, shownUser);
+    if (kind) setTimeout(() => onSessionChanged(kind), 0);
+  });
 }
 
 // ---- お知らせ ----
@@ -294,6 +223,7 @@ function stopIdleWatch() {
 const NOTICE_MAX = 3;
 
 function notify(message, kind = "ok", details = []) {
+  if (ending) return; // ログアウトの途中は、遅れて届いた結果を知らせない
   const box = $("notice");
   const node = el(
     "div",
@@ -362,6 +292,8 @@ function loadFailure(error) {
 
 async function loadCohorts() {
   const { data, error } = await rpc("instructor_cohorts");
+  // ログアウトの途中・ほかのタブでのログアウトのあとに届いた応答は、state に入れない（F107-04）
+  if (ending) return { stale: true };
   if (error) return { error };
   state.cohorts = normalizeInstructorCohorts(data);
   if (!state.cohorts.some((c) => c.id === state.cohortId)) state.cohortId = state.cohorts[0]?.id ?? null;
@@ -380,6 +312,7 @@ async function loadStatus() {
   const requested = state.cohortId;
   const seq = ++statusSeq;
   const { data, error } = await rpc("cohort_stage_status", { p_cohort_id: requested });
+  if (ending) return true; // ログアウトの途中に届いた応答は使わない（F107-04）
   if (requested !== state.cohortId) return true; // 読み込み中に回を切り替えた
   if (seq !== statusSeq) return true; // 古い応答（その間に、もっと新しい読み込みか操作があった）
   if (error) {
@@ -405,18 +338,24 @@ async function load({ fromApp = false } = {}) {
     show("status");
   }
   try {
+    // 各 await のあとに、ログアウトの途中（ending）でないかを照らす。途中なら state・ヘッダー・お知らせ・画面を変えずに終わる（F107-04）
     if (!fromApp) {
       const { data } = await rpc("is_admin");
+      if (ending) return;
       state.isAdmin = data === true;
       const { data: googleEmail } = await rpc("current_google_email");
+      if (ending) return;
       const { data: sessionData } = await supabase.auth.getSession();
+      if (ending) return;
       state.myEmail = normalizeEmail(googleEmail ?? sessionData?.session?.user?.email ?? "");
     }
     const c = await loadCohorts();
+    if (ending || c.stale) return;
     if (c.error) {
       const f = loadFailure(c.error);
       if (f.action === "denied") {
         const { data } = await supabase.auth.getSession();
+        if (ending) return;
         $("denied-email").textContent = data?.session?.user?.email ?? "";
         show("denied");
       } else if (!fromApp || !state.cohorts.length) {
@@ -428,6 +367,7 @@ async function load({ fromApp = false } = {}) {
       return;
     }
     const ok = await loadStatus();
+    if (ending) return;
     if (!ok && fromApp) notify(`最新の状態を読み込めませんでした。${state.statusError}`, "error");
     $("me-email").textContent = state.myEmail;
     $("me-email").title = state.myEmail;
@@ -444,6 +384,7 @@ async function load({ fromApp = false } = {}) {
 /** 操作のあと：段階と受講者の最新を読み直して描き直す */
 async function reloadStatus() {
   const ok = await loadStatus();
+  if (ending) return;
   if (!ok) notify(`最新の状態を読み込めませんでした。${state.statusError}`, "error");
   render();
 }
@@ -458,6 +399,7 @@ function stopUndoTimer() {
 }
 
 function render() {
+  if (ending) return; // ログアウトの途中・ほかのタブでログアウトしたあとは描かない
   const view = $("view");
   if (!state.cohorts.length) {
     stopUndoTimer();
@@ -938,37 +880,10 @@ async function revokeGrant(g, name, s) {
 
 // ---- 開始 ----
 
-/**
- * 再読み込みのあとの自動のログインのやり直し（openDecision が "relogin" のときに 1 回だけ呼ぶ）。
- * Google のログインを、アカウントの選択なしで始める。失敗したときはログイン前の画面にして、自動ではやり直さない
- */
-async function autoRelogin() {
-  $("status").replaceChildren(el("p", { className: "muted", text: "ログインし直しています…" }));
-  show("status");
-  leavingForLogin = true;
-  markActive(true);
-  try {
-    const { error } = await supabase.auth.signInWithOAuth({
-      provider: "google",
-      options: { redirectTo: returnUrl() },
-    });
-    if (!error) return;
-  } catch {
-    // 下で、ログイン前の画面にする
-  }
-  leavingForLogin = false;
-  clearStoredSession(sessionStore, INSTRUCTOR_STORAGE_KEY);
-  showLoginNote("ログインし直せませんでした。もう一度ログインしてください。");
-  show("login");
-}
-
 async function main() {
-  if (openDecision === "relogin") {
-    await autoRelogin();
-    return;
-  }
   const hash = new URLSearchParams(location.hash.replace(/^#/, ""));
   const params = new URLSearchParams(location.search);
+  const hasCode = !!params.get("code");
   if (params.get("error_description") || hash.get("error_description")) {
     // 文言は誰でも書き換えられるので、URL の内容は表示しない
     history.replaceState(null, "", returnUrl());
@@ -977,10 +892,9 @@ async function main() {
     return;
   }
   const { data: { session }, error } = await supabase.auth.getSession();
-  // Google から ?code 付きで戻ったのに、ログインを完了できなかった：URL の code と code verifier を消して、ログイン前の画面にする
-  if (openDecision === "code" && (error || !session)) {
+  // Google から ?code 付きで戻ったのに、ログインを完了できなかった：URL の code を消して、ログイン前の画面にする
+  if (hasCode && (error || !session)) {
     history.replaceState(null, "", returnUrl());
-    clearStoredSession(sessionStore, INSTRUCTOR_STORAGE_KEY);
     showLoginNote(MSG_CODE_FAILED);
     show("login");
     return;
@@ -994,52 +908,22 @@ async function main() {
     show("login");
     return;
   }
-  // 閉じたタブを開き直したときなど、前の操作から 30 分を過ぎている（記録が無い）なら使わせない
-  if (await logoutIfIdle()) return;
-  startIdleWatch();
+  startWatch(session.user?.id ?? null);
   // 戻ってきた直後の URL に残る code などを消す
   if (location.search || location.hash) history.replaceState(null, "", returnUrl());
   await load();
 }
 
-// 画面を離れるとき（再読み込み・タブを閉じる・別のページへ移る）はログアウトする。ただし Google のログインへ移るときは除く（マイページと同じ）。
-// 待てないので、サーバーへの取り消しは keepalive で送り、タブの保存先はその場で消す。画面の中身も消す。
-// そのうえで「再読み込みの手がかり」（離れた時刻と、離れる前にログインしていたか。トークンは含めない）を別の鍵に書く
-window.addEventListener("pagehide", () => {
-  if (leavingForLogin) return;
-  stopIdleWatch();
-  const token = storedAccessToken(sessionStore, INSTRUCTOR_STORAGE_KEY);
-  const hadSession = hadActiveSession({ token, lastActive: lastActive(), now: Date.now(), limitMs: INSTRUCTOR_IDLE_LIMIT_MS });
-  sendLocalLogout(token);
-  try {
-    // メモリの分が自動の更新で保存し直されないよう、更新も止める
-    supabase.auth.stopAutoRefresh?.();
-  } catch {
-    // 無視
-  }
-  clearStoredSession(sessionStore, INSTRUCTOR_STORAGE_KEY);
-  try {
-    sessionStore?.setItem(INSTRUCTOR_RELOAD_HINT_KEY, JSON.stringify({ leftAt: Date.now(), hadSession }));
-  } catch {
-    // 書けなければ、次に開いたときは手がかりが無い扱い（ログイン前の画面）になる
-  }
-  hideContent("読み込み中…");
-});
-// 戻る・進むでキャッシュ（bfcache）から表示されたとき（pagehide でログアウト済み）は、再読み込みではないので自動のログインはしない
+// 戻る・進むでキャッシュ（bfcache）から表示されたときは、読み込み直して今のログインの状態から作り直す
 window.addEventListener("pageshow", (e) => {
   if (!e.persisted) return;
-  try {
-    sessionStore?.removeItem(INSTRUCTOR_RELOAD_HINT_KEY);
-  } catch {
-    // 無視
-  }
-  sendLocalLogout(storedAccessToken(sessionStore, INSTRUCTOR_STORAGE_KEY));
-  clearStoredSession(sessionStore, INSTRUCTOR_STORAGE_KEY);
-  hideContent("ログアウトしました。");
+  hideContent("読み込み中…");
   location.reload();
 });
 
-$("login-btn").addEventListener("click", signIn);
+$("login-btn").addEventListener("click", () => signIn());
+// 小さな「別のアカウントでログイン」：Google のアカウントを選ぶ画面を出す（ログイン後に替えるときは、ログアウトしてからここ）
+$("login-other-btn").addEventListener("click", () => signIn({ selectAccount: true }));
 $("logout-btn").addEventListener("click", signOut);
 $("denied-logout-btn").addEventListener("click", signOut);
 $("failed-logout-btn").addEventListener("click", signOut);

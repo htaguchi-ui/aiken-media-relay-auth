@@ -128,17 +128,22 @@
   import {
     browserStorage,
     clearStoredSession,
-    CONSENT_ACTIVITY_KEY,
-    CONSENT_STORAGE_KEY,
+    CONSENT_OWNED_KEY,
+    CONSENT_STARTED_KEY,
     CONSENT_TIME_LIMIT_MS,
+    discardOldTabSessions,
     idleExpired,
     LEGACY_STORAGE_PREFIX,
+    sameIdentity,
+    sessionIdentity,
     storedAccessToken,
+    STUDIO_STORAGE_KEY,
+    takeStoredSession,
   } from "./auth-storage.js";
 
   // 許可・拒否などが終わったあとのログアウトの方式（README の「公開の前の注意」）
   // - "signout-local"：サーバーでこのセッションを取り消し（signOut scope local）、タブからも消す（既定）
-  // - "clear-storage-only"：サーバーには送らず、この画面の保存先（aiken-consent-auth の鍵）だけを消す。
+  // - "clear-storage-only"：サーバーには送らず、保存先（共有のログインの鍵）だけを消す。
   //   公開後に ChatGPT・Codex・Claude Code の接続（トークンの交換）が失敗するときは、この 1 行をこちらに変えて公開し直す
   const CONSENT_END_SESSION = "signout-local";
 
@@ -161,22 +166,72 @@
   // 受講者は a-i-ken.jp、管理者は a-i-ken.com。サーバー側でも同じ判定をする。
   const ALLOWED_DOMAINS = ["a-i-ken.jp", "a-i-ken.com"];
 
-  // 研修用の Mac を何人もで使うため、ログインを端末に残さない：
-  // 保存はこのタブの間だけ（sessionStorage。Google のログインから戻るまでは要る）、管理コンソールとは別の鍵。
-  // 以前の版が localStorage に残したセッション（管理コンソールと共有していた）は、開いた時点で消す
+  // ログインはマイページ・講師の画面・Canvas と共有する（決定 70。localStorage の共有の鍵）。マイページでログイン済みなら、
+  // 接続のときに Google のログインを省ける。管理コンソールのログインとは共有しない（別の鍵）。
+  // 2 つの場合で、終わったときの扱いを分ける：
+  // - この画面で始めたログイン（Google から戻って交換が成功したセッションを、このタブの sessionStorage の CONSENT_OWNED_KEY に
+  //   結び付けて記録したもの。今のログインが同じセッションのときだけ）：今までの守りのまま。
+  //   ログインを始めてから 5 分で時間切れ・許可・拒否などが終わったらすぐにログアウト・画面を離れたらログアウト
+  // - それ以外（マイページなどで済ませた共有のログイン）：ログアウトしない（ほかの画面のログインを切らない）。
+  //   許可の画面を出してから 5 分で許可の画面を閉じる守りは同じ
+  // 表示した人と今のログインの人を結び付けて見張り、替わったら許可の画面を止める。許可・拒否を送る直前にも照らす（F107-01）
+  // 以前の版が localStorage（sb-…）・sessionStorage（aiken-consent-auth など）に残したセッションは、開いた時点で捨てる（移さない）
   const sessionStore = browserStorage("session");
-  clearStoredSession(browserStorage("local"), LEGACY_STORAGE_PREFIX);
+  const localStore = browserStorage("local");
+  clearStoredSession(localStore, LEGACY_STORAGE_PREFIX);
+  const sendLocalLogout = (token) => {
+    if (!token || CONSENT_END_SESSION !== "signout-local") return;
+    try {
+      fetch(SUPABASE_URL + "/auth/v1/logout?scope=local", {
+        method: "POST",
+        keepalive: true,
+        headers: { apikey: SUPABASE_PUBLISHABLE_KEY, Authorization: "Bearer " + token },
+      }).catch(() => {});
+    } catch {
+      // 送れなくても、保存先は呼び出し側で消す
+    }
+  };
+  discardOldTabSessions(sessionStore, sendLocalLogout);
+  const readSession = (k) => {
+    try {
+      return sessionStore?.getItem(k) ?? null;
+    } catch {
+      return null;
+    }
+  };
+  const dropSession = (k) => {
+    try {
+      sessionStore?.removeItem(k);
+    } catch {
+      // 無視
+    }
+  };
+  /** 今保存されている共有のログイン（{ userId, sessionId }。無ければ null） */
+  const currentIdentity = () => {
+    try {
+      return sessionIdentity(localStore?.getItem(STUDIO_STORAGE_KEY) ?? null);
+    } catch {
+      return null;
+    }
+  };
+  const hasCode = !!new URLSearchParams(location.search).get("code");
+  // Google から ?code 付きで戻ったとき以外は、ログインの試しの印（CONSENT_STARTED_KEY）を消す。
+  // この画面で始めたログインの記録（CONSENT_OWNED_KEY）は消さない（復元されたタブでも、そのセッションとの結び付きを保つ。F107-03）
+  if (!hasCode) dropSession(CONSENT_STARTED_KEY);
+  /** 開いた時点（?code の交換より前）の共有のログイン。交換で新しいセッションになったかを見分ける */
+  const identityAtOpen = currentIdentity();
   const supabase = createClient(SUPABASE_URL, SUPABASE_PUBLISHABLE_KEY, {
     auth: {
       flowType: "pkce",
       detectSessionInUrl: true,
       persistSession: true,
-      storageKey: CONSENT_STORAGE_KEY,
-      ...(sessionStore ? { storage: sessionStore } : {}),
+      autoRefreshToken: true,
+      storageKey: STUDIO_STORAGE_KEY,
+      ...(localStore ? { storage: localStore } : {}),
     },
   });
 
-  /** 許可・拒否などが終わったら、すぐにログアウトする（方式は CONSENT_END_SESSION。どちらでもタブからは消す） */
+  /** ログアウトする（方式は CONSENT_END_SESSION。どちらでも保存先からは消す）。共有のログインを切るので、マイページなどのタブもログインの画面になる */
   const endSession = async () => {
     if (CONSENT_END_SESSION === "signout-local") {
       try {
@@ -192,30 +247,76 @@
         // 無視
       }
     }
-    clearStoredSession(sessionStore, CONSENT_STORAGE_KEY);
+    clearStoredSession(localStore, STUDIO_STORAGE_KEY);
+    dropSession(CONSENT_STARTED_KEY);
+    dropSession(CONSENT_OWNED_KEY);
   };
 
   // ---- 時間切れ（5 分）と、画面を離れたときのログアウト ----
-  // ログインを始めた時刻・許可の画面を出した時刻を記録し、5 分を過ぎたら（記録が無いときも）ログアウトする。
-  // 画面を離れる（タブを閉じる・別のページへ移る）ときもログアウトする。ただし Google のログインへ移るときは除く
-  // （戻ってきたときに、このタブのセッションの保存先にある PKCE の code_verifier と時刻の記録が要る）
+  // この画面でログインを始めた時刻を記録し、Google から戻ったときに 5 分を過ぎていたらログアウトする。
+  // 許可の画面を出した時刻も記録し、5 分を過ぎたら許可の画面を閉じる（この画面で始めたログインなら、ログアウトもする）。
+  // この画面で始めたログインは、画面を離れる（タブを閉じる・別のページへ移る）ときもログアウトする。ただし Google のログインへ移るときは除く
+  // （戻ってきたときに、PKCE の code_verifier と時刻の記録が要る）
   let leavingForLogin = false;
   let expireTimer = null;
+  /** この画面で始めたログインの記録（{ userId, sessionId, startedAt }。main で、今のセッションと同じときだけ入れる） */
+  let owned = null;
+  /** 許可の画面を出した時刻（5 分の時間切れに使う） */
+  let consentShownAt = null;
+  /** 許可の画面に表示している人（{ userId, sessionId }）。表示の前・止めたあとは null */
+  let shownIdentity = null;
+  /** 表示の世代。止める・作り直すたびに進める。古い読み込みの続きで画面を出さない */
+  let gen = 0;
   const markStarted = () => {
     try {
-      sessionStore?.setItem(CONSENT_ACTIVITY_KEY, String(Date.now()));
+      sessionStore?.setItem(CONSENT_STARTED_KEY, String(Date.now()));
     } catch {
-      // 記録できなければ、戻ったときに時間切れになる（安全側）
+      // 記録できなければ、戻ったときに共有のログインと同じ扱い（ログアウトしない）になる。許可の画面の 5 分の守りは変わらない
     }
   };
-  const startedAt = () => {
+  const startedAt = () => readSession(CONSENT_STARTED_KEY);
+  /** この画面で始めたログインで、今のログインがそのセッションのままか */
+  const ownsCurrent = () => !!owned && sameIdentity(owned, currentIdentity());
+  /**
+   * この画面で始めたセッション（target）だけをログアウトする。保存先がまだ target のときだけ、その場で（通信を待つ前に）消し、
+   * そのトークンでログアウトを送る。通信を待つ間にほかのタブで入った新しいログインは消さない（TASK-0112 の F112-02。
+   * supabase-js の signOut は、通信のあとで、そのときの鍵を無条件に消すので使わない）
+   */
+  const endOwnedSession = async (target) => {
     try {
-      return sessionStore?.getItem(CONSENT_ACTIVITY_KEY) ?? null;
+      supabase.auth.stopAutoRefresh?.();
     } catch {
-      return null;
+      // 無視
     }
+    const token = takeStoredSession(localStore, STUDIO_STORAGE_KEY, target);
+    dropSession(CONSENT_STARTED_KEY);
+    dropSession(CONSENT_OWNED_KEY);
+    if (!token || CONSENT_END_SESSION !== "signout-local") return;
+    try {
+      await fetch(SUPABASE_URL + "/auth/v1/logout?scope=local", {
+        method: "POST",
+        keepalive: true,
+        headers: { apikey: SUPABASE_PUBLISHABLE_KEY, Authorization: "Bearer " + token },
+      });
+    } catch {
+      // 送れなくても、保存先はもう消した
+    }
+  };
+  /**
+   * 終わったときの片付け：この画面で始めたログインのセッションのままなら、そのセッションだけをログアウトする。
+   * 共有のログイン・あとから入った別のセッション（ほかのタブでログインし直したなど）は切らない
+   */
+  const finish = async () => {
+    const target = ownsCurrent() ? currentIdentity() : null;
+    owned = null;
+    dropSession(CONSENT_OWNED_KEY);
+    if (target) await endOwnedSession(target);
   };
   const expiredText = `${CONSENT_TIME_LIMIT_MS / 60000} 分が過ぎたため、ログインを終了しました。使っているアプリ（ChatGPT・Codex・Claude Code）から、もう一度接続してください。`;
+  /** 共有のログインのとき（ログアウトはしない）の、許可の画面の時間切れの文 */
+  const expiredSharedText = `${CONSENT_TIME_LIMIT_MS / 60000} 分が過ぎたため、接続の操作を終了しました。使っているアプリ（ChatGPT・Codex・Claude Code）から、もう一度接続してください。`;
+  /** 許可の画面を出している間に、ログインが替わった（別の人・ログアウト）ときの文 */
+  const changedText = "ログインが替わったため、接続の操作を止めました。使っているアプリ（ChatGPT・Codex・Claude Code）から、もう一度接続してください。";
 
   const $ = (id) => document.getElementById(id);
   const show = (id) => {
@@ -296,23 +397,142 @@
       show("login");
       return;
     }
-    // ログインを始めてから 5 分を過ぎている（記録が無いときも）ときは使わせない
-    if (idleExpired(startedAt(), Date.now(), CONSENT_TIME_LIMIT_MS)) {
-      await endSession();
+    const identity = sessionIdentity(session);
+    // この画面で始めたログインか：Google から戻って（?code）、試しの印があり、交換で新しいセッションになったときに、
+    // そのセッションに結び付けて記録する。記録は ?code の無い読み込み（復元など）でも残し、今のセッションと同じときだけ使う（F107-03）
+    if (hasCode && startedAt() !== null && identity && !sameIdentity(identity, identityAtOpen)) {
+      try {
+        sessionStore?.setItem(CONSENT_OWNED_KEY, JSON.stringify({ ...identity, startedAt: Number(startedAt()) }));
+      } catch {
+        // 記録できなければ、共有のログインと同じ扱い（ログアウトしない）。許可の画面の 5 分の守りは変わらない
+      }
+    }
+    dropSession(CONSENT_STARTED_KEY);
+    try {
+      const o = JSON.parse(readSession(CONSENT_OWNED_KEY) ?? "null");
+      owned = o && sameIdentity(o, identity) ? o : null;
+    } catch {
+      owned = null;
+    }
+    // 記録が今のセッションのものでなければ（ほかのタブで入れ替わった）、記録だけ捨てる（今のログインは切らない）
+    if (!owned) dropSession(CONSENT_OWNED_KEY);
+    // この画面で始めたログインで、始めてから 5 分を過ぎているときは使わせない
+    if (owned && idleExpired(String(owned.startedAt), Date.now(), CONSENT_TIME_LIMIT_MS)) {
+      owned = null;
+      await endOwnedSession(identity);
       $("login-note").textContent = expiredText;
       $("login-note").hidden = false;
       show("login");
       return;
     }
 
-    // 許可の画面を出さなかった（使えないアカウント・エラーなど）ときは、ログインを残さない
+    // 許可の画面を出さなかった（使えないアカウント・エラーなど）ときは、この画面で始めたログインを残さない。
+    // 途中でログインが替わったとき（"stale"）は、止める処理（stopConsent）が済んでいる
     const shown = await showConsent(session);
-    if (!shown) await endSession();
+    if (shown === false) await finish();
   }
+
+  /**
+   * 許可の画面を止める（ログインが替わった・時間切れ）。表示している人・接続先を消し、ボタンを押せなくし、世代を進める
+   * （古い読み込みの続きで画面を出さない）。ログインは切らない（今のログインは、あとから入った人のものかもしれない）
+   */
+  function stopConsent(message) {
+    gen += 1;
+    shownIdentity = null;
+    clearTimeout(expireTimer);
+    $("approve-btn").disabled = true;
+    $("deny-btn").disabled = true;
+    for (const id of ["user-email", "client-name", "redirect-desc"]) $(id).textContent = "";
+    fail(message);
+  }
+
+  /** 表示の世代 myGen のまま、表示している人と今のログインの人が同じか（同じ人でも、ログインし直した別のセッションなら false） */
+  const stillShown = (myGen) => myGen === gen && !!shownIdentity && sameIdentity(shownIdentity, currentIdentity());
+
+  /**
+   * 許可・拒否・許可済みの戻りの直前の確かめ：表示している人と今のログインが同じで、許可の画面を出してから 5 分以内か。
+   * 良ければ、確かめたセッションのアクセストークンを返す（許可・拒否は、このトークンで送る。TASK-0112 の F112-01）。
+   * 違えば止めて null（要求は送らない）
+   */
+  async function readyToSend(myGen) {
+    let session = null;
+    try {
+      const { data } = await supabase.auth.getSession();
+      session = data?.session ?? null;
+    } catch {
+      session = null;
+    }
+    const now = sessionIdentity(session);
+    if (myGen !== gen || !shownIdentity || !sameIdentity(now, shownIdentity) || !sameIdentity(currentIdentity(), shownIdentity)) {
+      if (myGen === gen) stopConsent(changedText);
+      return null;
+    }
+    if (consentShownAt !== null && idleExpired(consentShownAt, Date.now(), CONSENT_TIME_LIMIT_MS)) {
+      await expireConsent();
+      return null;
+    }
+    return session.access_token;
+  }
+
+  /**
+   * 許可・拒否を、確かめたセッションのトークン（token）で直接送る。supabase-js の approveAuthorization・denyAuthorization は、
+   * 送るときに保存先のセッションを読み直すので使わない（確かめたあとに、ほかのタブが別の人に替えると、その人で送ってしまう。F112-01）。
+   * 通信の形は supabase-js 2.117.2 と同じ（POST /oauth/authorizations/{id}/consent・{ action }）。返り値は { data, error }
+   */
+  async function sendConsent(action, token) {
+    const res = await fetch(SUPABASE_URL + "/auth/v1/oauth/authorizations/" + encodeURIComponent(authorizationId) + "/consent", {
+      method: "POST",
+      headers: {
+        apikey: SUPABASE_PUBLISHABLE_KEY,
+        Authorization: "Bearer " + token,
+        "Content-Type": "application/json;charset=UTF-8",
+        "X-Supabase-Api-Version": "2024-01-01",
+      },
+      body: JSON.stringify({ action }),
+    });
+    const body = await res.json().catch(() => null);
+    if (!res.ok) {
+      return { data: null, error: { message: body?.msg || body?.error_description || body?.message || "HTTP " + res.status } };
+    }
+    return { data: body, error: null };
+  }
+
+  /** 送ったあとにも、表示の世代と今のログインが、確かめた人のままか。替わっていたら止めて false（戻り先へは移らない） */
+  function stillAfterSend(myGen, verified) {
+    if (myGen === gen && sameIdentity(currentIdentity(), verified)) return true;
+    if (myGen === gen) stopConsent(changedText);
+    return false;
+  }
+
+  // ほかのタブで共有のログインが替わった（別の人・ログインし直し・ログアウト）：表示している人と違えば、許可の画面を止める
+  window.addEventListener("storage", (e) => {
+    if (!shownIdentity) return;
+    if (e.key !== null && e.key !== STUDIO_STORAGE_KEY) return;
+    const next = e.key === null ? null : sessionIdentity(e.newValue);
+    if (!sameIdentity(next, shownIdentity)) stopConsent(changedText);
+  });
+  // supabase-js の知らせ（ほかのタブの BroadcastChannel・このタブのトークンの更新の失敗）。知らせの中では supabase を待たない
+  supabase.auth.onAuthStateChange((event, session) => {
+    if (!shownIdentity) return;
+    const next = event === "SIGNED_OUT" ? null : sessionIdentity(session);
+    if (event === "SIGNED_OUT" || (next && !sameIdentity(next, shownIdentity))) {
+      setTimeout(() => {
+        if (shownIdentity) stopConsent(changedText);
+      }, 0);
+    }
+  });
 
   /** ログイン後：アカウント・名簿・接続の情報を確かめて、許可の画面を出す。出した（許可済みで戻した）ら true */
   async function showConsent(session) {
     const email = session.user.email;
+    const myGen = ++gen;
+    shownIdentity = sessionIdentity(session);
+    /** 読み込みの途中でログインが替わったか（替わっていたら止めて "stale"） */
+    const stale = () => {
+      if (stillShown(myGen)) return false;
+      if (myGen === gen) stopConsent(changedText);
+      return true;
+    };
     if (!isAllowed(email)) {
       $("blocked-email").textContent = email;
       show("blocked");
@@ -321,6 +541,7 @@
 
     // 名簿（管理者が登録した利用者）に載っていて、停止されていないことを確かめる
     const { data: membership, error: membershipError } = await supabase.rpc("my_membership");
+    if (stale()) return "stale";
     if (membershipError) {
       fail("利用登録の状態を確認できませんでした。少し待ってからページを開き直してください。");
       return false;
@@ -335,6 +556,7 @@
     }
 
     const { data, error } = await supabase.auth.oauth.getAuthorizationDetails(authorizationId);
+    if (stale()) return "stale";
     if (error) {
       fail("接続の情報を取得できませんでした。使っているアプリ（ChatGPT・Codex・Claude Code）から、もう一度接続してください。（" + error.message + "）");
       return false;
@@ -347,8 +569,10 @@
       return false;
     }
     if (decision.action === "redirect") {
-      // 許可済みで戻るだけのときも、ログインは残さない
-      await endSession();
+      // 許可済みで戻るだけのときも、戻る直前に表示の人と今のログインを照らし、この画面で始めたログインは残さない
+      if (!(await readyToSend(myGen))) return "stale";
+      shownIdentity = null;
+      await finish();
       location.assign(decision.url);
       return true;
     }
@@ -364,44 +588,40 @@
     $("loopback-warning").hidden = decision.kind !== "loopback";
     $("user-email").textContent = email;
     show("consent");
-    // 許可の画面を出してから 5 分で、ログインを終える
-    markStarted();
+    $("approve-btn").disabled = false;
+    $("deny-btn").disabled = false;
+    // 許可の画面を出してから 5 分で、許可の画面を閉じる（この画面で始めたログインなら、ログアウトもする）
+    consentShownAt = String(Date.now());
     clearTimeout(expireTimer);
     expireTimer = setTimeout(expireConsent, CONSENT_TIME_LIMIT_MS);
     return true;
   }
 
-  /** 許可の画面のまま 5 分が過ぎた：ログアウトして、接続し直すよう知らせる */
+  /** 許可の画面のまま 5 分が過ぎた：許可の画面を閉じ（この画面で始めたログインならログアウトもして）、接続し直すよう知らせる */
   async function expireConsent() {
     if ($("consent").hidden) return;
-    await endSession();
-    fail(expiredText);
+    const own = ownsCurrent();
+    stopConsent(own ? expiredText : expiredSharedText);
+    await finish();
   }
 
   // スリープ・背面のタブではタイマーが遅れるので、前に出たときにも確かめる
   document.addEventListener("visibilitychange", () => {
-    if (document.visibilityState === "visible" && !$("consent").hidden && idleExpired(startedAt(), Date.now(), CONSENT_TIME_LIMIT_MS)) {
+    if (document.visibilityState === "visible" && !$("consent").hidden && idleExpired(consentShownAt, Date.now(), CONSENT_TIME_LIMIT_MS)) {
       expireConsent();
     }
   });
 
-  // 画面を離れるときはログアウトする（Google のログインへ移るときを除く）。待てないので、
-  // サーバーへの取り消しは keepalive で送り（方式が "signout-local" のときだけ）、タブの保存先はその場で消す
+  // この画面で始めたログインは、画面を離れるときにログアウトする（Google のログインへ移るときを除く）。待てないので、
+  // サーバーへの取り消しは keepalive で送り（方式が "signout-local" のときだけ）、保存先はその場で消す。
+  // 共有のログイン（マイページなどで済ませたもの）は切らない
   window.addEventListener("pagehide", () => {
-    if (leavingForLogin) return;
-    const token = storedAccessToken(sessionStore, CONSENT_STORAGE_KEY);
-    if (token && CONSENT_END_SESSION === "signout-local") {
-      try {
-        fetch(SUPABASE_URL + "/auth/v1/logout?scope=local", {
-          method: "POST",
-          keepalive: true,
-          headers: { apikey: SUPABASE_PUBLISHABLE_KEY, Authorization: "Bearer " + token },
-        }).catch(() => {});
-      } catch {
-        // 送れなくても、タブの保存先は下で消す
-      }
-    }
-    clearStoredSession(sessionStore, CONSENT_STORAGE_KEY);
+    // 今のログインが、この画面で始めたセッションのままのときだけ（あとから入った別のセッションは消さない）
+    if (leavingForLogin || !ownsCurrent()) return;
+    sendLocalLogout(storedAccessToken(localStore, STUDIO_STORAGE_KEY));
+    clearStoredSession(localStore, STUDIO_STORAGE_KEY);
+    dropSession(CONSENT_STARTED_KEY);
+    dropSession(CONSENT_OWNED_KEY);
   });
   // 戻るボタンでキャッシュから表示されたとき（ログアウト済み）は、読み込み直して状態を作り直す
   window.addEventListener("pageshow", (e) => {
@@ -424,19 +644,28 @@
   $("approve-btn").addEventListener("click", async () => {
     $("approve-btn").disabled = true;
     $("deny-btn").disabled = true;
+    // 送る直前に、表示している人と今のログインの人が同じか・5 分以内かを照らす。違えば送らない（F107-01）。
+    // 送るのは、確かめたセッションのトークンで（F112-01）
+    const myGen = gen;
+    const verified = shownIdentity;
+    const token = await readyToSend(myGen);
+    if (!token) return;
     try {
-      const { data, error } = await supabase.auth.oauth.approveAuthorization(authorizationId, {
-        skipBrowserRedirect: true,
-      });
-      // 許可したら、戻る前にすぐログアウトする（研修用の Mac に次の人のためのログインを残さない）
-      await endSession();
+      const { data, error } = await sendConsent("approve", token);
+      if (!stillAfterSend(myGen, verified)) {
+        await finish();
+        return;
+      }
+      shownIdentity = null;
+      // 許可したら、戻る前に、この画面で始めたログインはすぐログアウトする（共有のログインは切らない）
+      await finish();
       if (error) {
         fail("許可に失敗しました。使っているアプリ（ChatGPT・Codex・Claude Code）から、もう一度接続してください。（" + error.message + "）");
         return;
       }
       goBack(data?.redirect_url);
     } catch (e) {
-      await endSession();
+      await finish();
       fail("許可に失敗しました。使っているアプリ（ChatGPT・Codex・Claude Code）から、もう一度接続してください。（" + (e?.message || e) + "）");
     }
   });
@@ -444,24 +673,31 @@
   $("deny-btn").addEventListener("click", async () => {
     $("approve-btn").disabled = true;
     $("deny-btn").disabled = true;
+    const myGen = gen;
+    const verified = shownIdentity;
+    const token = await readyToSend(myGen);
+    if (!token) return;
     try {
-      const { data, error } = await supabase.auth.oauth.denyAuthorization(authorizationId, {
-        skipBrowserRedirect: true,
-      });
-      await endSession();
+      const { data, error } = await sendConsent("deny", token);
+      if (!stillAfterSend(myGen, verified)) {
+        await finish();
+        return;
+      }
+      shownIdentity = null;
+      await finish();
       if (error) {
         fail("処理に失敗しました。このタブを閉じてください。（" + error.message + "）");
         return;
       }
       goBack(data?.redirect_url);
     } catch (e) {
-      await endSession();
+      await finish();
       fail("処理に失敗しました。このタブを閉じてください。（" + (e?.message || e) + "）");
     }
   });
 
   main().catch(async (e) => {
-    await endSession();
+    await finish();
     fail("エラーが発生しました：" + (e?.message || e));
   });
 </script>

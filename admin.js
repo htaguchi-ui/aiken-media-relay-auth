@@ -4,13 +4,19 @@
 // 幅 900px 以上は表＋右のパネル（PC）、未満はカード＋下から出るシート（スマホ）。
 // supabase-js は admin.html で版を固定し、integrity（SRI）を付けて読み込む（window.supabase）
 import {
-  ADMIN_ACTIVITY_KEY,
-  ADMIN_IDLE_LIMIT_MS,
+  ADMIN_SESSION_LIMIT_MS,
+  ADMIN_SIGNED_IN_AT_KEY,
   ADMIN_STORAGE_KEY,
+  adminSessionRecord,
+  adminSessionState,
+  authEventKind,
   browserStorage,
   clearStoredSession,
-  idleExpired,
+  discardOldTabSessions,
   LEGACY_STORAGE_PREFIX,
+  sessionChangeKind,
+  sessionIdentity,
+  takeStoredSession,
 } from "./auth-storage.js";
 import {
   accessText,
@@ -169,17 +175,34 @@ if (typeof window.supabase?.createClient !== "function") {
   throw new Error("supabase-js を読み込めませんでした");
 }
 
-// 研修用の Mac でも管理者のログインを残さない：保存はこのタブの間だけ（sessionStorage）、許可の画面とは別の鍵。
-// 以前の版が localStorage に残したセッション（許可の画面と共有していた）は、開いた時点で消す
-const sessionStore = browserStorage("session");
-clearStoredSession(browserStorage("local"), LEGACY_STORAGE_PREFIX);
+// 管理コンソールのログインは、ほかの画面（マイページ・講師の画面・Canvas・許可の画面）と共有しない（決定 70）：
+// 保存先は localStorage の管理コンソールだけの鍵。同じブラウザのタブどうしでは共有し、ログインした時刻から 12 時間でログアウトする。
+// 以前の版が localStorage（sb-…）・sessionStorage（aiken-admin-auth など）に残したセッションは、開いた時点で捨てる（移さない）
+const localStore = browserStorage("local");
+clearStoredSession(localStore, LEGACY_STORAGE_PREFIX);
+discardOldTabSessions(browserStorage("session"), (token) => {
+  fetch(`${SUPABASE_URL}/auth/v1/logout?scope=local`, {
+    method: "POST",
+    keepalive: true,
+    headers: { apikey: SUPABASE_PUBLISHABLE_KEY, Authorization: `Bearer ${token}` },
+  }).catch(() => {});
+});
+/** 開いた時点（Google の ?code の交換より前）に保存されていたセッション。交換で新しいセッションになったかを見分ける（F107-02） */
+const identityAtOpen = (() => {
+  try {
+    return sessionIdentity(localStore?.getItem(ADMIN_STORAGE_KEY) ?? null);
+  } catch {
+    return null;
+  }
+})();
 const supabase = window.supabase.createClient(SUPABASE_URL, SUPABASE_PUBLISHABLE_KEY, {
   auth: {
     flowType: "pkce",
     detectSessionInUrl: true,
     persistSession: true,
+    autoRefreshToken: true,
     storageKey: ADMIN_STORAGE_KEY,
-    ...(sessionStore ? { storage: sessionStore } : {}),
+    ...(localStore ? { storage: localStore } : {}),
   },
 });
 
@@ -208,7 +231,7 @@ const isDesktop = () => desktopMq.matches;
 const wideMq = window.matchMedia("(min-width: 68.75em)");
 const isWide = () => wideMq.matches;
 let myEmail = "";
-/** 操作が無くてログアウトした（このあと遅れて届いた応答で、画面や前の人の値を出さない） */
+/** 12 時間でログアウトした・ほかのタブでログアウトした（このあと遅れて届いた応答で、画面や前の人の値を出さない） */
 let appClosed = false;
 
 /** 画面の状態 */
@@ -741,8 +764,9 @@ function returnUrl() {
 }
 
 async function signIn() {
-  // Google から戻ったときに「記録が無い＝時間切れ」にならないよう、ログインを始めた時刻を書いておく
-  markActive(true);
+  // ログインの記録（12 時間の起点）は、ここでは書かない。Google から戻って交換が成功したときだけ書く（commitSignIn。F107-02：
+  // 試しただけ・取りやめ・失敗で、今あるログインの 12 時間を延ばさない）。
+  // 管理コンソールは、従来どおり Google のアカウントを選ぶ画面を出す（ほかの画面のログインと分けて、管理者のアカウントを選ばせる）
   await supabase.auth.signInWithOAuth({
     provider: "google",
     options: { redirectTo: returnUrl(), queryParams: { prompt: "select_account" } },
@@ -750,57 +774,69 @@ async function signIn() {
 }
 
 async function signOut() {
-  // この管理コンソールのセッションだけを切る（global だと、管理者本人の ChatGPT・Codex・Claude Code の接続まで切れる）
+  // この管理コンソールのセッションだけを切る（global だと、管理者本人の ChatGPT・Codex・Claude Code の接続まで切れる。
+  // マイページなどの共有のログインは別の鍵なので、そのまま）。通信を待つ前に、本人の値・編集中の内容を消して操作を止める（F107-04）
+  stopExpireWatch();
+  clearAppView();
+  $("status").textContent = "ログアウトしています…";
+  show("status");
   await endSession("local");
   location.replace(returnUrl());
 }
 
-/** ログアウトして、タブに残る分（セッション・最後の操作の時刻）も消す（通信できなくても消す） */
+/** ログアウトして、この端末の管理コンソールのログイン（セッション・ログインした時刻）を消す（通信できなくても消す） */
 async function endSession(scope = "local") {
   try {
     await supabase.auth.signOut({ scope });
   } catch {
     // 下で消す
   }
-  clearStoredSession(sessionStore, ADMIN_STORAGE_KEY);
+  clearStoredSession(localStore, ADMIN_STORAGE_KEY);
 }
 
-// ---- 操作が無いときのログアウト（30 分） ----
+// ---- ログインから 12 時間でログアウト・ほかのタブでのログアウト ----
 
-let lastActiveWrite = 0;
-let idleTimer = null;
+let expireTimer = null;
 
-/** 操作したことを記録する（書き込みは 15 秒に 1 回まで） */
-function markActive(force = false) {
-  const now = Date.now();
-  if (!force && now - lastActiveWrite < 15000) return;
-  lastActiveWrite = now;
+function signedInAt() {
   try {
-    sessionStore?.setItem(ADMIN_ACTIVITY_KEY, String(now));
-  } catch {
-    // 記録できなくても続ける
-  }
-}
-
-function lastActive() {
-  try {
-    return sessionStore?.getItem(ADMIN_ACTIVITY_KEY) ?? null;
+    return localStore?.getItem(ADMIN_SIGNED_IN_AT_KEY) ?? null;
   } catch {
     return null;
   }
 }
 
-/** 30 分操作が無ければログアウトして、ログインの画面に戻す。ログアウトしたら true */
-async function logoutIfIdle() {
-  const last = lastActive();
-  if (!idleExpired(last, Date.now(), ADMIN_IDLE_LIMIT_MS)) return false;
-  stopIdleWatch();
+/** 今保存されている管理コンソールのセッション（{ userId, sessionId }。無ければ null） */
+function currentIdentity() {
+  try {
+    return sessionIdentity(localStore?.getItem(ADMIN_STORAGE_KEY) ?? null);
+  } catch {
+    return null;
+  }
+}
+
+/**
+ * Google から戻って（hasCode）、交換で新しいセッションになったときだけ、ログインの記録（12 時間の起点）をそのセッションに結び付けて書く。
+ * 同じセッションの開き直し・トークンの更新・交換の失敗（開いた時点のセッションのまま）では書き直さない（F107-02）
+ */
+function commitSignIn(session, hasCode, before) {
+  const now = sessionIdentity(session);
+  if (!hasCode || !now) return false;
+  if (before && before.userId === now.userId && before.sessionId === now.sessionId) return false;
+  try {
+    localStore?.setItem(ADMIN_SIGNED_IN_AT_KEY, adminSessionRecord(now, Date.now()));
+    return true;
+  } catch {
+    return false; // 記録できなければ、次の確かめで時間切れの扱い（安全側）
+  }
+}
+
+/** 本人の値・編集中の内容を画面から消す（前の人の値を残さない） */
+function clearAppView() {
   appClosed = true;
   askDone?.(undefined);
-  await endSession();
   if (sheet.open) closeSheet();
   clearNotice();
-  // 前の人の値・編集中の内容を残さない
   state.rows = [];
   state.settings.info = null;
   state.settings.models = null;
@@ -808,13 +844,65 @@ async function logoutIfIdle() {
   state.settings.edit = null;
   state.settings.drafts = null;
   for (const id of ["settings-summary", "settings-main", "settings-models", "settings-templates", "settings-history", "settings-aside", "settings-bar", "roster-list", "roster-aside", "cohorts-main", "cohort-aside", "overview"]) $(id).replaceChildren();
-  showLoginNote(
-    last === null
-      ? "ログインの記録を確かめられなかったため、ログアウトしました。もう一度ログインしてください。"
-      : `${ADMIN_IDLE_LIMIT_MS / 60000} 分間操作が無かったため、ログアウトしました。`,
-  );
-  show("login");
-  return true;
+}
+
+/** ログインした時刻から 12 時間を過ぎていれば（記録が無いときも）ログアウトして、ログインの画面に戻す。ログアウトしたら true */
+/** 記録が今のセッションのものでないとき、ほかのタブが起点を書き終えるのを待つ時間（TASK-0112 の F112-03） */
+const ADMIN_COMMIT_WAIT_MS = 2000;
+/** 確かめの途中（30 秒ごと・前に出たときが重なっても、1 つずつ） */
+let expiring = false;
+
+/**
+ * 12 時間を過ぎたセッション（target）だけをログアウトする。保存先がまだ target のときだけ、その場で消してから、
+ * そのトークンでログアウトを送る。通信を待つ間にほかのタブで入った新しいログインは消さない（F112-03）
+ */
+async function endExpiredSession(target) {
+  try {
+    supabase.auth.stopAutoRefresh?.();
+  } catch {
+    // 無視
+  }
+  const token = takeStoredSession(localStore, ADMIN_STORAGE_KEY, target);
+  if (!token) return;
+  try {
+    await fetch(`${SUPABASE_URL}/auth/v1/logout?scope=local`, {
+      method: "POST",
+      keepalive: true,
+      headers: { apikey: SUPABASE_PUBLISHABLE_KEY, Authorization: `Bearer ${token}` },
+    });
+  } catch {
+    // 送れなくても、保存先はもう消した
+  }
+}
+
+async function logoutIfExpired() {
+  if (expiring) return false;
+  // 判定は auth-storage.js の adminSessionState（adminSessionExpired の中身）の 1 か所
+  let reason = adminSessionState(signedInAt(), currentIdentity(), Date.now());
+  if (reason === "ok") return false;
+  expiring = true;
+  try {
+    if (reason === "mismatch") {
+      // ほかのタブがログインし直し、新しいセッションを保存したが、まだ起点を書いていないことがある。少し待って確かめ直す（F112-03）
+      await new Promise((r) => setTimeout(r, ADMIN_COMMIT_WAIT_MS));
+      reason = adminSessionState(signedInAt(), currentIdentity(), Date.now());
+      if (reason === "ok") return false;
+    }
+    // ログアウトするセッションを、ここで決める（このあとに入った新しいログインは消さない）
+    const target = currentIdentity();
+    stopExpireWatch();
+    clearAppView();
+    await endExpiredSession(target);
+    showLoginNote(
+      reason === "expired"
+        ? `ログインから ${ADMIN_SESSION_LIMIT_MS / 3600000} 時間たったため、ログアウトしました。もう一度ログインしてください。`
+        : "ログインの記録を確かめられなかったため、ログアウトしました。もう一度ログインしてください。",
+    );
+    show("login");
+    return true;
+  } finally {
+    expiring = false;
+  }
 }
 
 function showLoginNote(text) {
@@ -822,21 +910,38 @@ function showLoginNote(text) {
   $("login-note").hidden = !text;
 }
 
-function startIdleWatch() {
-  markActive(true);
-  for (const type of ["pointerdown", "keydown", "wheel", "touchstart", "input"]) {
-    document.addEventListener(type, () => markActive(), { capture: true, passive: true });
-  }
-  // スリープ・背面のタブではタイマーが遅れるので、前に出たときにも確かめる
-  document.addEventListener("visibilitychange", () => {
-    if (document.visibilityState === "visible") logoutIfIdle();
-  });
-  idleTimer = setInterval(logoutIfIdle, 30000);
+/** このタブが表示している管理者の ID（ログイン前は null） */
+let shownUser = null;
+
+/** ほかのタブで管理コンソールからログアウトした・別のアカウントに替わった：中身を消して、ページを読み込み直す */
+function onSessionChanged(kind) {
+  if (!kind || appClosed) return;
+  stopExpireWatch();
+  clearAppView();
+  $("status").textContent = kind === "signed-out" ? "ログアウトしました。" : "読み込み中…";
+  show("status");
+  location.replace(returnUrl());
 }
 
-function stopIdleWatch() {
-  if (idleTimer) clearInterval(idleTimer);
-  idleTimer = null;
+function startExpireWatch(userId) {
+  shownUser = userId;
+  // スリープ・背面のタブではタイマーが遅れるので、前に出たときにも確かめる
+  document.addEventListener("visibilitychange", () => {
+    if (document.visibilityState === "visible" && !appClosed) logoutIfExpired();
+  });
+  expireTimer = setInterval(logoutIfExpired, 30000);
+  // ほかのタブの管理コンソールが鍵を書き換えた・消した（マイページなどの共有のログインの変化は見ない）
+  window.addEventListener("storage", (e) => onSessionChanged(sessionChangeKind(e, ADMIN_STORAGE_KEY, shownUser)));
+  // supabase-js の知らせ（ほかの管理コンソールのタブの BroadcastChannel・このタブのトークンの更新の失敗）。知らせの中では supabase を待たない
+  supabase.auth.onAuthStateChange((event, session) => {
+    const kind = authEventKind(event, session, shownUser);
+    if (kind) setTimeout(() => onSessionChanged(kind), 0);
+  });
+}
+
+function stopExpireWatch() {
+  if (expireTimer) clearInterval(expireTimer);
+  expireTimer = null;
 }
 
 // ---- 読み込み ----
@@ -5822,9 +5927,10 @@ async function main() {
     show("login");
     return;
   }
-  // 閉じたタブを開き直したときなど、前の操作から 30 分を過ぎている（記録が無い）なら使わせない
-  if (await logoutIfIdle()) return;
-  startIdleWatch();
+  // Google から戻って新しいセッションになったときだけ、12 時間の起点を書く。そのあと 12 時間を過ぎている（記録が無い）なら使わせない
+  commitSignIn(session, !!params.get("code"), identityAtOpen);
+  if (await logoutIfExpired()) return;
+  startExpireWatch(session.user?.id ?? null);
   // 戻ってきた直後の URL に残る code などを消す
   if (location.search) history.replaceState(null, "", returnUrl());
 

@@ -230,6 +230,8 @@
   .welcome .welcome-sub { font-size: 14px; color: var(--muted); }
   .welcome .btn { align-self: stretch; }
   .welcome .links { display: flex; flex-wrap: wrap; justify-content: center; gap: 0 16px; }
+  .welcome .alt-login { min-height: 44px; margin-top: -8px; padding: 0 8px; border: 0; background: none; color: var(--accent); font-size: 14px; font-weight: 600; text-decoration: underline; text-underline-offset: 3px; }
+  .welcome .alt-login:disabled { opacity: 0.55; }
   .welcome .links a { min-height: 44px; display: inline-flex; align-items: center; font-weight: 600; color: var(--accent); }
   .welcome .foot { font-size: 13px; letter-spacing: 0.08em; color: var(--muted); margin-top: 8px; }
   @media (max-width: 480px) { .center-card.welcome { padding-top: 32px; } }
@@ -250,6 +252,7 @@
   </div>
   <p class="warn-text" id="login-note" role="status" hidden></p>
   <button type="button" class="btn primary big" id="login-btn">Google でログイン</button>
+  <button type="button" class="alt-login" id="login-other-btn">別のアカウントでログイン</button>
   <nav class="links" aria-label="方針と規約">
     <a href="https://a-i-ken.com/privacy/">プライバシーポリシー</a>
     <a href="/terms.html">利用規約</a>

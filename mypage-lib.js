@@ -2,8 +2,6 @@
 // テストは aiken-media-relay/scripts/mypage_lib_test.ts。
 // 画面にドルや換算の割合は出さない（user-api の応答にも含まれない）。クレジットの数字と文言は user-api の応答をそのまま使う。
 
-import { idleExpired } from "./auth-storage.js";
-
 /** 有限の数か（null・""・NaN・文字列は false） */
 function isNumber(v) {
   return typeof v === "number" && Number.isFinite(v);
@@ -338,78 +336,10 @@ export function decideApiOutcome(status, body) {
 }
 
 /**
- * supabase-js が PKCE のために保存する code verifier の鍵の末尾。2.117.2 は次の 3 種を書き、どれもこの末尾で終わる：
- *   `<storageKey>-code-verifier`（旧来の鍵。sb_flow_id が無いときの交換はこれを読む）
- *   `<storageKey>-flow-<flowId>-code-verifier`（flow ごとの鍵）・`<storageKey>-flows-code-verifier`（flowId の一覧）
- * supabase-js を上げるときは、鍵の名前が変わっていないかを確かめる（変わると Google から戻ってもログインできない）
+ * Google のログインへ移るときの supabase-js の options（決定 70）。ふつうのログインはアカウントを選ぶ画面を出さない
+ * （Google にログインしたままのブラウザなら、そのまま戻ってくる）。「別のアカウントでログイン」（selectAccount）のときだけ
+ * prompt=select_account を付けて、選ぶ画面を出す
  */
-export const CODE_VERIFIER_SUFFIX = "-code-verifier";
-
-/**
- * ページを開いた時点で、保存先から消す鍵（keys のうち prefix で始まるもの）。
- * Google のログインから「?code 付きで戻ったとき」だけが、このページを開いた時点で正当に残っているものがある場合：
- *   その場合は、PKCE の code verifier と、signIn で書いた操作時刻（activityKey）だけを残し、保存済みのセッションは消す。
- * code が無いとき（普段に開いたとき・強制終了やクラッシュのあとのセッション復元・再読み込み）は、すべて消す。
- * 前の人のログインが、pagehide が走らなかったときに戻るのを防ぐ
- */
-export function staleSessionKeys(keys, prefix, activityKey, hasCode) {
-  return keys.filter((k) => {
-    if (!k.startsWith(prefix)) return false;
-    if (hasCode && (k === activityKey || k.endsWith(CODE_VERIFIER_SUFFIX))) return false;
-    return true;
-  });
-}
-
-/**
- * 離れる前に「ログイン中だった」か（再読み込みの手がかりの hadSession）。トークンがあり、かつ 30 分の無操作で時間切れになっていないときだけ true。
- * 時間切れのあと（スリープ復帰直後・背面タブでタイマーが遅れているとき）に再読み込みしても、自動でログインし直さないため。
- * lastActive は最後の操作の時刻（sessionStorage の文字列。無い・不正は時間切れ扱い）
- */
-export function hadActiveSession({ token, lastActive, now, limitMs = 30 * 60 * 1000 }) {
-  return !!token && !idleExpired(lastActive, now, limitMs);
-}
-
-/** sessionStorage の再読み込みの手がかり（JSON の文字列）を読む。{ leftAt, hadSession }。無い・不正なら null */
-export function parseReloadHint(raw) {
-  if (typeof raw !== "string" || !raw) return null;
-  try {
-    const v = JSON.parse(raw);
-    if (!v || typeof v !== "object") return null;
-    return { leftAt: v.leftAt, hadSession: v.hadSession === true };
-  } catch {
-    return null;
-  }
-}
-
-/**
- * ページを開いた時点で、このあとどうするか。
- *  - "code"：Google から ?code 付きで戻った（今までどおり、ログインを完了させる）
- *  - "relogin"：再読み込み（navType が "reload"）で、手がかり（hint）があり、離れる前にログインしていて（hadSession）、
- *    離れてから graceMs 以内。Google のログインを自動でやり直す
- *  - "login"：それ以外（普段に開いた・タブを閉じて開き直した・強制終了や復元・手がかりが無い／ログインしていなかった／
- *    時刻が不正・未来・古い・navType が取れない・戻る進む）。ログイン前の画面
- * hint は parseReloadHint の結果（または null）。時刻の単位はミリ秒
- */
-export function decideOnOpen({ hasCode, navType, hint, now, graceMs = 15000 }) {
-  if (hasCode) return "code";
-  if (navType !== "reload") return "login";
-  if (!hint || hint.hadSession !== true) return "login";
-  const t = hint.leftAt;
-  if (typeof t !== "number" || !Number.isFinite(t)) return "login";
-  const elapsed = now - t;
-  // 未来の時刻（時計のずれ・書き換え）は使わない
-  return elapsed >= 0 && elapsed <= graceMs ? "relogin" : "login";
-}
-
-/** storage から staleSessionKeys の鍵を消す。消した数を返す（storage が無いときは 0） */
-export function clearStaleSession(storage, prefix, activityKey, hasCode) {
-  if (!storage) return 0;
-  const keys = [];
-  for (let i = 0; i < storage.length; i++) {
-    const k = storage.key(i);
-    if (k !== null) keys.push(k);
-  }
-  const stale = staleSessionKeys(keys, prefix, activityKey, hasCode);
-  for (const k of stale) storage.removeItem(k);
-  return stale.length;
+export function oauthOptions(redirectTo, selectAccount) {
+  return selectAccount === true ? { redirectTo, queryParams: { prompt: "select_account" } } : { redirectTo };
 }
