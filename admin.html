@@ -382,6 +382,11 @@
   body.setbar .content { padding-bottom: 180px; }
   .set-col { display: flex; flex-direction: column; gap: var(--s4); min-width: 0; }
   .set-col > div:empty { display: none; }
+  /* 設定の中の小さなタブ：1 行に収める（375px・320px でも横にはみ出さない）。押せる範囲はスマホ 44px・広い幅 40px */
+  .set-subtabs { display: flex; gap: 2px; padding: 3px; align-self: flex-start; max-width: 100%; }
+  .set-subtabs > button { flex: 1 1 auto; min-height: 44px; min-width: 44px; padding: 0 10px; white-space: nowrap; font-size: 14px; }
+  @media (max-width: 559.98px) { .set-subtabs { align-self: stretch; } .set-subtabs > button { padding: 0 6px; } }
+  @media (max-width: 359.98px) { .set-subtabs > button { padding: 0 3px; font-size: 13px; } }
   .set-aside { display: none; }
   .box-head .head-side { display: flex; flex-wrap: wrap; align-items: center; justify-content: flex-end; gap: 4px 8px; margin-left: auto; min-width: 0; }
   .box-head .meta { font-size: 13px; color: var(--text-2); }
@@ -645,6 +650,7 @@
     .stack-panel > .list-panel { flex: none; }
     .stack-panel > .empty { margin: 0; }
     .settings { padding: 0; }
+    .set-subtabs > button { min-height: 40px; padding: 0 18px; }
     .toggle, .toggle.master, .model-tabs > button { min-height: 40px; }
     .chev-btn, .chev-space { width: 40px; height: 40px; }
     .settings .box { padding: 18px 20px; }
@@ -844,9 +850,16 @@
 
     <div id="view-settings" class="settings" hidden>
       <h2 id="settings-title" class="sr-only">設定</h2>
-      <section id="settings-summary" class="box set-summary" aria-labelledby="sum-h"></section>
+      <!-- 設定の中の小さなタブ（決定 71）。押したものだけを下に出す。矢印キー・Home・End で移る -->
+      <div class="seg set-subtabs" id="settings-subtabs" role="tablist" aria-label="設定の分類">
+        <button type="button" role="tab" id="subtab-usage" aria-controls="settings-panel" aria-selected="true">利用と上限</button>
+        <button type="button" role="tab" id="subtab-models" aria-controls="settings-panel" aria-selected="false" tabindex="-1">モデル</button>
+        <button type="button" role="tab" id="subtab-templates" aria-controls="settings-panel" aria-selected="false" tabindex="-1">テンプレート</button>
+        <button type="button" role="tab" id="subtab-history" aria-controls="settings-panel" aria-selected="false" tabindex="-1">履歴</button>
+      </div>
       <div class="set-split">
-        <div class="set-col">
+        <div class="set-col" id="settings-panel" role="tabpanel" aria-labelledby="subtab-usage">
+          <section id="settings-summary" class="box set-summary" aria-labelledby="sum-h"></section>
           <div id="settings-main"></div>
           <div id="settings-models"></div>
           <div id="settings-templates"></div>

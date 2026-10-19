@@ -123,6 +123,10 @@ import {
   usageSummaryView,
   usdCreditsText,
   createLoadGate,
+  normalizeSubtab,
+  SETTINGS_SUBTABS,
+  subtabByKey,
+  subtabOfSelection,
 } from "./admin-lib.js";
 import {
   adminGrantGroups,
@@ -181,6 +185,23 @@ const supabase = window.supabase.createClient(SUPABASE_URL, SUPABASE_PUBLISHABLE
 
 const $ = (id) => document.getElementById(id);
 const SECTIONS = ["status", "login", "denied", "app"];
+/** 設定の小さなタブの覚え先（sessionStorage。ログインの保存とは別の鍵。使えないときは覚えないだけ） */
+const SUBTAB_KEY = "aiken-admin-settings-subtab";
+function readSubtab() {
+  try {
+    return normalizeSubtab(browserStorage("session")?.getItem(SUBTAB_KEY) ?? null);
+  } catch {
+    return "usage";
+  }
+}
+function writeSubtab(key) {
+  try {
+    browserStorage("session")?.setItem(SUBTAB_KEY, key);
+  } catch {
+    // 覚えられなくても続ける
+  }
+}
+
 const desktopMq = window.matchMedia("(min-width: 900px)");
 const isDesktop = () => desktopMq.matches;
 // 設定タブの右の欄は 1,100px 以上（em なので、文字を大きくしたときは早めにシートの形へ戻す。提案書 11.2）
@@ -267,6 +288,8 @@ const state = {
     /** モデルの保存中 */
     modelSaving: false,
     historyOpen: false,
+    /** 設定の中の小さなタブ（usage・models・templates・history。決定 71）。最初は［利用と上限］。このタブの間は再読み込みのあとも保つ */
+    sub: readSubtab(),
     breakdownOpen: false,
     /** 設定の保存中（結果が決まるまで、ほかの項目の編集・タブの移動を止める） */
     busy: false,
@@ -1037,6 +1060,7 @@ async function goTodayUsage() {
 /** 名簿の概要の［直近 24 時間の利用と上限］：設定の要約へ */
 async function goSettingsSummary() {
   if (!(await switchTab("settings"))) return;
+  if (!(await switchSubtab("usage"))) return;
   window.scrollTo(0, 0);
   $("sum-h")?.focus({ preventScroll: true });
 }
@@ -3653,6 +3677,11 @@ function pruneSelection() {
   const S = state.settings;
   const sel = S.sel;
   if (!sel) return;
+  if (subtabOfSelection(sel) !== S.sub) {
+    S.sel = null;
+    if (S.edit && !S.edit.saving) S.edit = null;
+    return;
+  }
   if (sel.kind === "limit" && S.status === "ok" && !availableLimits(settingsRow()).some((l) => l.key === sel.key)) {
     S.sel = null;
     S.edit = null;
@@ -3671,16 +3700,71 @@ function renderSettings() {
     return;
   }
   keepFocus([$("view-settings"), $("settings-bar"), sheetKind === "setting" ? sheet : null], () => {
-    $("settings-summary").replaceChildren(...summaryContent().filter(Boolean));
-    $("settings-main").replaceChildren(limitsSection());
-    $("settings-models").replaceChildren(modelsSection());
-    $("settings-templates").replaceChildren(...(stagesAvailable() || state.fresh.stages.stale ? [templatesSection()] : []));
-    $("settings-history").replaceChildren(historySection());
+    const sub = state.settings.sub;
+    renderSubtabs();
+    // 押した小さなタブの中身だけを作る（ほかは空にして隠す）
+    $("settings-summary").hidden = sub !== "usage";
+    $("settings-summary").replaceChildren(...(sub === "usage" ? summaryContent().filter(Boolean) : []));
+    $("settings-main").replaceChildren(...(sub === "usage" ? [limitsSection()] : []));
+    $("settings-models").replaceChildren(...(sub === "models" ? [modelsSection()] : []));
+    $("settings-templates").replaceChildren(
+      ...(sub !== "templates"
+        ? []
+        : stagesAvailable() || state.fresh.stages.stale
+        ? [templatesSection()]
+        : [el("section", { className: "box" }, el("h3", { text: "段階テンプレート" }), el("p", { className: "muted", text: state.stages.loaded ? "段階テンプレートは、DB の更新（016）のあとで使えます。" : "読み込み中…" }))]),
+    );
+    $("settings-history").replaceChildren(...(sub === "history" ? [historySection()] : []));
     renderSettingsAside();
     renderSettingsBar();
     if (sheet.open && sheetKind === "setting" && sheetRender) sheetRender();
   });
   setReloadBusy();
+}
+
+/** 小さなタブ（role=tab。選んでいるものだけ Tab で入れる。矢印キー・Home・End で移る） */
+function renderSubtabs() {
+  const sub = state.settings.sub;
+  for (const t of SETTINGS_SUBTABS) {
+    const b = $(`subtab-${t.key}`);
+    const on = t.key === sub;
+    b.setAttribute("aria-selected", String(on));
+    b.tabIndex = on ? 0 : -1;
+    b.disabled = false;
+  }
+  $("settings-panel").setAttribute("aria-labelledby", `subtab-${sub}`);
+}
+
+/**
+ * 小さなタブを移る。保存していない入力・モデルの変更があれば、タブを移るときと同じ確認を出す。
+ * 右の欄・シートで開いている詳細は閉じる（選択と編集を外す）。移れたら true
+ */
+async function switchSubtab(key, { focusTab = false } = {}) {
+  const S = state.settings;
+  const to = normalizeSubtab(key);
+  if (S.sub === to) {
+    if (focusTab) $(`subtab-${to}`)?.focus();
+    return true;
+  }
+  if (S.busy) {
+    notify("設定の保存の結果を待っています。終わってから移ってください。");
+    return false;
+  }
+  if (!(await confirmLeaveSettings())) return false;
+  // 開いていた詳細は閉じる（保存していない入力は、上の確認で破棄を選んだか、もともと無い）
+  S.edit = null;
+  S.sel = null;
+  // 設定のシート（項目の詳細と、テンプレートの編集）は閉じる。テンプレートの入力は上の確認で破棄を選んだか、もともと無い。
+  // 保存のお知らせはシートの中へ移るので、テンプレートの編集の中から［変更履歴を見る］を押したときもここへ来る（Codex TASK-0104 F104-01）。
+  // 閉じたときの後始末（templateDirty など）は、シートの close の処理が行う
+  if (sheet.open && (sheetKind === "setting" || sheetKind === "template-editor")) closeSheet();
+  S.sub = to;
+  if (to === "history") S.historyOpen = true;
+  writeSubtab(to);
+  renderSettings();
+  window.scrollTo(0, 0);
+  if (focusTab) $(`subtab-${to}`)?.focus();
+  return true;
 }
 
 /** 見出しつきの面。読み込み中・失敗（一度も読めていない）は中身の代わりに状態を、前に読んだ値なら上に印と再試行を出す */
@@ -4916,7 +5000,7 @@ function historySection() {
   }
   const d = el(
     "details",
-    { className: "plain-fold", id: "history-fold", open: S.historyOpen },
+    { className: "plain-fold", id: "history-fold", open: S.historyOpen || S.sub === "history" },
     el("summary", { "data-focus-key": "history" }, el("span", { text: "変更履歴" }), el("span", { className: "meta", text: "新しい順・直近 50 件" })),
     el("div", { className: "fold-in" }, ...content),
   );
@@ -4929,6 +5013,7 @@ function historySection() {
 /** 保存のお知らせの［変更履歴を見る］：設定の変更履歴を開いて、そこへ移る */
 async function openHistory() {
   if (state.tab !== "settings" && !(await switchTab("settings"))) return;
+  if (!(await switchSubtab("history"))) return;
   state.settings.historyOpen = true;
   renderSettings();
   $("history-fold")?.scrollIntoView({ block: "start" });
@@ -5790,6 +5875,16 @@ desktopMq.addEventListener("change", () => {
   renderAll();
 });
 // 設定の右の欄（1,100px 以上）とシートの切り替え。選択と編集の下書きは state にあるので、閉じても消えない
+for (const t of SETTINGS_SUBTABS) {
+  const b = $(`subtab-${t.key}`);
+  b.addEventListener("click", () => switchSubtab(t.key));
+  b.addEventListener("keydown", (e) => {
+    const to = subtabByKey(state.settings.sub, e.key);
+    if (!to) return;
+    e.preventDefault();
+    switchSubtab(to, { focusTab: true });
+  });
+}
 wideMq.addEventListener("change", () => {
   if (sheet.open && sheetKind === "setting" && isWide()) closeSheet();
   renderSettings();

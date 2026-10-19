@@ -2137,3 +2137,32 @@ export function createLoadGate() {
     current: (t) => !!t && t.epoch === epoch && t.n === accepted,
   };
 }
+
+// ---- 設定の中の小さなタブ（決定 71：［利用と上限］［モデル］［テンプレート］［履歴］。押したものだけを出す） ----
+
+/** 小さなタブ。usage は「直近 24 時間の利用」と「上限と枠」、models は「モデル」、templates は「段階テンプレート」、history は「変更履歴」 */
+export const SETTINGS_SUBTABS = [
+  { key: "usage", label: "利用と上限" },
+  { key: "models", label: "モデル" },
+  { key: "templates", label: "テンプレート" },
+  { key: "history", label: "履歴" },
+];
+
+/** 小さなタブの鍵を正しいものにする（知らない値・空・保存の失敗は、最初に開く［利用と上限］） */
+export function normalizeSubtab(value) {
+  return SETTINGS_SUBTABS.some((t) => t.key === value) ? value : "usage";
+}
+
+/** 矢印キー・Home・End で移る先の小さなタブ（端では反対の端へ回る）。ほかのキーは null */
+export function subtabByKey(current, key) {
+  const i = SETTINGS_SUBTABS.findIndex((t) => t.key === normalizeSubtab(current));
+  const n = SETTINGS_SUBTABS.length;
+  const to = { ArrowRight: i + 1, ArrowLeft: i - 1, Home: 0, End: n - 1 }[key];
+  return to === undefined ? null : SETTINGS_SUBTABS[(to + n) % n].key;
+}
+
+/** 選んだ項目が属する小さなタブ（数値の上限は［利用と上限］、テンプレートは［テンプレート］） */
+export function subtabOfSelection(sel) {
+  if (!sel) return null;
+  return sel.kind === "template" ? "templates" : "usage";
+}
