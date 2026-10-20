@@ -63,7 +63,8 @@
 
 /* ---- 土台 ---- */
 * { box-sizing: border-box; }
-html { -webkit-text-size-adjust: 100%; }
+/* 縦のスクロールバーの有無で中央の中身が左右にずれないよう、その幅をいつも空けておく */
+html { -webkit-text-size-adjust: 100%; scrollbar-gutter: stable; }
 body {
   margin: 0; min-height: 100vh; background: var(--bg); color: var(--text);
   font-family: var(--font); font-size: 15px; line-height: 1.7;
