@@ -169,7 +169,7 @@
           <summary><span>つなぎ方</span></summary>
           <!-- つなぎ方（2026-10-19 TASK-0100。短く直したのは同日 TASK-0102：期限の説明・断り書き・前置きを削り、1 手順 1 行にした）。
                住所・コマンド・入れる値・確認用の文はコードの枠に入れ、枠の右上のアイコンのボタンで、枠の文字（textContent）をそのままコピーする。
-               見た目の折り返しは CSS だけなので、コピーする文字は変わらない。住所と登録名（aiken-media-relay）が全部の枠で同じことは試験で確かめる。
+               見た目の折り返しは CSS だけなので、コピーする文字は変わらない。住所と登録名（aiken_studio）が全部の枠で同じことは試験で確かめる。
                コピーのアイコンは Lucide（ISC License。Copyright (c) Lucide Icons and Contributors）の copy・check の線をそのまま使う
                （canvas-app/node_modules/lucide-react 1.59.0 の dist/esm/icons から写した）。
                ChatGPT の手順は 2026-10-19 に田口さんが実際の画面で確かめた順。Codex・Claude Code の画面の名前・操作名は、公式の資料と調査のメモ（findings.md）にもとづき、実機では確かめていない -->
@@ -202,7 +202,7 @@
                     <li>名前を入れる欄があれば、次の名前を入れます。
                       <div class="copy-box">
                         <div class="copy-wrap">
-                          <pre class="copy-code"><code id="cg-chatgpt-name">A.I.KEN Studio</code></pre>
+                          <pre class="copy-code"><code id="cg-chatgpt-name">aiken_studio</code></pre>
                           <button type="button" class="copy-btn" data-copy="cg-chatgpt-name" aria-label="ChatGPT の名前の欄に入れる名前をコピー" title="ChatGPT の名前の欄に入れる名前をコピー"><svg class="ic-copy" width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true" focusable="false"><rect width="14" height="14" x="8" y="8" rx="2" ry="2"/><path d="M4 16c-1.1 0-2-.9-2-2V4c0-1.1.9-2 2-2h10c1.1 0 2 .9 2 2"/></svg><svg class="ic-check" width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true" focusable="false"><path d="M20 6 9 17l-5-5"/></svg></button>
                         </div>
                         <p class="copy-status" role="status"></p>
@@ -225,7 +225,7 @@
                   </ol>
 
                   <h3 class="guide-h">つながったか確かめる</h3>
-                  <p>新しい会話で <code>@</code> を入れ、<strong>「A.I.KEN Studio」</strong>を選んで、次の文を送ります。残りクレジットが返れば成功です。</p>
+                  <p>新しい会話で <code>@</code> を入れ、<strong>「aiken_studio」</strong>を選んで、次の文を送ります。残りクレジットが返れば成功です。</p>
                   <div class="copy-box">
                     <div class="copy-wrap">
                       <pre class="copy-code"><code id="cg-chatgpt-check">A.I.KEN Studio のツールで、今の残りクレジットを確認してください。生成はしないでください。</code></pre>
@@ -244,7 +244,7 @@
                     <li>ターミナルで、接続先を登録します。
                       <div class="copy-box">
                         <div class="copy-wrap">
-                          <pre class="copy-code"><code id="cg-codex-add">codex mcp add aiken-media-relay --url https://tnzwhwitgnzoehbjrmoy.supabase.co/functions/v1/mcp</code></pre>
+                          <pre class="copy-code"><code id="cg-codex-add">codex mcp add aiken_studio --url https://tnzwhwitgnzoehbjrmoy.supabase.co/functions/v1/mcp</code></pre>
                           <button type="button" class="copy-btn" data-copy="cg-codex-add" aria-label="Codex の登録コマンドをコピー" title="Codex の登録コマンドをコピー"><svg class="ic-copy" width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true" focusable="false"><rect width="14" height="14" x="8" y="8" rx="2" ry="2"/><path d="M4 16c-1.1 0-2-.9-2-2V4c0-1.1.9-2 2-2h10c1.1 0 2 .9 2 2"/></svg><svg class="ic-check" width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true" focusable="false"><path d="M20 6 9 17l-5-5"/></svg></button>
                         </div>
                         <p class="copy-status" role="status"></p>
@@ -253,7 +253,7 @@
                     <li>ログインを始めます。
                       <div class="copy-box">
                         <div class="copy-wrap">
-                          <pre class="copy-code"><code id="cg-codex-login">codex mcp login aiken-media-relay</code></pre>
+                          <pre class="copy-code"><code id="cg-codex-login">codex mcp login aiken_studio</code></pre>
                           <button type="button" class="copy-btn" data-copy="cg-codex-login" aria-label="Codex のログインコマンドをコピー" title="Codex のログインコマンドをコピー"><svg class="ic-copy" width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true" focusable="false"><rect width="14" height="14" x="8" y="8" rx="2" ry="2"/><path d="M4 16c-1.1 0-2-.9-2-2V4c0-1.1.9-2 2-2h10c1.1 0 2 .9 2 2"/></svg><svg class="ic-check" width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true" focusable="false"><path d="M20 6 9 17l-5-5"/></svg></button>
                         </div>
                         <p class="copy-status" role="status"></p>
@@ -292,13 +292,13 @@
                     <li>ターミナルで、接続先を登録します。
                       <div class="copy-box">
                         <div class="copy-wrap">
-                          <pre class="copy-code"><code id="cg-claude-add">claude mcp add --transport http --scope user aiken-media-relay https://tnzwhwitgnzoehbjrmoy.supabase.co/functions/v1/mcp</code></pre>
+                          <pre class="copy-code"><code id="cg-claude-add">claude mcp add --transport http --scope user aiken_studio https://tnzwhwitgnzoehbjrmoy.supabase.co/functions/v1/mcp</code></pre>
                           <button type="button" class="copy-btn" data-copy="cg-claude-add" aria-label="Claude Code の登録コマンドをコピー" title="Claude Code の登録コマンドをコピー"><svg class="ic-copy" width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true" focusable="false"><rect width="14" height="14" x="8" y="8" rx="2" ry="2"/><path d="M4 16c-1.1 0-2-.9-2-2V4c0-1.1.9-2 2-2h10c1.1 0 2 .9 2 2"/></svg><svg class="ic-check" width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true" focusable="false"><path d="M20 6 9 17l-5-5"/></svg></button>
                         </div>
                         <p class="copy-status" role="status"></p>
                       </div>
                     </li>
-                    <li>Claude Code で次を入力し、<strong>「aiken-media-relay」</strong>を選んでログインを始めます。
+                    <li>Claude Code で次を入力し、<strong>「aiken_studio」</strong>を選んでログインを始めます。
                       <div class="copy-box">
                         <div class="copy-wrap">
                           <pre class="copy-code"><code id="cg-claude-mcp">/mcp</code></pre>
