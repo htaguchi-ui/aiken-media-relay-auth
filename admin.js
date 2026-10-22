@@ -4,22 +4,26 @@
 // 幅 900px 以上は表＋右のパネル（PC）、未満はカード＋下から出るシート（スマホ）。
 // supabase-js は admin.html で版を固定し、integrity（SRI）を付けて読み込む（window.supabase）
 import {
+  ADMIN_CONSOLE_STORAGE_KEY,
+  ADMIN_LOGIN_FLOW_KEY,
   ADMIN_SESSION_LIMIT_MS,
-  ADMIN_SIGNED_IN_AT_KEY,
-  ADMIN_STORAGE_KEY,
-  adminSessionRecord,
-  adminSessionState,
+  adminConsoleExpired,
+  adminConsoleExpiresAt,
   authEventKind,
   browserStorage,
   clearStoredSession,
   discardOldTabSessions,
   LEGACY_STORAGE_PREFIX,
+  OLD_ADMIN_STORAGE_PREFIXES,
+  sameIdentity,
   sessionChangeKind,
   sessionIdentity,
+  storedAccessToken,
   takeStoredSession,
 } from "./auth-storage.js";
 import {
   accessText,
+  adminLoginErrorText,
   approxCreditsText,
   canGrant,
   cohortIdOf,
@@ -175,33 +179,55 @@ if (typeof window.supabase?.createClient !== "function") {
   throw new Error("supabase-js を読み込めませんでした");
 }
 
-// 管理コンソールのログインは、ほかの画面（マイページ・講師の画面・Canvas・許可の画面）と共有しない（決定 70）：
-// 保存先は localStorage の管理コンソールだけの鍵。同じブラウザのタブどうしでは共有し、ログインした時刻から 12 時間でログアウトする。
-// 以前の版が localStorage（sb-…）・sessionStorage（aiken-admin-auth など）に残したセッションは、開いた時点で捨てる（移さない）
+// 管理コンソールのログインは、ほかの画面（マイページ・講師の画面・Canvas・許可の画面）と共有しない（決定 70）。
+// 管理者の権限は、管理コンソールのログインの流れで作ったセッションだけ・登録から 12 時間（決定 74・193 の 1930。
+// docs/design-canvas-login-link.md 5.3）：admin-api が PKCE の検証子を持ち（/admin-login/start）、Google から戻った認証コードを
+// サーバーで交換して登録する（/admin-login/finish）。supabase-js の OAuth のログインは使わない（URL のコードを部品に交換させない。detectSessionInUrl: false）。
+// 保存先は localStorage の管理コンソールだけの新しい鍵（ADMIN_CONSOLE_STORAGE_KEY）。12 時間はサーバーの期限（admin_expires_at・
+// admin_console_status()）だけで数え、画面の側で時刻を記録しない。
+// 以前の版が localStorage（sb-…・決定 70 の版の aiken-studio-admin-auth）・sessionStorage（aiken-admin-auth など）に残した
+// セッションは、開いた時点で捨てる（移さない。この端末だけのログアウトを送ってから消す）
 const localStore = browserStorage("local");
-clearStoredSession(localStore, LEGACY_STORAGE_PREFIX);
-discardOldTabSessions(browserStorage("session"), (token) => {
-  fetch(`${SUPABASE_URL}/auth/v1/logout?scope=local`, {
-    method: "POST",
-    keepalive: true,
-    headers: { apikey: SUPABASE_PUBLISHABLE_KEY, Authorization: `Bearer ${token}` },
-  }).catch(() => {});
-});
-/** 開いた時点（Google の ?code の交換より前）に保存されていたセッション。交換で新しいセッションになったかを見分ける（F107-02） */
-const identityAtOpen = (() => {
+const sessionStore = browserStorage("session");
+
+/** この端末のセッションだけをサーバーで終わらせる（keepalive。失敗しても先へ進む） */
+function sendLocalLogout(token) {
+  if (!token) return;
   try {
-    return sessionIdentity(localStore?.getItem(ADMIN_STORAGE_KEY) ?? null);
+    fetch(`${SUPABASE_URL}/auth/v1/logout?scope=local`, {
+      method: "POST",
+      keepalive: true,
+      headers: { apikey: SUPABASE_PUBLISHABLE_KEY, Authorization: `Bearer ${token}` },
+    }).catch(() => {});
   } catch {
-    return null;
+    // 送れなくても、保存先は呼び出し側で消す
   }
+}
+
+clearStoredSession(localStore, LEGACY_STORAGE_PREFIX);
+discardOldTabSessions(sessionStore, sendLocalLogout);
+discardOldTabSessions(localStore, sendLocalLogout, OLD_ADMIN_STORAGE_PREFIXES);
+
+/**
+ * Google から戻った認証コード（?code）と失敗の印。supabase-js の部品を作る前に URL から取り出し、すぐ消す
+ * （部品が自分で交換しないように。コードはこの関数の中と /admin-login/finish の本文にだけ置く）
+ */
+const loginReturn = (() => {
+  const params = new URLSearchParams(location.search);
+  const hash = new URLSearchParams(location.hash.replace(/^#/, ""));
+  const code = params.get("code");
+  const failed = !!(params.get("error") || params.get("error_description") || hash.get("error_description"));
+  if (location.search || location.hash) history.replaceState(null, "", location.origin + location.pathname);
+  return { code: code || null, failed };
 })();
+
 const supabase = window.supabase.createClient(SUPABASE_URL, SUPABASE_PUBLISHABLE_KEY, {
   auth: {
     flowType: "pkce",
-    detectSessionInUrl: true,
+    detectSessionInUrl: false,
     persistSession: true,
     autoRefreshToken: true,
-    storageKey: ADMIN_STORAGE_KEY,
+    storageKey: ADMIN_CONSOLE_STORAGE_KEY,
     ...(localStore ? { storage: localStore } : {}),
   },
 });
@@ -763,72 +789,168 @@ function returnUrl() {
   return location.origin + location.pathname;
 }
 
+/** admin-api（ログインの流れ・モデルの一覧） */
+function adminApiUrl(path) {
+  return `${SUPABASE_URL}/functions/v1/admin-api${path}`;
+}
+
+/** admin-api のログインの流れの口を呼ぶ（JSON の POST）。返り値は { status, body }（通信できなければ status 0） */
+async function postLogin(path, payload) {
+  try {
+    const res = await fetch(adminApiUrl(path), {
+      method: "POST",
+      headers: { "Content-Type": "application/json", apikey: SUPABASE_PUBLISHABLE_KEY },
+      body: JSON.stringify(payload),
+      cache: "no-store",
+    });
+    return { status: res.status, body: await res.json().catch(() => null) };
+  } catch {
+    return { status: 0, body: null };
+  }
+}
+
 async function signIn() {
-  // ログインの記録（12 時間の起点）は、ここでは書かない。Google から戻って交換が成功したときだけ書く（commitSignIn。F107-02：
-  // 試しただけ・取りやめ・失敗で、今あるログインの 12 時間を延ばさない）。
+  // ログインの流れを始める（検証子は admin-api が持ち、ここには code_challenge と流れの印だけが来る）。
   // 管理コンソールは、従来どおり Google のアカウントを選ぶ画面を出す（ほかの画面のログインと分けて、管理者のアカウントを選ばせる）
-  await supabase.auth.signInWithOAuth({
-    provider: "google",
-    options: { redirectTo: returnUrl(), queryParams: { prompt: "select_account" } },
-  });
+  showLoginNote("");
+  $("login-btn").disabled = true;
+  try {
+    const { status, body } = await postLogin("/admin-login/start", {});
+    if (status !== 200 || typeof body?.flow_state !== "string" || typeof body?.code_challenge !== "string") {
+      showLoginNote(adminLoginErrorText(status, body));
+      show("login");
+      return;
+    }
+    try {
+      sessionStore?.setItem(ADMIN_LOGIN_FLOW_KEY, body.flow_state);
+    } catch {
+      sessionStore?.removeItem?.(ADMIN_LOGIN_FLOW_KEY);
+    }
+    if (sessionStore?.getItem(ADMIN_LOGIN_FLOW_KEY) !== body.flow_state) {
+      showLoginNote("このブラウザでは、ログインの途中の記録を保存できません。プライベートブラウズを使っていれば、通常のウィンドウで開いてください。");
+      show("login");
+      return;
+    }
+    const q = new URLSearchParams({
+      provider: "google",
+      redirect_to: returnUrl(),
+      code_challenge: body.code_challenge,
+      code_challenge_method: "s256",
+      prompt: "select_account",
+    });
+    location.assign(`${SUPABASE_URL}/auth/v1/authorize?${q}`);
+  } finally {
+    $("login-btn").disabled = false;
+  }
+}
+
+/**
+ * Google から戻ったあと：このタブで始めた流れの印と認証コードを /admin-login/finish に送り、登録できたセッションだけを保存先に入れる。
+ * 返り値は { expiresAt }（サーバーの 12 時間の終わり。ミリ秒）か { error }（画面に出す文）
+ */
+async function finishSignIn(code) {
+  let flowState = null;
+  try {
+    flowState = sessionStore?.getItem(ADMIN_LOGIN_FLOW_KEY) ?? null;
+    sessionStore?.removeItem(ADMIN_LOGIN_FLOW_KEY);
+  } catch {
+    flowState = null;
+  }
+  if (!flowState) return { error: "このタブで始めたログインではないため、続けられません。もう一度ログインしてください。" };
+  const { status, body } = await postLogin("/admin-login/finish", { flow_state: flowState, code });
+  const expiresAt = adminConsoleExpiresAt(body?.admin_expires_at ?? null, Date.now());
+  if (status !== 200 || typeof body?.access_token !== "string" || typeof body?.refresh_token !== "string" || expiresAt === null) {
+    return { error: adminLoginErrorText(status, body) };
+  }
+  // この端末に前の管理コンソールのセッションが残っていれば、先に終わらせる（新しいログインで置き換える。古いトークンを残さない）
+  const previous = storedAccessToken(localStore, ADMIN_CONSOLE_STORAGE_KEY);
+  if (previous && previous !== body.access_token) await endConsoleToken(previous);
+  const { error } = await supabase.auth.setSession({ access_token: body.access_token, refresh_token: body.refresh_token });
+  if (error) return { error: "ログインを保存できませんでした。ページを開き直して、もう一度ログインしてください。" };
+  return { expiresAt };
+}
+
+/** 管理コンソールのセッションをサーバーで終わらせる（admin_console_end で取り消し・終わらせる → この端末だけのログアウト） */
+async function endConsoleToken(token) {
+  try {
+    await fetch(`${SUPABASE_URL}/rest/v1/rpc/admin_console_end`, {
+      method: "POST",
+      keepalive: true,
+      headers: { apikey: SUPABASE_PUBLISHABLE_KEY, Authorization: `Bearer ${token}`, "Content-Type": "application/json" },
+      body: "{}",
+    });
+  } catch {
+    // 送れなくても続ける（サーバーの掃除が 12 時間のあとに終わらせる）
+  }
+  sendLocalLogout(token);
 }
 
 async function signOut() {
-  // この管理コンソールのセッションだけを切る（global だと、管理者本人の ChatGPT・Codex・Claude Code の接続まで切れる。
-  // マイページなどの共有のログインは別の鍵なので、そのまま）。通信を待つ前に、本人の値・編集中の内容を消して操作を止める（F107-04）
+  // この管理コンソールのセッションだけを終わらせる（マイページなどの共有のログインは別の鍵なので、そのまま。本人の ChatGPT・Codex・
+  // Claude Code の接続も切らない）。通信を待つ前に、本人の値・編集中の内容を消して操作を止める（F107-04）
   stopExpireWatch();
   clearAppView();
   $("status").textContent = "ログアウトしています…";
   show("status");
-  await endSession("local");
+  await endConsoleSession(currentIdentity());
   location.replace(returnUrl());
 }
 
-/** ログアウトして、この端末の管理コンソールのログイン（セッション・ログインした時刻）を消す（通信できなくても消す） */
-async function endSession(scope = "local") {
+/**
+ * 決めたセッション（target）だけをこの端末から消し、サーバーで終わらせる。保存先がまだ target のときだけ、その場で消してから、
+ * そのトークンで admin_console_end とログアウトを送る。通信を待つ間にほかのタブで入った新しいログインは消さない（F112-03）
+ */
+async function endConsoleSession(target) {
   try {
-    await supabase.auth.signOut({ scope });
+    supabase.auth.stopAutoRefresh?.();
   } catch {
-    // 下で消す
+    // 無視
   }
-  clearStoredSession(localStore, ADMIN_STORAGE_KEY);
+  const token = takeStoredSession(localStore, ADMIN_CONSOLE_STORAGE_KEY, target);
+  if (token) await endConsoleToken(token);
 }
 
-// ---- ログインから 12 時間でログアウト・ほかのタブでのログアウト ----
+// ---- 管理コンソールの 12 時間（サーバーの期限）・ほかのタブでのログアウト ----
 
 let expireTimer = null;
+let statusTimer = null;
+/** サーバーの管理コンソールの期限（ミリ秒。admin_expires_at・admin_console_status() の expires_at）。分からなければ null */
+let adminExpiresAt = null;
+/** その期限がどのセッションのものか（{ userId, sessionId }）。ほかのタブがログインし直して保存先が替わったら、期限を聞き直す */
+let adminExpiresFor = null;
 
-function signedInAt() {
-  try {
-    return localStore?.getItem(ADMIN_SIGNED_IN_AT_KEY) ?? null;
-  } catch {
-    return null;
-  }
+/**
+ * サーバーの期限を、そのセッション（identity。照会を始めたときに決めたもの）のものとして覚える。identity を省くのは、
+ * 期限を受け取った直後（登録のすぐあと）だけ（TASK-0142 F142-01：あとから保存先を読み直して、別のセッションに結び付けない）
+ */
+function setConsoleExpiry(expiresAt, identity = currentIdentity()) {
+  adminExpiresAt = expiresAt;
+  adminExpiresFor = identity;
 }
+/** サーバーの登録を読み直す間隔（ほかのタブのログアウト・名簿の変更・取り消しに気づく） */
+const ADMIN_STATUS_RECHECK_MS = 5 * 60 * 1000;
 
 /** 今保存されている管理コンソールのセッション（{ userId, sessionId }。無ければ null） */
 function currentIdentity() {
   try {
-    return sessionIdentity(localStore?.getItem(ADMIN_STORAGE_KEY) ?? null);
+    return sessionIdentity(localStore?.getItem(ADMIN_CONSOLE_STORAGE_KEY) ?? null);
   } catch {
     return null;
   }
 }
 
 /**
- * Google から戻って（hasCode）、交換で新しいセッションになったときだけ、ログインの記録（12 時間の起点）をそのセッションに結び付けて書く。
- * 同じセッションの開き直し・トークンの更新・交換の失敗（開いた時点のセッションのまま）では書き直さない（F107-02）
+ * サーバーに、今のセッションが管理コンソールの有効なセッションか（登録から 12 時間の内か）を聞く（admin_console_status）。
+ * 照会を始めたときのセッション（identity）を決めておき、応答が来るまでに保存先のセッションが替わっていたら（ほかのタブがログインし直した）、
+ * その応答は古いものとして stale にする（TASK-0142 F142-01）。返り値は { identity, admin, expiresAt } か { identity, stale } か { error }
  */
-function commitSignIn(session, hasCode, before) {
-  const now = sessionIdentity(session);
-  if (!hasCode || !now) return false;
-  if (before && before.userId === now.userId && before.sessionId === now.sessionId) return false;
-  try {
-    localStore?.setItem(ADMIN_SIGNED_IN_AT_KEY, adminSessionRecord(now, Date.now()));
-    return true;
-  } catch {
-    return false; // 記録できなければ、次の確かめで時間切れの扱い（安全側）
-  }
+async function consoleStatus() {
+  const identity = currentIdentity();
+  const { data, error } = await supabase.rpc("admin_console_status");
+  if (error) return { error, identity };
+  if (!identity || !sameIdentity(currentIdentity(), identity)) return { identity, stale: true };
+  const admin = data?.admin === true;
+  return { identity, admin, expiresAt: admin ? adminConsoleExpiresAt(data?.expires_at ?? null, Date.now()) : null };
 }
 
 /** 本人の値・編集中の内容を画面から消す（前の人の値を残さない） */
@@ -846,59 +968,66 @@ function clearAppView() {
   for (const id of ["settings-summary", "settings-main", "settings-models", "settings-templates", "settings-history", "settings-aside", "settings-bar", "roster-list", "roster-aside", "cohorts-main", "cohort-aside", "overview"]) $(id).replaceChildren();
 }
 
-/** ログインした時刻から 12 時間を過ぎていれば（記録が無いときも）ログアウトして、ログインの画面に戻す。ログアウトしたら true */
-/** 記録が今のセッションのものでないとき、ほかのタブが起点を書き終えるのを待つ時間（TASK-0112 の F112-03） */
-const ADMIN_COMMIT_WAIT_MS = 2000;
-/** 確かめの途中（30 秒ごと・前に出たときが重なっても、1 つずつ） */
+/** 確かめの途中（30 秒ごと・前に出たとき・読み直しが重なっても、1 つずつ） */
 let expiring = false;
 
 /**
- * 12 時間を過ぎたセッション（target）だけをログアウトする。保存先がまだ target のときだけ、その場で消してから、
- * そのトークンでログアウトを送る。通信を待つ間にほかのタブで入った新しいログインは消さない（F112-03）
+ * 管理コンソールのログインを終えて、ログインの画面に戻す。終わらせるのは target（呼ぶ側が判定に使ったセッション）だけで、
+ * ここで保存先を読み直さない（その間にほかのタブで入った新しいログインは消さない。F112-03・TASK-0142 F142-01）
  */
-async function endExpiredSession(target) {
+async function closeConsole(note, target) {
+  stopExpireWatch();
+  clearAppView();
+  await endConsoleSession(target);
+  showLoginNote(note);
+  show("login");
+}
+
+/** サーバーの期限（12 時間）を過ぎていれば（期限が分からないときも）ログアウトして、ログインの画面に戻す。ログアウトしたら true */
+async function logoutIfExpired() {
+  if (expiring) return false;
+  // 判定は auth-storage.js の adminConsoleExpired の 1 か所
+  if (!adminConsoleExpired(adminExpiresAt, Date.now())) return false;
+  expiring = true;
   try {
-    supabase.auth.stopAutoRefresh?.();
-  } catch {
-    // 無視
-  }
-  const token = takeStoredSession(localStore, ADMIN_STORAGE_KEY, target);
-  if (!token) return;
-  try {
-    await fetch(`${SUPABASE_URL}/auth/v1/logout?scope=local`, {
-      method: "POST",
-      keepalive: true,
-      headers: { apikey: SUPABASE_PUBLISHABLE_KEY, Authorization: `Bearer ${token}` },
-    });
-  } catch {
-    // 送れなくても、保存先はもう消した
+    // 期限が切れたのは adminExpiresFor のセッション。ほかのタブがログインし直して、保存先のセッションが替わっていたら（スリープから
+    // 戻ったタブなど）、そのセッションの期限をサーバーに聞き直す（古いセッションの期限で、新しいログインを終わらせない）。
+    // 応答が古い（照会の間にまた替わった）・読めないときは、何もせず次の確かめに任せる
+    const now = currentIdentity();
+    let target = adminExpiresFor ?? now;
+    if (now && adminExpiresFor && !sameIdentity(now, adminExpiresFor)) {
+      const st = await consoleStatus();
+      if (st.error || st.stale) return false;
+      if (st.admin && st.expiresAt !== null) {
+        setConsoleExpiry(st.expiresAt, st.identity);
+        if (!adminConsoleExpired(adminExpiresAt, Date.now())) return false;
+      }
+      target = st.identity;
+    }
+    await closeConsole(`管理コンソールにログインしてから ${ADMIN_SESSION_LIMIT_MS / 3600000} 時間たったため、ログアウトしました。もう一度ログインしてください。`, target);
+    return true;
+  } finally {
+    expiring = false;
   }
 }
 
-async function logoutIfExpired() {
-  if (expiring) return false;
-  // 判定は auth-storage.js の adminSessionState（adminSessionExpired の中身）の 1 か所
-  let reason = adminSessionState(signedInAt(), currentIdentity(), Date.now());
-  if (reason === "ok") return false;
+/**
+ * サーバーの登録を読み直す（前に出たとき・5 分ごと）。管理コンソールの有効なセッションでなくなっていたら（ほかのタブでログアウトした・
+ * 取り消された・名簿で管理者でなくなった）ログアウトする。読めなかった（通信の失敗）ときは何もしない（次の確かめに任せる）
+ */
+async function recheckConsole() {
+  if (expiring || appClosed) return false;
+  if (await logoutIfExpired()) return true;
+  const st = await consoleStatus();
+  // 古い応答（照会の間に、ほかのタブでログインし直した）は使わない。期限にも、終わらせる対象にもしない（F142-01）
+  if (st.error || st.stale || appClosed || expiring) return false;
+  if (st.admin && st.expiresAt !== null) {
+    setConsoleExpiry(st.expiresAt, st.identity);
+    return false;
+  }
   expiring = true;
   try {
-    if (reason === "mismatch") {
-      // ほかのタブがログインし直し、新しいセッションを保存したが、まだ起点を書いていないことがある。少し待って確かめ直す（F112-03）
-      await new Promise((r) => setTimeout(r, ADMIN_COMMIT_WAIT_MS));
-      reason = adminSessionState(signedInAt(), currentIdentity(), Date.now());
-      if (reason === "ok") return false;
-    }
-    // ログアウトするセッションを、ここで決める（このあとに入った新しいログインは消さない）
-    const target = currentIdentity();
-    stopExpireWatch();
-    clearAppView();
-    await endExpiredSession(target);
-    showLoginNote(
-      reason === "expired"
-        ? `ログインから ${ADMIN_SESSION_LIMIT_MS / 3600000} 時間たったため、ログアウトしました。もう一度ログインしてください。`
-        : "ログインの記録を確かめられなかったため、ログアウトしました。もう一度ログインしてください。",
-    );
-    show("login");
+    await closeConsole("管理コンソールのログインが終わっていたため、ログアウトしました。もう一度ログインしてください。", st.identity);
     return true;
   } finally {
     expiring = false;
@@ -925,13 +1054,14 @@ function onSessionChanged(kind) {
 
 function startExpireWatch(userId) {
   shownUser = userId;
-  // スリープ・背面のタブではタイマーが遅れるので、前に出たときにも確かめる
+  // スリープ・背面のタブではタイマーが遅れるので、前に出たときにも確かめる（サーバーの登録も読み直す）
   document.addEventListener("visibilitychange", () => {
-    if (document.visibilityState === "visible" && !appClosed) logoutIfExpired();
+    if (document.visibilityState === "visible" && !appClosed) recheckConsole();
   });
   expireTimer = setInterval(logoutIfExpired, 30000);
+  statusTimer = setInterval(recheckConsole, ADMIN_STATUS_RECHECK_MS);
   // ほかのタブの管理コンソールが鍵を書き換えた・消した（マイページなどの共有のログインの変化は見ない）
-  window.addEventListener("storage", (e) => onSessionChanged(sessionChangeKind(e, ADMIN_STORAGE_KEY, shownUser)));
+  window.addEventListener("storage", (e) => onSessionChanged(sessionChangeKind(e, ADMIN_CONSOLE_STORAGE_KEY, shownUser)));
   // supabase-js の知らせ（ほかの管理コンソールのタブの BroadcastChannel・このタブのトークンの更新の失敗）。知らせの中では supabase を待たない
   supabase.auth.onAuthStateChange((event, session) => {
     const kind = authEventKind(event, session, shownUser);
@@ -941,7 +1071,9 @@ function startExpireWatch(userId) {
 
 function stopExpireWatch() {
   if (expireTimer) clearInterval(expireTimer);
+  if (statusTimer) clearInterval(statusTimer);
   expireTimer = null;
+  statusTimer = null;
 }
 
 // ---- 読み込み ----
@@ -963,8 +1095,11 @@ function applyRows(data) {
 }
 
 async function loadUsage() {
+  // 閉じたあとは、新しい読み込みの券を出さない・閉じる前に出した応答を値へ戻さない（F185-01）
+  if (appClosed) return false;
   const ticket = gates.rows.begin();
   const { data, error } = await supabase.rpc("admin_usage");
+  if (appClosed) return false;
   // より新しい読み込みの応答をもう受け取っている：この古い応答は捨てる（値も確認の時刻も変えない）
   if (!gates.rows.accept(ticket)) return true;
   if (error) {
@@ -984,11 +1119,13 @@ function no013() {
 }
 
 async function loadCohorts() {
+  if (appClosed) return false;
   const ticket = gates.cohorts.begin();
   const [c, v] = await Promise.all([
     supabase.rpc("admin_cohorts"),
     supabase.from("venues").select("no, name, note, active").order("no"),
   ]);
+  if (appClosed) return false;
   if (!gates.cohorts.accept(ticket)) return true;
   const error = c.error || v.error;
   state.cohortsErrorRaw = error ?? null;
@@ -1664,7 +1801,7 @@ async function openMember(email) {
     openSheet("member", () => setSheet({ title: "読み込み中…", body: [el("p", { className: "muted", text: "最新の状態を読み込んでいます…" })] }));
   }
   const fresh = await freshRow(email);
-  if (seq !== detailSeq) return;
+  if (seq !== detailSeq || appClosed) return;
   state.detailLoading = false;
   if (!isDesktop() && sheetKind !== "member") return; // 読み込み中に閉じられた
   // 当てる直前に、この応答がまだ最新か確かめる。古ければ（より新しい名簿の応答が当たった）当てず、最新の名簿からその人を選び直す。
@@ -3582,7 +3719,7 @@ async function removeVenue(v) {
 // 呼び出し・保存する値・範囲・確認の条件は今までと同じ。この単位で変えたのは、並べ方・「読む → ［変更］で直す」・自前の確かめ・部分ごとの状態。
 // 選んだ項目は、広い幅（1,100px 以上）は右の欄、狭い幅は下の帯「詳細を開く」からシート。編集の下書きは state に持ち、明示して捨てるまで残す。
 
-const ADMIN_API_URL = `${SUPABASE_URL}/functions/v1/admin-api`;
+const ADMIN_API_URL = adminApiUrl("");
 
 async function loadSettingsInfo() {
   const S = state.settings;
@@ -5196,8 +5333,10 @@ const memberHasStageGrants = (email) => state.stages.memberFlags.get(email) ?? f
  */
 async function loadStageInfo() {
   const S = state.stages;
+  if (appClosed) return false;
   const ticket = gates.stages.begin();
   const c = await supabase.from("cohorts").select("id, credit_mode, stage_template_id, stages_applied_at");
+  if (appClosed) return false;
   if (c.error) {
     if (!gates.stages.accept(ticket)) return true;
     if (isMissingSchemaError(c.error)) {
@@ -5216,6 +5355,7 @@ async function loadStageInfo() {
     supabase.from("cohort_instructors").select("cohort_id, email"),
     supabase.rpc("admin_get_settings"),
   ]);
+  if (appClosed) return false;
   if (!gates.stages.accept(ticket)) return true;
   S.available = true;
   S.loaded = true;
@@ -5909,13 +6049,28 @@ function openAccount() {
 // ---- 起動 ----
 
 async function main() {
-  const hash = new URLSearchParams(location.hash.replace(/^#/, ""));
-  const params = new URLSearchParams(location.search);
-  if (params.get("error_description") || hash.get("error_description")) {
+  if (loginReturn.failed) {
     // 文言は誰でも書き換えられるので、URL の内容は表示しない
+    try {
+      sessionStore?.removeItem(ADMIN_LOGIN_FLOW_KEY);
+    } catch {
+      // 無視
+    }
     fatal("ログインできませんでした。管理者の Google アカウントでログインし直してください。");
     $("status").append(el("button", { type: "button", className: "btn primary big", text: "Google でログイン", onclick: signIn }));
     return;
+  }
+  if (loginReturn.code) {
+    // Google から戻った：admin-api でサーバーが交換・登録する（登録できたときだけトークンが来る）
+    $("status").replaceChildren(el("p", { className: "muted", text: "ログインしています…" }));
+    show("status");
+    const done = await finishSignIn(loginReturn.code);
+    if (done.error) {
+      showLoginNote(done.error);
+      show("login");
+      return;
+    }
+    setConsoleExpiry(done.expiresAt);
   }
 
   const { data: { session }, error } = await supabase.auth.getSession();
@@ -5927,17 +6082,51 @@ async function main() {
     show("login");
     return;
   }
-  // Google から戻って新しいセッションになったときだけ、12 時間の起点を書く。そのあと 12 時間を過ぎている（記録が無い）なら使わせない
-  commitSignIn(session, !!params.get("code"), identityAtOpen);
+  // 開くたびに、サーバーの登録（管理コンソールのログインの流れで作ったセッションか・12 時間の内か）を読む。登録のやり直しの口は無い
+  // （開き直し・トークンの更新で 12 時間は延びない）。管理コンソールのセッションでなければログアウトして、ログインからやり直す
+  const st = await consoleStatus();
+  if (st.error) {
+    fatal(`ログインの状態を確認できませんでした。${explainError(st.error)}`);
+    return;
+  }
+  if (st.stale) {
+    // 確かめている間に、ほかのタブでログインし直した：今の保存先で、開き直す
+    location.replace(returnUrl());
+    return;
+  }
+  if (!st.admin || st.expiresAt === null) {
+    await closeConsole(
+      loginReturn.code
+        ? "ログインを確かめられませんでした。もう一度ログインしてください。"
+        : `管理コンソールのログインが終わっているか、ログインしてから ${ADMIN_SESSION_LIMIT_MS / 3600000} 時間たちました。もう一度ログインしてください。`,
+      st.identity,
+    );
+    return;
+  }
+  setConsoleExpiry(st.expiresAt, st.identity);
   if (await logoutIfExpired()) return;
   startExpireWatch(session.user?.id ?? null);
-  // 戻ってきた直後の URL に残る code などを消す
-  if (location.search) history.replaceState(null, "", returnUrl());
+
+  // 起動の途中でも期限監視は動く。await のたびに、閉じていないか・起動時のセッションのままかを確かめ、だめなら表示も読み込みもせずやめる
+  // （閉じたあとに遅い応答が戻って、閉じた画面を開き直したり、読み込みを始めたりしない。F185-01）
+  const bootAborted = () => {
+    if (appClosed) return true;
+    if (!sameIdentity(currentIdentity(), st.identity)) {
+      // 起動の間に、ほかのタブでログインし直した：今の保存先で、開き直す
+      location.replace(returnUrl());
+      return true;
+    }
+    return false;
+  };
+  if (bootAborted()) return;
 
   // 「自分」の判定は DB と同じく Google の ID 連携の email で行う（auth.users の email とは異なる場合がある）
   const { data: googleEmail } = await supabase.rpc("current_google_email");
-  myEmail = normalizeEmail(googleEmail ?? session.user.email ?? "");
+  if (bootAborted()) return;
+  const email = normalizeEmail(googleEmail ?? session.user.email ?? "");
   const { data: isAdmin, error: adminError } = await supabase.rpc("is_admin");
+  if (bootAborted()) return;
+  myEmail = email;
   if (adminError) {
     fatal(`権限を確認できませんでした。${explainError(adminError)}`);
     return;
@@ -5954,6 +6143,7 @@ async function main() {
   show("app");
   renderAll();
   await Promise.all([loadUsage(), loadCohorts(), loadStageInfo()]);
+  if (appClosed) return;
   renderAll();
 }
 

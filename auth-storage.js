@@ -3,22 +3,37 @@
 // ログインは「この端末（このブラウザ）」で保つ。
 // - マイページ・講師の画面・Canvas・許可の画面は、1 つのログインを共有する（localStorage の STUDIO_STORAGE_KEY）。
 //   最長 14 日（上限はサーバーの設定。Supabase Auth の Time-box user sessions）。ページを離れても、操作しなくてもログアウトしない
-// - 管理コンソールはほかと共有しない（localStorage の ADMIN_STORAGE_KEY）。ログインした時刻から 12 時間で、画面の側でログアウトする
+// - 管理コンソールはほかと共有しない（localStorage の ADMIN_CONSOLE_STORAGE_KEY）。ログインは admin-api のログインの流れ
+//   （/admin-login/start・finish。docs/design-canvas-login-link.md 5.3）でだけ作り、サーバーが登録した時刻から 12 時間
+//   （admin_console_sessions の expires_at。admin_console_status() で読む）で切れる。画面の側で時刻を記録して数えない
 // - ほかのタブでログアウトしたら、開いているタブも中身を消してログインの画面にする（storage の知らせと onAuthStateChange。sessionChangeKind）
 // Canvas（canvas-app/src/auth/）は npm の supabase-js（同じ 2.117.2）で、同じ鍵・同じ形で読み書きする。鍵を変えるときは両方を変える
 
 /** 共有のログインの鍵（localStorage。マイページ・講師の画面・Canvas・許可の画面） */
 export const STUDIO_STORAGE_KEY = "aiken-studio-auth";
-/** 管理コンソールのログインの鍵（localStorage。共有のログインの鍵の接頭辞で「始まらない」名前にする） */
+/**
+ * 管理コンソールのログインの鍵（localStorage。決定 74・193 の 1930 の新しい流れ。設計書 5.3）。ここ 1 か所で決め、管理コンソール
+ * （admin.js）と講師の画面（管理者として動くとき）が同じ定数を使う。今の鍵・前の版の鍵（ADMIN_STORAGE_KEY・STUDIO_STORAGE_KEY・
+ * OLD_TAB_STORAGE_PREFIXES）のどれも接頭辞に持たない名前にする（古い鍵の掃除・古いタブの見張りで、新しいログインを消さない）
+ */
+export const ADMIN_CONSOLE_STORAGE_KEY = "aiken-console-auth";
+/**
+ * 管理コンソールのログインの途中の印（sessionStorage。admin-api の /admin-login/start が返した flow_state）。ログインを始めたタブに
+ * だけ置き、Google から戻って /admin-login/finish に送ったら消す。ほかのタブ・ほかの人の戻りの認証コードは、この印が無いと使えない
+ */
+export const ADMIN_LOGIN_FLOW_KEY = "aiken-console-login-flow";
+/**
+ * 決定 70 の版の管理コンソールのログインの鍵（localStorage）。**新しい管理コンソールは使わない**（開いた時点で掃除する。
+ * OLD_ADMIN_STORAGE_PREFIXES）。名前は Canvas の試験（canvas-app/src/auth/session.test.ts）が読むので、この形のまま残す
+ */
 export const ADMIN_STORAGE_KEY = "aiken-studio-admin-auth";
-/** 管理コンソールは、ログインした時刻からこの時間でログアウトする */
+/** 管理コンソールのログインの長さ（サーバーの admin_console_sessions と同じ 12 時間。画面の文に使う。判定はサーバーの expires_at） */
 export const ADMIN_SESSION_LIMIT_MS = 12 * 60 * 60 * 1000;
 /**
- * 管理コンソールのログインの記録（localStorage・JSON { at, userId, sessionId }）。Google から戻って交換が成功したときだけ書き、
- * 12 時間はその時刻から数える。どのセッションの記録かを持つので、別のセッション（ログインの試しの失敗・取りやめを含む）では
- * 数え直さない（Codex TASK-0107 の F107-02）。ADMIN_STORAGE_KEY の接頭辞なので、ログアウトの消去で一緒に消える
+ * 決定 70 の版の管理コンソールが localStorage に残した鍵（セッションと、その 12 時間の起点の記録 …-signed-in-at）。新しい管理コンソールを
+ * 開いた時点で、トークンがあればこの端末だけのログアウトを送ってから消す（discardOldTabSessions に localStorage とこの一覧を渡す）
  */
-export const ADMIN_SIGNED_IN_AT_KEY = `${ADMIN_STORAGE_KEY}-signed-in-at`;
+export const OLD_ADMIN_STORAGE_PREFIXES = [ADMIN_STORAGE_KEY];
 /** 以前の版が localStorage に残したセッション（supabase-js の既定の鍵 sb-<ref>-auth-token。2 つの画面で共有していた） */
 export const LEGACY_STORAGE_PREFIX = "sb-tnzwhwitgnzoehbjrmoy-auth-token";
 
@@ -76,7 +91,7 @@ export function browserStorage(kind) {
 
 /**
  * 記録の時刻（lastActive）から limitMs を過ぎたか。記録が無い・読めない・未来の時刻のときは、過ぎた扱い（安全側）。
- * 管理コンソールの 12 時間（ログインを始めた時刻から）と、許可の画面の 5 分に使う
+ * 許可の画面の 5 分に使う（管理コンソールの 12 時間は adminConsoleExpired。サーバーの時刻で決まる）
  */
 export function idleExpired(lastActive, now, limitMs = ADMIN_SESSION_LIMIT_MS) {
   const t = Number(lastActive);
@@ -126,35 +141,23 @@ export function sameIdentity(a, b) {
   return true;
 }
 
-/** 管理コンソールのログインの記録（ADMIN_SIGNED_IN_AT_KEY に書く JSON の文字列）を作る */
-export function adminSessionRecord(identity, now) {
-  return JSON.stringify({ at: now, userId: identity?.userId ?? null, sessionId: identity?.sessionId ?? null });
+/**
+ * サーバーの管理コンソールの期限（admin_expires_at・admin_console_status() の expires_at。ISO の文字列かミリ秒）を、ミリ秒にする。
+ * 読めない・登録から 12 時間（＋時計のずれ 10 分）より先の時刻は null（安全側。ローカルの時刻を 12 時間を延ばす証拠に使わない）
+ */
+export function adminConsoleExpiresAt(value, now) {
+  const t = typeof value === "number" ? value : typeof value === "string" ? Date.parse(value) : NaN;
+  if (!Number.isFinite(t) || t > now + ADMIN_SESSION_LIMIT_MS + 10 * 60 * 1000) return null;
+  return t;
 }
 
 /**
- * 管理コンソールの 12 時間を過ぎたか。record は ADMIN_SIGNED_IN_AT_KEY の文字列、identity は今のセッション（sessionIdentity）。
- * 記録が無い・壊れている・今のセッションの記録でない・時刻が不正・未来のときも、過ぎた扱い（安全側）。
- * 管理コンソールの時刻の判定はこの 1 か所だけ（admin.js の logoutIfExpired が呼ぶ）。あとでサーバーの側
- * （admin_console_sessions の 12 時間。docs/design-canvas-login-link.md の 5.3）に合わせるときは、ここを差し替える
+ * 管理コンソールの 12 時間を過ぎたか（expiresAt はサーバーの期限のミリ秒。adminConsoleExpiresAt で読んだもの）。
+ * 期限が分からない（null・数でない）ときも、過ぎた扱い（安全側）。管理コンソールの時刻の判定はこの 1 か所だけ
+ * （admin.js の logoutIfExpired が呼ぶ。サーバーの側の判定は admin_console_sessions。docs/design-canvas-login-link.md の 5.3）
  */
-export function adminSessionExpired(record, identity, now) {
-  return adminSessionState(record, identity, now) !== "ok";
-}
-
-/**
- * adminSessionExpired の中身（理由つき）。"ok"（使える）／"expired"（12 時間を過ぎた・時刻が不正）／
- * "mismatch"（記録はあるが、今のセッションの記録でない。ほかのタブがログインし直して、記録を書く前のこともある）／"missing"（記録が無い・壊れている・今のセッションが無い）
- */
-export function adminSessionState(record, identity, now) {
-  let r = null;
-  try {
-    r = typeof record === "string" ? JSON.parse(record) : null;
-  } catch {
-    r = null;
-  }
-  if (!r || typeof r !== "object" || typeof r.at !== "number" || !identity) return "missing";
-  if (!sameIdentity({ userId: r.userId, sessionId: r.sessionId }, identity)) return "mismatch";
-  return idleExpired(String(r.at), now, ADMIN_SESSION_LIMIT_MS) ? "expired" : "ok";
+export function adminConsoleExpired(expiresAt, now) {
+  return typeof expiresAt !== "number" || !Number.isFinite(expiresAt) || now >= expiresAt;
 }
 
 /**
@@ -232,13 +235,14 @@ export function authEventKind(event, session, shownUser) {
 }
 
 /**
- * 決定 70 の前の版が sessionStorage に残したセッションを捨てる（新しい保存先へは移さない）。トークンがあれば sendLogout(token) で
- * この端末だけのログアウトを送り、OLD_TAB_STORAGE_PREFIXES で始まる鍵を消す。消した数を返す
+ * 前の版が残したセッションを捨てる（新しい保存先へは移さない）。トークンがあれば sendLogout(token) でこの端末だけのログアウトを送り、
+ * prefixes で始まる鍵を消す。消した数を返す。既定は決定 70 の前の版の sessionStorage の鍵（OLD_TAB_STORAGE_PREFIXES）。
+ * 管理コンソールは、決定 70 の版の localStorage の鍵（OLD_ADMIN_STORAGE_PREFIXES）にも使う（storage に localStorage を渡す）
  */
-export function discardOldTabSessions(storage, sendLogout) {
+export function discardOldTabSessions(storage, sendLogout, prefixes = OLD_TAB_STORAGE_PREFIXES) {
   if (!storage) return 0;
   let n = 0;
-  for (const prefix of OLD_TAB_STORAGE_PREFIXES) {
+  for (const prefix of prefixes) {
     const token = storedAccessToken(storage, prefix);
     if (token && typeof sendLogout === "function") {
       try {

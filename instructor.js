@@ -2,16 +2,25 @@
 // 書き込みはすべて DB の RPC（cohort_stage_move・instructor_grant・revoke_stage_grant。権限・上限・段階の判定は DB が決める）。
 // ログインはマイページ（mypage.js）・Canvas と共有する（決定 70。localStorage の共有の鍵・最長 14 日）。ページを離れても、
 // 操作しなくてもログアウトしない。ほかのタブでログアウトしたら、この画面も中身を消して読み込み直す。
+// 管理者は、同じブラウザの管理コンソールの有効なセッション（管理コンソールの鍵）で動く（設計書 docs/design-canvas-login-link.md 5.3.1。
+// 1932 のあと is_admin() は管理コンソールのセッションだけ）。講師の区分の人は、今までどおり共有のログインで動く。
 // 表示はすべて textContent / createElement で組み立てる（データを innerHTML に入れない）。
 // supabase-js は instructor.html で版を固定し、integrity（SRI）を付けて読み込む（window.supabase）
 import {
+  ADMIN_CONSOLE_STORAGE_KEY,
+  adminConsoleExpired,
+  adminConsoleExpiresAt,
   authEventKind,
   browserStorage,
   clearStoredSession,
   discardOldTabSessions,
   LEGACY_STORAGE_PREFIX,
+  sameIdentity,
   sessionChangeKind,
+  sessionIdentity,
+  storedUserId,
   STUDIO_STORAGE_KEY,
+  takeStoredSession,
 } from "./auth-storage.js";
 import { MSG_CODE_FAILED, oauthOptions } from "./mypage-lib.js";
 import {
@@ -185,6 +194,21 @@ function hideContent(message = "ログアウトしています…") {
 }
 
 async function signOut() {
+  if (adminSession) {
+    // 管理者として動いている間：管理コンソールのログインを終える（admin_console_end → この端末のログアウト）。共有のログインには触れない
+    const { client } = adminSession;
+    let target = null;
+    try {
+      target = sessionIdentity(localStore?.getItem(ADMIN_CONSOLE_STORAGE_KEY) ?? null);
+    } catch {
+      target = null;
+    }
+    hideContent();
+    ending = true;
+    await endAdminConsole(client, target);
+    location.replace(returnUrl());
+    return;
+  }
   hideContent();
   await endSession();
   location.replace(returnUrl());
@@ -278,9 +302,14 @@ function confirmDialog({ title, lines, okText }) {
 
 // ---- 読み込み ----
 
-/** RPC を呼ぶ。返り値は { data, error } */
+/** RPC を呼ぶ。返り値は { data, error }。管理者として動いている間は、管理コンソールの鍵の部品で呼ぶ（5.3.1） */
 function rpc(name, args) {
-  return supabase.rpc(name, args);
+  return activeClient().rpc(name, args);
+}
+
+/** 今の部品（管理者として動いている間は管理コンソールの鍵の部品、それ以外は共有のログインの部品） */
+function activeClient() {
+  return adminSession?.client ?? supabase;
 }
 
 /** 画面に出す失敗（読み込みの失敗）：どの画面にするかを決める */
@@ -345,7 +374,7 @@ async function load({ fromApp = false } = {}) {
       state.isAdmin = data === true;
       const { data: googleEmail } = await rpc("current_google_email");
       if (ending) return;
-      const { data: sessionData } = await supabase.auth.getSession();
+      const { data: sessionData } = await activeClient().auth.getSession();
       if (ending) return;
       state.myEmail = normalizeEmail(googleEmail ?? sessionData?.session?.user?.email ?? "");
     }
@@ -354,9 +383,11 @@ async function load({ fromApp = false } = {}) {
     if (c.error) {
       const f = loadFailure(c.error);
       if (f.action === "denied") {
-        const { data } = await supabase.auth.getSession();
+        const { data } = await activeClient().auth.getSession();
         if (ending) return;
         $("denied-email").textContent = data?.session?.user?.email ?? "";
+        // 管理者は、管理コンソールでログインしてから開く（5.3.1 の 3）
+        if (!adminSession) showAdminHint(adminHint ?? MSG_ADMIN_CONSOLE_NEEDED);
         show("denied");
       } else if (!fromApp || !state.cohorts.length) {
         $("failed-message").textContent = f.message;
@@ -369,7 +400,7 @@ async function load({ fromApp = false } = {}) {
     const ok = await loadStatus();
     if (ending) return;
     if (!ok && fromApp) notify(`最新の状態を読み込めませんでした。${state.statusError}`, "error");
-    $("me-email").textContent = state.myEmail;
+    $("me-email").textContent = adminSession ? adminWho() : state.myEmail;
     $("me-email").title = state.myEmail;
     const role = $("me-role");
     role.textContent = state.isAdmin ? "管理者" : "講師";
@@ -387,6 +418,203 @@ async function reloadStatus() {
   if (ending) return;
   if (!ok) notify(`最新の状態を読み込めませんでした。${state.statusError}`, "error");
   render();
+}
+
+// ---- 管理者として使う（設計書 5.3.1。管理コンソールのログイン） ----
+// 起動の順：共有のログインで instructor_cohorts を呼び、通れば（講師の区分）今どおり。instructor_only（区分が講師でない。管理者は
+// ここに来る）か共有のログインが無いときは、管理コンソールの鍵に保存されたセッションで 2 つ目の部品を作り、admin_console_status() が
+// admin: true なら、以後の RPC はすべてその部品で呼ぶ。無い・使えないときは案内と［管理コンソールを開く］。どれも「どのセッションで
+// 呼ぶか」を選ぶだけで、管理者・講師の判定は DB が決める。この画面は登録を作れず、管理コンソールの Google のログインも始めない。
+// 古い管理コンソールの鍵（aiken-studio-admin-auth）は読まない。
+
+const MSG_ADMIN_CONSOLE_NEEDED = "管理者として講師ページを使うには、管理コンソールでログインしてから開いてください。";
+// ログインの画面でだけ、管理者向けの案内の前に置く（講師が迷わないように。田口さん 2026-10-23）
+const MSG_INSTRUCTOR_LOGIN_FIRST = "講師の方は上の［Google でログイン］から入ってください。";
+const MSG_ADMIN_CONSOLE_EXPIRED ="管理コンソールのログインから 12 時間たちました。管理コンソールでもう一度ログインしてから開いてください。";
+
+/** 管理者として動いている間の { client, expiresAt, userId }（講師・ログイン前は null） */
+let adminSession = null;
+/** 管理コンソールのセッションを試して使えなかったときの案内の文 */
+let adminHint = null;
+let adminClient = null;
+let adminTimer = null;
+let checkingAdmin = false;
+let watchingConsoleKey = false;
+
+/** 管理コンソールと同じ鍵・同じ保存先・同じ supabase-js の 2 つ目の部品（URL のコードは読まない） */
+function adminConsoleClient() {
+  adminClient ??= window.supabase.createClient(SUPABASE_URL, SUPABASE_PUBLISHABLE_KEY, {
+    auth: {
+      flowType: "pkce",
+      detectSessionInUrl: false,
+      persistSession: true,
+      autoRefreshToken: true,
+      storageKey: ADMIN_CONSOLE_STORAGE_KEY,
+      ...(localStore ? { storage: localStore } : {}),
+    },
+  });
+  return adminClient;
+}
+
+/** 管理コンソールの鍵に今保存されているセッション（{ userId, sessionId }。無ければ null） */
+function consoleIdentity() {
+  try {
+    return sessionIdentity(localStore?.getItem(ADMIN_CONSOLE_STORAGE_KEY) ?? null);
+  } catch {
+    return null;
+  }
+}
+
+/**
+ * 管理コンソールのセッションが使えるか（admin_console_status）。{ ok: true, client, expiresAt, userId, identity } か
+ * { ok: false, message }（鍵が無い・読めない → 「ログインしてから」、鍵はあるが使えない → 「12 時間たちました」）か
+ * { ok: false, stale: true }（照会の間に、ほかのタブで管理コンソールにログインし直した。同じ人の別の SID も含む。古い応答は使わない。
+ * TASK-0149 F149-02。管理コンソールの consoleStatus と同じ規則）
+ */
+async function checkAdminConsole() {
+  const identity = consoleIdentity();
+  const userId = identity?.userId ?? null;
+  if (!userId) return { ok: false, message: MSG_ADMIN_CONSOLE_NEEDED };
+  const client = adminConsoleClient();
+  const { data, error } = await client.rpc("admin_console_status");
+  if (!sameIdentity(consoleIdentity(), identity)) return { ok: false, stale: true };
+  if (error) return { ok: false, message: MSG_ADMIN_CONSOLE_NEEDED };
+  const now = Date.now();
+  const expiresAt = adminConsoleExpiresAt(data?.expires_at ?? null, now);
+  if (data?.admin !== true || expiresAt === null || adminConsoleExpired(expiresAt, now)) {
+    return { ok: false, message: MSG_ADMIN_CONSOLE_EXPIRED };
+  }
+  return { ok: true, client, expiresAt, userId, identity };
+}
+
+/**
+ * どの部品で動くかを決める（5.3.1 の 1〜2）。hasShared は共有のログインがあるか。
+ * 返り値：{ shared: true }（講師。今どおり）・{ admin: true }（管理者として動く）・{ guide }（使えない。案内の文）・{ stale: true }
+ */
+async function chooseClient(hasShared) {
+  if (hasShared) {
+    const { error } = await supabase.rpc("instructor_cohorts");
+    if (ending) return { stale: true };
+    // 通った（講師の区分）・断り以外の失敗（通信など）は、今どおり共有のログインで読み込みに任せる
+    if (!error || loadFailure(error).action !== "denied") return { shared: true };
+  }
+  const r = await checkAdminConsole();
+  if (ending) return { stale: true };
+  if (r.stale) {
+    // 確かめている間に管理コンソールのログインが替わった：今の保存先で、この画面を開き直す
+    location.replace(returnUrl());
+    return { stale: true };
+  }
+  if (r.ok) {
+    enterAdminMode(r);
+    return { admin: true };
+  }
+  adminHint = r.message;
+  return { guide: r.message };
+}
+
+/** 管理者として動く：以後の RPC は管理コンソールの部品で呼ぶ。12 時間（admin_console_status の expires_at）と、ほかのタブを見張る */
+function enterAdminMode(r) {
+  adminSession = { client: r.client, expiresAt: r.expiresAt, userId: r.userId };
+  adminHint = null;
+  $("logout-btn").textContent = "管理コンソールのログインを終える";
+  adminTimer = setInterval(checkAdminExpiry, 30000);
+  // スリープ・背面のタブではタイマーが遅れるので、前に出たときにも確かめる
+  document.addEventListener("visibilitychange", () => {
+    if (document.visibilityState === "visible") checkAdminExpiry();
+  });
+  // ほかのタブで管理コンソールからログアウトした・別のアカウントに替わった（管理コンソールの鍵だけを見る）
+  window.addEventListener("storage", (e) => onSessionChanged(sessionChangeKind(e, ADMIN_CONSOLE_STORAGE_KEY, r.userId)));
+  r.client.auth.onAuthStateChange((event, session) => {
+    const kind = authEventKind(event, session, r.userId);
+    if (kind) setTimeout(() => onSessionChanged(kind), 0);
+  });
+}
+
+/** 上部の表示：「管理者として操作中（管理コンソールのログイン・〜HH:MM まで）· メール」 */
+function adminWho() {
+  const until = new Date(adminSession.expiresAt).toLocaleTimeString("ja-JP", { hour: "2-digit", minute: "2-digit" });
+  return `管理者として操作中（管理コンソールのログイン・〜${until} まで）· ${state.myEmail}`;
+}
+
+/**
+ * 12 時間を過ぎたら、管理コンソールの部品の使用をやめて案内に戻す（保存先はこの画面からは消さない）。ほかのタブで管理コンソールに
+ * ログインし直していれば（同じ人の新しいセッション）、その期限で続ける
+ */
+async function checkAdminExpiry() {
+  if (!adminSession || ending || checkingAdmin) return false;
+  if (!adminConsoleExpired(adminSession.expiresAt, Date.now())) return false;
+  checkingAdmin = true;
+  try {
+    const r = await checkAdminConsole();
+    if (ending || !adminSession) return false;
+    // 古い応答（照会の間にまたログインし直した）は使わない。次の確かめで、今のセッションを聞き直す
+    if (r.stale) return false;
+    if (r.ok && r.userId === adminSession.userId) {
+      adminSession.expiresAt = r.expiresAt;
+      $("me-email").textContent = adminWho();
+      return false;
+    }
+    leaveAdmin(MSG_ADMIN_CONSOLE_EXPIRED);
+    return true;
+  } finally {
+    checkingAdmin = false;
+  }
+}
+
+/** 管理者として動くのをやめる（本人の値を消し、案内を出す。保存先は消さない） */
+function leaveAdmin(message) {
+  if (adminTimer) clearInterval(adminTimer);
+  adminTimer = null;
+  hideContent("");
+  ending = true;
+  adminSession = null;
+  showAdminHint(message);
+  show("denied");
+}
+
+/** 案内（3.7 の文と［管理コンソールを開く］）を出し、管理コンソールの鍵にログインが入ったら読み込み直す */
+function showAdminHint(message) {
+  $("admin-guide").textContent = message;
+  $("admin-guide").hidden = false;
+  $("admin-console-btn").hidden = false;
+  watchConsoleKey();
+}
+
+/** 管理コンソールの鍵にログインが書き込まれたら（ほかのタブで管理コンソールにログインした）、この画面を読み込み直す */
+function watchConsoleKey() {
+  if (watchingConsoleKey) return;
+  watchingConsoleKey = true;
+  window.addEventListener("storage", (e) => {
+    if (e.key === ADMIN_CONSOLE_STORAGE_KEY && storedUserId(e.newValue ?? null) && !adminSession) location.replace(returnUrl());
+  });
+}
+
+/**
+ * 管理コンソールのログインを終える。始めたときのセッション（target）が保存先にあるときだけ、通信より前にその場で取り出し（消し）、
+ * そのトークンで admin_console_end とこの端末のログアウトを送る（管理コンソールの admin.js と同じ形）。supabase-js の signOut は
+ * 通信のあとでそのときの保存先を読んで消すので使わない（待つ間にほかのタブで入った新しい管理コンソールのログインを消さない。
+ * TASK-0142 F142-02）。共有のログインには触れない
+ */
+async function endAdminConsole(client, target) {
+  try {
+    client.auth.stopAutoRefresh?.();
+  } catch {
+    // 無視
+  }
+  const token = target ? takeStoredSession(localStore, ADMIN_CONSOLE_STORAGE_KEY, target) : null;
+  if (!token) return;
+  try {
+    await fetch(`${SUPABASE_URL}/rest/v1/rpc/admin_console_end`, {
+      method: "POST",
+      keepalive: true,
+      headers: { apikey: SUPABASE_PUBLISHABLE_KEY, Authorization: `Bearer ${token}`, "Content-Type": "application/json" },
+      body: "{}",
+    });
+  } catch {
+    // 送れなくても続ける（サーバーの掃除が 12 時間のあとに終わらせる）
+  }
+  sendLocalLogout(token);
 }
 
 // ---- 表示 ----
@@ -905,13 +1133,35 @@ async function main() {
     return;
   }
   if (!session) {
+    // 共有のログインが無い：管理コンソールの有効なセッションがあれば管理者として動く（5.3.1 の 2）。無ければ今どおりログインの画面
+    const chosen = await chooseClient(false);
+    if (chosen.stale) return;
+    if (chosen.admin) {
+      if (location.search || location.hash) history.replaceState(null, "", returnUrl());
+      await load();
+      return;
+    }
+    if (chosen.guide) {
+      // 共有のログインも管理コンソールのログインも使えない（鍵が無い・12 時間を過ぎた・取り消された）：3.7 の文と［管理コンソールを開く］を出す（5.3.1 の 3）
+      showLoginNote(MSG_INSTRUCTOR_LOGIN_FIRST + chosen.guide);
+      $("login-console-btn").hidden = false;
+    }
+    watchConsoleKey();
     show("login");
     return;
   }
   startWatch(session.user?.id ?? null);
   // 戻ってきた直後の URL に残る code などを消す
   if (location.search || location.hash) history.replaceState(null, "", returnUrl());
+  // 講師の区分なら今どおり。区分が講師でない（管理者）なら、管理コンソールのセッションを試す（5.3.1 の 1〜2）
+  const chosen = await chooseClient(true);
+  if (chosen.stale) return;
   await load();
+}
+
+/** 管理コンソールを新しいタブで開く（講師の画面からはログインを始めない） */
+function openAdminConsole() {
+  window.open("/admin.html", "_blank", "noopener");
 }
 
 // 戻る・進むでキャッシュ（bfcache）から表示されたときは、読み込み直して今のログインの状態から作り直す
@@ -928,6 +1178,8 @@ $("logout-btn").addEventListener("click", signOut);
 $("denied-logout-btn").addEventListener("click", signOut);
 $("failed-logout-btn").addEventListener("click", signOut);
 $("retry-btn").addEventListener("click", () => load());
+$("admin-console-btn").addEventListener("click", openAdminConsole);
+$("login-console-btn").addEventListener("click", openAdminConsole);
 
 main().catch(() => {
   $("failed-message").textContent = "エラーが発生しました。ページを開き直してください。";

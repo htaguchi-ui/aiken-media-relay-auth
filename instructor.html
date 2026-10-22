@@ -254,6 +254,7 @@
   <p class="warn-text" id="login-note" role="status" hidden></p>
   <button type="button" class="btn primary big" id="login-btn">Google でログイン</button>
   <button type="button" class="alt-login" id="login-other-btn">別のアカウントでログイン</button>
+  <button type="button" class="alt-login" id="login-console-btn" hidden>管理コンソールを開く</button>
   <nav class="links" aria-label="方針と規約">
     <a href="https://a-i-ken.com/privacy/">プライバシーポリシー</a>
     <a href="/terms.html">利用規約</a>
@@ -266,7 +267,11 @@
   <h1 id="denied-title">講師の画面</h1>
   <p class="error-text" id="denied-message">講師の画面は、担当する回の講師と管理者だけが使えます。担当の登録は管理者に確かめてください。</p>
   <p class="muted small"><span id="denied-email" class="tabular"></span></p>
-  <div class="row"><button type="button" class="btn" id="denied-logout-btn">ログアウト</button></div>
+  <p class="warn-text" id="admin-guide" role="status" hidden></p>
+  <div class="row">
+    <button type="button" class="btn primary" id="admin-console-btn" hidden>管理コンソールを開く</button>
+    <button type="button" class="btn" id="denied-logout-btn">ログアウト</button>
+  </div>
 </section>
 
 <section id="failed" class="center-card" hidden aria-labelledby="failed-title">

@@ -1903,12 +1903,30 @@ export function explainApiError(status, body) {
   if (code === "origin_not_allowed") {
     return "サーバーに接続できませんでした（このページの場所からの接続は許可されていません。公開している管理コンソールから開いてください）。";
   }
+  if (code === "admin_session_expired") return "管理コンソールにログインしてから 12 時間たちました。もう一度ログインしてください。";
   if (status === 403) return "管理者の権限がありません。";
   if (status === 401) return "ログインの有効期限が切れました。ページを開き直してください。";
   if (status === 404) return "サーバー側の機能（admin-api）がまだ用意されていません。";
   // 503 などはサーバーの文言（日本語。既知の誤りだけを返す）
   if (status === 503 && typeof body?.message === "string" && /[^\x00-\x7F]/.test(body.message)) return body.message;
   return `モデルの一覧を読み込めませんでした（HTTP ${status}）。`;
+}
+
+/**
+ * 管理コンソールのログインの流れ（admin-api の /admin-login/start・finish。193 の 1930）が失敗したときの文。
+ * サーバーの文（日本語。既知の誤りだけを返す）があればそれを、無ければ状態から。URL・本文の英語はそのまま出さない
+ */
+export function adminLoginErrorText(status, body) {
+  const code = String(body?.error ?? "");
+  if (status === 0) return "サーバーに接続できません。通信の状態を確かめてから、もう一度ログインしてください。";
+  if (code === "origin_not_allowed") {
+    return "このページの場所からはログインできません。公開している管理コンソール（studio.a-i-ken-rc.com）から開いてください。";
+  }
+  if (status === 404) return "サーバー側のログインの機能（admin-api）がまだ用意されていません。";
+  if ([400, 403, 429, 503].includes(status) && typeof body?.message === "string" && /[^\x00-\x7F]/.test(body.message)) {
+    return body.message;
+  }
+  return `ログインできませんでした（HTTP ${status}）。もう一度ログインしてください。`;
 }
 
 // ---- 設定タブの見せ方（提案書 11 章。表示と確認の文だけ。保存の単位・範囲・既定・確認の条件は上の SETTING_LIMITS・limitChangeCheck のまま） ----
