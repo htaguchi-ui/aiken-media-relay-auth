@@ -118,7 +118,7 @@
 
   <section id="blocked" hidden>
     <p class="error">このアカウント（<span id="blocked-email"></span>）では使えません。</p>
-    <p class="muted">会社から配布されたアカウントでログインし直してください。</p>
+    <p class="muted">許可された会社の Google アカウント（@a-i-ken.jp / @a-i-ken.com / @orenda.co.jp / @net-fun.co.jp）でログインしてください。</p>
     <div class="actions"><button class="primary" id="relogin-btn">別のアカウントでログイン</button></div>
   </section>
 </main>
@@ -163,8 +163,8 @@
   const SUPABASE_URL = "https://tnzwhwitgnzoehbjrmoy.supabase.co";
   // 公開用のキー（ブラウザに置く前提のもの）。秘密鍵ではない。
   const SUPABASE_PUBLISHABLE_KEY = "sb_publishable_KRY7iSTi9d_z9EwW0KuDwg_ooUqGvDN";
-  // 受講者は a-i-ken.jp、管理者は a-i-ken.com。サーバー側でも同じ判定をする。
-  const ALLOWED_DOMAINS = ["a-i-ken.jp", "a-i-ken.com"];
+  // 研修で許可した各社のドメイン。役割・名簿・Google Workspace の確認はサーバー側でも行う。
+  const ALLOWED_DOMAINS = ["a-i-ken.jp", "a-i-ken.com", "orenda.co.jp", "net-fun.co.jp"];
 
   // ログインはマイページ・講師の画面・Canvas と共有する（決定 70。localStorage の共有の鍵）。マイページでログイン済みなら、
   // 接続のときに Google のログインを省ける。管理コンソールのログインとは共有しない（別の鍵）。
@@ -375,14 +375,14 @@
     const loginError = params.get("error_description") || hash.get("error_description");
     if (loginError) {
       const KNOWN_ERRORS = [
-        "A.I.KEN の社内 Google アカウント（@a-i-ken.jp / @a-i-ken.com）でログインしてください。",
-        "A.I.KEN の Google Workspace で管理されているアカウントでログインしてください（個人の Google アカウントは使えません）。",
+        "許可された会社の Google アカウント（@a-i-ken.jp / @a-i-ken.com / @orenda.co.jp / @net-fun.co.jp）でログインしてください。",
+        "許可された会社の Google Workspace で管理されているアカウントでログインしてください（個人の Google アカウントは使えません）。",
         "このアカウントはまだ利用登録されていません。管理者に登録を依頼してください。",
       ];
       $("blocked-email").textContent = "選択した Google アカウント";
       $("blocked").querySelector(".muted").textContent = KNOWN_ERRORS.includes(loginError)
         ? loginError
-        : "ログインできませんでした。会社から配布されたアカウントでログインし直してください。";
+        : "ログインできませんでした。許可された会社の Google アカウント（@a-i-ken.jp / @a-i-ken.com / @orenda.co.jp / @net-fun.co.jp）でログインし直してください。";
       show("blocked");
       return;
     }

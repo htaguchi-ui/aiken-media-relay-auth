@@ -2554,7 +2554,7 @@ function buildAddUi() {
   const modeSeg = el("div", { className: "seg", role: "radiogroup", "aria-label": "追加のしかた" }, mode("single", "1人ずつ", true), mode("bulk", "まとめて", false));
   const email = el("input", { type: "email", inputmode: "email", className: "input", autocomplete: "off", placeholder: "name@a-i-ken.jp", id: "add-email" });
   const name = textInput({ placeholder: "例：受講者 05", id: "add-name" });
-  const single = el("div", { className: "stack" }, field("メールアドレス", email, "@a-i-ken.jp または @a-i-ken.com のアカウント"), field("表示名（任意）", name));
+  const single = el("div", { className: "stack" }, field("メールアドレス", email, "@a-i-ken.jp / @a-i-ken.com / @orenda.co.jp / @net-fun.co.jp のアカウント"), field("表示名（任意）", name));
   const bulkText = el("textarea", {
     className: "input",
     id: "add-bulk",

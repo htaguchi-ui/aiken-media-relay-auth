@@ -2,8 +2,8 @@
 // admin.js から使う。テストは aiken-media-relay/scripts/admin_lib_test.ts。
 
 /** 名簿に登録できるドメイン（DB の check 制約・Edge Function の ALLOWED_EMAIL_DOMAINS と揃える） */
-export const ALLOWED_DOMAINS = ["a-i-ken.jp", "a-i-ken.com"];
-export const EMAIL_RE = /^[^@\s]+@(a-i-ken\.jp|a-i-ken\.com)$/;
+export const ALLOWED_DOMAINS = ["a-i-ken.jp", "a-i-ken.com", "orenda.co.jp", "net-fun.co.jp"];
+export const EMAIL_RE = /^[^@\s]+@(a-i-ken\.jp|a-i-ken\.com|orenda\.co\.jp|net-fun\.co\.jp)$/;
 
 export const ROLE_LABELS = { student: "受講者", member: "AIKENメンバー", admin: "管理者" };
 /** 講師の区分（016）。016 が DB に当たるまでは選べないので、ROLE_LABELS には入れず、roleLabelsFor で足す */
