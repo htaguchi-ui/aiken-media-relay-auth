@@ -1,14 +1,42 @@
 // 許可画面（consent.html）が使う：認可コードを渡してよい戻り先かどうかの判定。
 // 接続アプリは誰でも自動登録できるため、戻り先が許可した相手でなければ許可させない。
 
-/** ChatGPT（ウェブ・デスクトップアプリ）の戻り先 */
-export const ALLOWED_REDIRECT_ORIGINS = ["https://chatgpt.com"];
+/**
+ * 認可コードを渡してよい https の戻り先（origin の完全一致。サブドメインは許可しない）。
+ * origin ごとに、接続元の種類（kind）と、戻り先のパス（path）を持つ。
+ * - path がある origin は、パスが完全に一致するときだけ許可する（query は許す。fragment は許さない）
+ * - path が無い origin は、origin 全体を許可する
+ * ALLOWED_REDIRECT_ORIGINS と redirectKind は、この表から作る（片方だけに足す誤りを起こさない）。
+ * ChatGPT（ウェブ・デスクトップアプリ）と、Claude（claude.ai のウェブ・デスクトップアプリのカスタムコネクタ）。
+ * Claude は将来 claude.com に変わる可能性があるため、claude.ai と claude.com の両方を許可する
+ */
+export const REDIRECT_TARGETS = {
+  "https://chatgpt.com": { kind: "chatgpt" },
+  "https://claude.ai": { kind: "claude", path: "/api/mcp/auth_callback" },
+  "https://claude.com": { kind: "claude", path: "/api/mcp/auth_callback" },
+};
+
+export const ALLOWED_REDIRECT_ORIGINS = Object.keys(REDIRECT_TARGETS);
 
 /**
  * PC 内で動くアプリ（Codex など）の戻り先。127.0.0.1 などに戻る方式は、
  * 認可コードが利用者自身の PC にしか届かないので許可する（RFC 8252 のループバック）
  */
 export const LOOPBACK_HOSTS = ["127.0.0.1", "[::1]", "localhost"];
+
+/**
+ * https の戻り先に合う表の行を返す（無ければ null）。path がある行は、パスの完全一致だけを許す。
+ * new URL は ".." や "//" を整えてしまうので、入力の文字列のパスも同じであることを確かめる
+ * （"/api/mcp/auth_callback/.."・"/api/mcp/../mcp/auth_callback"・"%2F" などの符号化は許さない）
+ */
+function matchTarget(url, raw) {
+  if (!Object.hasOwn(REDIRECT_TARGETS, url.origin)) return null;
+  const target = REDIRECT_TARGETS[url.origin];
+  if (target.path === undefined) return target;
+  if (url.pathname !== target.path || url.hash) return null;
+  const rawPath = raw.replace(/^https:\/\/[^/?#]*/i, "").split(/[?#]/)[0];
+  return rawPath === target.path && !raw.includes("#") ? target : null;
+}
 
 export function isAllowedRedirect(raw) {
   if (typeof raw !== "string" || !raw) return false;
@@ -19,7 +47,7 @@ export function isAllowedRedirect(raw) {
     return false;
   }
   if (url.username || url.password) return false;
-  if (url.protocol === "https:") return ALLOWED_REDIRECT_ORIGINS.includes(url.origin);
+  if (url.protocol === "https:") return matchTarget(url, raw) !== null;
   if (url.protocol === "http:") return LOOPBACK_HOSTS.includes(url.hostname);
   return false;
 }
@@ -33,10 +61,11 @@ export function redirectHost(raw) {
   }
 }
 
-/** 許可した戻り先の種類（"chatgpt" / "loopback"）。許可しない戻り先は null */
+/** 許可した戻り先の種類（"chatgpt" / "claude" / "loopback"）。許可しない戻り先は null */
 export function redirectKind(raw) {
   if (!isAllowedRedirect(raw)) return null;
-  return new URL(raw).protocol === "https:" ? "chatgpt" : "loopback";
+  const url = new URL(raw);
+  return url.protocol === "https:" ? matchTarget(url, raw).kind : "loopback";
 }
 
 /** 表示する接続アプリの名前の長さの上限（文字数）。名前は DCR で誰でも決められるので、長い名前で画面を埋めさせない */
