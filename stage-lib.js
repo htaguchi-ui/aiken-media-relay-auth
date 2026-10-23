@@ -7,6 +7,7 @@
 //   { cohort_id, name, credit_mode: "stage"|"day", period: "before"|"day1"|"bridge"|"day2"|"after", server_now: 時刻,
 //     stage: 今の段階 | null,                    // { id, day_kind, seq, label, title, credits, entered_at }
 //     stages_today: [今日の日の種類の段階（seq 順）],  // 同じ形。講師が移せるのはこの中だけ
+//     stages: [回のすべての段階（Day1 → ブリッジワーク → Day2、seq 順）],  // 同じ形。講師の画面のワークショップの一覧（無ければ今日の分だけ）
 //     last_move: { entered_at, from_stage_id, to_stage_id, actor, by_email, jobs_since } | null,
 //     students: [{ email, display_name, status, stage_used, stage_limit, stage_remaining, day_used, day_limit,
 //                  last_used_at, grant_total, instructor_stage_total }],
@@ -273,6 +274,13 @@ export function normalizeStageStatus(raw, receivedAt = Date.now()) {
     .map(normStage)
     .filter(Boolean)
     .sort((a, b) => (a.seq ?? 0) - (b.seq ?? 0));
+  // 回のすべての段階。返ってこない（配列でない）ときは null（分からない。画面は今日の分だけで描く）
+  const stagesAll = Array.isArray(r.stages)
+    ? r.stages
+      .map(normStage)
+      .filter((s) => s && DAY_KINDS.includes(s.dayKind))
+      .sort((a, b) => DAY_KINDS.indexOf(a.dayKind) - DAY_KINDS.indexOf(b.dayKind) || (a.seq ?? 0) - (b.seq ?? 0))
+    : null;
   const fromList = stagesToday.find((s) => s.isCurrent) ?? null;
   const current = normStage(r.stage ?? r.current_stage) ?? fromList;
   const lm = r.last_move && typeof r.last_move === "object" ? r.last_move : null;
@@ -286,6 +294,7 @@ export function normalizeStageStatus(raw, receivedAt = Date.now()) {
     clockOffset: r.server_now && Number.isFinite(toMs(r.server_now)) ? toMs(r.server_now) - receivedAt : 0,
     current,
     stagesToday,
+    stagesAll,
     lastMove: lm
       ? {
         enteredAt: str(lm.entered_at),
@@ -326,6 +335,67 @@ export function normalizeInstructorCohorts(raw) {
 /** 担当する回の選択肢の表示「06-261120 · 第2回 · 青山オフィス」 */
 export function instructorCohortLabel(c) {
   return [c?.id, c?.name, c?.venueName].filter((v) => String(v ?? "").trim()).join(" · ");
+}
+
+// ---- ワークショップの一覧（講師の画面。設計 docs/design-instructor-page-v2.md 2.3） ----
+// 「済み／今／これから」は位置（今より前・今・今より後）。段階は戻せるので「本当に終わったか」の記録ではない。
+
+const STAGE_STATE_LABELS = { done: "済み", now: "今", next: "これから" };
+
+/** 状態の言葉（"done" | "now" | "next" 以外は空） */
+export function stageStateLabel(state) {
+  return typeof state === "string" && Object.hasOwn(STAGE_STATE_LABELS, state) ? STAGE_STATE_LABELS[state] : "";
+}
+
+/**
+ * ワークショップの一覧を日ごとに分け、各段階の状態を決める（normalizeStageStatus の値から）。
+ * 返り値：{ fallback, groups: [{ dayKind, label, isToday, open, state, rows: [{ stage, state }] }] }
+ *   fallback：回のすべての段階（stagesAll）が無く、今日の分（stagesToday）だけで作った
+ *   state："done" | "now" | "next" | null（期間も今の段階も分からないときは null＝言葉を出さない）
+ *   open：最初に開く日（「今」を含む日 → 今日の日 → 開催前は Day1・終了後は Day2 → それも無ければ最初の日）
+ * 段階の無い日は groups に入れない。
+ * stages はあるが今の段階の行が無い（壊れた行が落ちた）とき、今日の分に今の段階があれば、今日の分だけで作る
+ * （stages が無いときと同じ縮退。「今」を出すことを、ほかの日の行より優先する）
+ */
+export function stageTimeline(status) {
+  const period = str(status?.period);
+  const currentId = status?.current?.id ?? null;
+  const today = status?.stagesToday ?? [];
+  const all = Array.isArray(status?.stagesAll) ? status.stagesAll : null;
+  const nowLost = !!all && !!currentId && !all.some((s) => s.id === currentId) && today.some((s) => s.id === currentId);
+  const fallback = !all || nowLost;
+  const list = fallback ? today : all;
+  const todayKind = DAY_KINDS.includes(period) ? period : null;
+  const idx = currentId ? list.findIndex((s) => s.id === currentId) : -1;
+  // 今日の分だけのときは、日の種類が欠けた行も今日の日に入れる
+  const kindOf = (s) => (DAY_KINDS.includes(s.dayKind) ? s.dayKind : fallback ? todayKind ?? status?.current?.dayKind ?? null : null);
+  const rowState = (s, i) => {
+    if (idx >= 0) return i < idx ? "done" : i === idx ? "now" : "next";
+    if (period === "before") return "next";
+    if (period === "after") return "done";
+    if (todayKind) return DAY_KINDS.indexOf(kindOf(s)) < DAY_KINDS.indexOf(todayKind) ? "done" : "next";
+    return null;
+  };
+  const rows = list.map((stage, i) => ({ stage, state: rowState(stage, i), kind: kindOf(stage) }));
+  const kinds = [...DAY_KINDS, null].filter((k) => rows.some((r) => r.kind === k));
+  const groups = kinds.map((kind) => {
+    const mine = rows.filter((r) => r.kind === kind).map(({ stage, state }) => ({ stage, state }));
+    const states = mine.map((r) => r.state);
+    const state = states.every((s) => s === null)
+      ? null
+      : states.includes("now")
+      ? "now"
+      : states.every((s) => s === "done")
+      ? "done"
+      : "next";
+    return { dayKind: kind, label: kind ? DAY_KIND_LABELS[kind] : "今日", isToday: !!kind && kind === todayKind, open: false, state, rows: mine };
+  });
+  const opened = groups.find((g) => g.state === "now") ??
+    groups.find((g) => g.isToday) ??
+    (period === "before" ? groups.find((g) => g.dayKind === "day1") : period === "after" ? groups.find((g) => g.dayKind === "day2") ?? groups.at(-1) : null) ??
+    groups[0];
+  if (opened) opened.open = true;
+  return { fallback, groups };
 }
 
 // ---- 段階を進める・戻す ----

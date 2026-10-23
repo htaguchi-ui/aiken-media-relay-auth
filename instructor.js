@@ -27,6 +27,7 @@ import {
   cohortStatus,
   explainError,
   formatCredits,
+  formatMonthDay,
   formatShortDateTime,
   isStageSchemaMissing,
   MSG_STAGE_NOT_READY,
@@ -50,6 +51,8 @@ import {
   REVOKE_CONFIRM_TEXT,
   stageMoveView,
   stageName,
+  stageStateLabel,
+  stageTimeline,
   undoView,
 } from "./stage-lib.js";
 
@@ -98,7 +101,7 @@ discardOldTabSessions(browserStorage("session"), sendLocalLogout);
 
 // 読み込めない（通信の失敗・integrity の不一致）ときは先へ進まない
 if (typeof window.supabase?.createClient !== "function") {
-  $("status").textContent = "画面の部品を読み込めませんでした。通信状態を確認して、ページを開き直してください。";
+  $("status").replaceChildren(el("p", { text: "画面を読み込めませんでした。" }), el("p", { text: "通信を確かめて開き直してください。" }));
   throw new Error("supabase-js を読み込めませんでした");
 }
 
@@ -153,6 +156,15 @@ const state = {
   noteText: "",
 };
 
+/**
+ * 画面だけの開閉の状態（描き直しても、講師が開いた・閉じた所を保つ。state には入れない。hideContent が空にするので、その前に置く）。
+ * openDays：回ごとの { base（最初に開く日＝今日の日）, manual（講師が手で開け閉めした日 → 開けた true／閉じた false） }。
+ *   開いている日 = 今日の日 ＋ 手で開けた日 − 手で閉じた日。日が替わったら、前の今日の日は手で開けていなければ閉じ、
+ *   新しい今日の日は開く（前に手で閉じていても。「今」の行を隠さない）。
+ * folds：クレジットの追加の欄で開いている折りたたみ（"limits" | "mine" | "revoked"）
+ */
+const ui = { openDays: new Map(), folds: new Set() };
+
 // ---- ログイン・ログアウト ----
 
 /** Google のログインへ移る。ふつうはアカウントを選ぶ画面を出さず、「別のアカウントでログイン」のときだけ出す（決定 70） */
@@ -189,6 +201,8 @@ function hideContent(message = "ログアウトしています…") {
   state.selected.clear();
   state.creditsText = "";
   state.noteText = "";
+  ui.openDays.clear();
+  ui.folds.clear();
   $("status").replaceChildren(el("p", { className: "muted", text: message }));
   show("status");
 }
@@ -429,7 +443,7 @@ async function reloadStatus() {
 
 const MSG_ADMIN_CONSOLE_NEEDED = "管理者として講師ページを使うには、管理コンソールでログインしてから開いてください。";
 // ログインの画面でだけ、管理者向けの案内の前に置く（講師が迷わないように。田口さん 2026-10-23）
-const MSG_INSTRUCTOR_LOGIN_FIRST = "講師の方は上の［Google でログイン］から入ってください。";
+const MSG_TEACHER_LOGIN_FIRST = "講師の方は上の［Google でログイン］から入ってください。";
 const MSG_ADMIN_CONSOLE_EXPIRED ="管理コンソールのログインから 12 時間たちました。管理コンソールでもう一度ログインしてから開いてください。";
 
 /** 管理者として動いている間の { client, expiresAt, userId }（講師・ログイン前は null） */
@@ -618,6 +632,11 @@ async function endAdminConsole(client, target) {
 }
 
 // ---- 表示 ----
+// 上から：回の見出し → ワークショップ（今を強調）と進める・戻す →（0179 の枠）→ 受講者 → クレジットの追加
+// （設計 docs/design-instructor-page-v2.md 3 章。見た目は管理コンソールにそろえる。操作の守りは「操作」の部分のまま）
+
+/** 状態の言葉のバッジ（管理コンソールの回の状態と同じ組） */
+const STATE_BADGE = { done: "ended", now: "active", next: "upcoming" };
 
 let undoTimer = null;
 
@@ -634,10 +653,9 @@ function render() {
     view.replaceChildren(
       el(
         "section",
-        { className: "card" },
-        el("h2", { text: "担当する回" }),
-        el("p", { text: "担当する回がありません。" }),
-        el("p", { className: "hint", text: "担当の登録は、管理者が管理コンソールの回の画面で行います。" }),
+        { className: "card", "aria-labelledby": "cohort-h" },
+        el("h2", { id: "cohort-h", text: "担当する回がありません。" }),
+        el("p", { className: "hint", text: "担当の登録は管理者に頼んでください。" }),
       ),
     );
     return;
@@ -653,58 +671,60 @@ function render() {
         state.statusError ? el("button", { type: "button", className: "btn", text: "読み込み直す", onclick: () => reloadStatus() }) : null,
       ),
     );
-  } else if (s.creditMode !== "stage") {
-    parts.push(
-      el(
-        "section",
-        { className: "card" },
-        el("h2", { text: "段階" }),
-        el("p", { text: "この回は、段階ごとの枠になっていません（Day ごとの枠です）。段階の操作はできません。" }),
-        el("p", { className: "hint", text: "テンプレートを当てるのは、管理者が管理コンソールで行います。" }),
-      ),
-    );
-  } else {
-    parts.push(stageCard(s), studentsCard(s), grantCard(s));
+  } else if (s.creditMode === "stage") {
+    parts.push(stageCard(s), closeSlot(), studentsCard(s), grantCard(s));
   }
-  view.replaceChildren(...parts);
+  view.replaceChildren(...parts.filter(Boolean));
   updateUndoTimer();
   updateGrantButton();
 }
 
+/** 回の見出し：回の名前・ID と会場と日付・期間のバッジ・今の段階とそのクレジット数・［最新にする］ */
 function cohortCard() {
   const s = state.status;
+  const c = state.cohorts.find((x) => x.id === state.cohortId) ?? {};
   const cs = s?.period ? cohortStatus(s.period) : null;
+  const meta = [
+    c.id,
+    c.venueName,
+    c.day1Date ? `Day1 ${formatMonthDay(c.day1Date)}` : null,
+    c.day2Date ? `Day2 ${formatMonthDay(c.day2Date)}` : null,
+  ].filter(Boolean).join(" · ");
   const picker = state.cohorts.length > 1
     ? el(
       "div",
-      {},
-      el("label", { className: "field-label", for: "cohort-select", text: "回を選ぶ" }),
+      { className: "cohort-pick" },
+      el("label", { className: "field-label", for: "cohort-select", text: "回" }),
       (() => {
         const select = el(
           "select",
           { className: "input tabular", id: "cohort-select" },
-          ...state.cohorts.map((c) => el("option", { value: c.id, text: instructorCohortLabel(c), selected: c.id === state.cohortId })),
+          ...state.cohorts.map((x) => el("option", { value: x.id, text: instructorCohortLabel(x), selected: x.id === state.cohortId })),
         );
         select.addEventListener("change", () => {
           state.cohortId = select.value;
           state.status = null;
           state.statusError = "";
           state.selected.clear();
+          ui.openDays.delete(select.value); // 切り替えた回は、その回の初期値（今を含む日）から開く
           render();
           loadStatus().then(render);
         });
         return select;
       })(),
     )
-    : el("p", { className: "tabular", text: instructorCohortLabel(state.cohorts.find((c) => c.id === state.cohortId) ?? {}) });
+    : null;
   return el(
     "section",
-    { className: "card", "aria-labelledby": "cohort-h" },
+    { className: "card head-card", "aria-labelledby": "cohort-h" },
     el(
       "div",
       { className: "card-head" },
-      el("h2", { id: "cohort-h", text: "担当する回" }),
-      el("div", { className: "row-actions" }, cs ? el("span", { className: `badge ${cs.kind === "active" ? "now" : "off"}`, text: cs.label }) : null,
+      el("h2", { id: "cohort-h", className: "cohort-name", text: c.name ?? s?.name ?? c.id ?? "—" }),
+      el(
+        "div",
+        { className: "row-actions" },
+        cs ? el("span", { className: `badge ${cs.kind}`, text: cs.label }) : null,
         el("button", {
           type: "button",
           className: "btn compact",
@@ -714,48 +734,62 @@ function cohortCard() {
             clearNotice();
             await load({ fromApp: true });
           },
-        })),
+        }),
+      ),
     ),
+    meta ? el("p", { className: "cohort-meta tabular", text: meta }) : null,
     picker,
+    nowLine(s),
   );
 }
 
+/** 回の見出しの「今」の行（今の段階が無いときは期間の 1 行。Day ごとの回は 2 行の案内） */
+function nowLine(s) {
+  if (!s) return null;
+  if (s.creditMode !== "stage") {
+    return el("div", { className: "stack" }, el("p", { text: "この回は Day ごとの枠です。" }), el("p", { className: "hint", text: "段階の操作はありません。" }));
+  }
+  if (s.current) {
+    return el(
+      "div",
+      { className: "now-line" },
+      el("span", { className: "badge active", text: "今" }),
+      el("span", { className: "now-name", id: "stage-current", text: stageName(s.current) }),
+      s.current.credits === null ? null : el("span", { className: "now-credits tabular", text: `${formatCredits(s.current.credits)} クレジット` }),
+    );
+  }
+  const text = s.period === "before" ? "Day1 の 0:00 に始まります。" : s.period === "after" ? "Day2 は終わりました。" : "今の段階はありません。";
+  return el("p", { className: "now-line quiet", text });
+}
+
+/** ワークショップ：日ごとのリスト（今日の日だけ開く）・60 秒の取り消し・［前へ戻す］［次へ進める］・押せない理由 */
 function stageCard(s) {
   const mv = stageMoveView(s);
   const undo = undoView(s, Date.now());
-  const list = el(
-    "ol",
-    { className: "stage-list", "aria-label": "今日の段階" },
-    ...s.stagesToday.map((st) =>
-      el(
-        "li",
-        { className: st.id === s.current?.id ? "current" : "" },
-        el("span", { className: "name" }, el("span", { text: stageName(st) }), st.id === s.current?.id ? el("span", { className: "badge now", text: "今" }) : null),
-        el("span", { className: "credits tabular", text: st.credits === null ? "—" : `上限 ${formatCredits(st.credits)}` }),
-      )
-    ),
-  );
+  const tl = stageTimeline(s);
+  const cohortId = state.cohortId; // 描いたときの回（toggle が遅れて届いても、この回の記録にだけ書く）
+  const opened = openDaysOf(tl, cohortId);
   const move = (direction) => moveStage(direction, mv, s);
+  const why = moveWhy(mv);
   return el(
     "section",
-    { className: "card", "aria-labelledby": "stage-h" },
-    el("h2", { id: "stage-h", text: "段階" }),
-    el(
-      "div",
-      { className: "stage-now" },
-      el("span", { className: "label", text: "今の段階" }),
-      el("span", { className: "name", id: "stage-current", text: mv.current ? stageName(mv.current) : "—" }),
-    ),
-    s.stagesToday.length ? list : null,
+    { className: "card", "aria-labelledby": "wk-h" },
+    el("h2", { id: "wk-h", text: "ワークショップ" }),
+    tl.groups.length ? el("div", { className: "wk-list", role: "group", "aria-label": "ワークショップの一覧" }, ...tl.groups.map((g) => dayFold(g, opened, cohortId))) : null,
     undo.available
       ? el(
         "div",
         { className: "undo-box", id: "undo-box" },
-        el("span", { text: undoText(undo) }),
+        el(
+          "div",
+          { className: "undo-lines" },
+          el("p", { id: "undo-text", text: undoText(undo) }),
+          el("p", { id: "undo-jobs", className: "small", text: undoJobsText(undo), hidden: undo.jobsSince === null }),
+        ),
         el("button", {
           type: "button",
           className: "btn",
-          text: "取り消す（前の段階に戻す）",
+          text: "前の段階に戻す",
           disabled: state.busy,
           onclick: () => undoMove(undo, s),
         }),
@@ -767,18 +801,93 @@ function stageCard(s) {
       el("button", { type: "button", className: "btn big", id: "move-back", text: "前へ戻す", disabled: state.busy || !mv.canPrev, title: mv.canPrev ? null : mv.prevWhy, onclick: () => move("back") }),
       el("button", { type: "button", className: "btn primary big", id: "move-next", text: "次へ進める", disabled: state.busy || !mv.canNext, title: mv.canNext ? null : mv.nextWhy, onclick: () => move("next") }),
     ),
-    !mv.canPrev || !mv.canNext
-      ? el("p", { className: "hint", text: mv.whyOff || [mv.canPrev ? "" : mv.prevWhy, mv.canNext ? "" : mv.nextWhy].filter(Boolean).join(" ") })
-      : null,
-    el("p", { className: "hint", text: "段階を動かすと、この回の受講者全員が、移った先の段階の上限で使います。移れるのは、今日の段階の中だけです。" }),
+    why ? el("p", { className: "hint", id: "move-why", text: why }) : null,
   );
 }
 
-/** 取り消しの案内の文（残りの秒数を含む） */
+/** 押せない理由の 1 行（前も次も無い日は「1 つだけ」にまとめる） */
+function moveWhy(mv) {
+  if (mv.canPrev && mv.canNext) return "";
+  if (mv.whyOff) return mv.whyOff;
+  if (!mv.prev && !mv.next) return "今日の段階は 1 つだけです。";
+  return [mv.canPrev ? "" : mv.prevWhy, mv.canNext ? "" : mv.nextWhy].filter(Boolean).join(" ");
+}
+
+/** その日が開いているか（手で開け閉めした日はその値、ほかは今日の日だけ） */
+function dayIsOpen(rec, key) {
+  return rec.manual.has(key) ? rec.manual.get(key) : key === rec.base;
+}
+
+/**
+ * その回の開いている日（ui に覚えたもの）。開いている日 = 今日の日 ＋ 手で開けた日 − 手で閉じた日。
+ * 日が替わったら（最初に開く日が変わったら）、新しい今日の日の手の記録だけを消して開く。前の今日の日は、手で開けていなければ閉じる
+ */
+function openDaysOf(tl, cohortId) {
+  const base = tl.groups.find((g) => g.open)?.dayKind ?? "";
+  let rec = ui.openDays.get(cohortId);
+  if (!rec) {
+    rec = { base, manual: new Map() };
+    ui.openDays.set(cohortId, rec);
+  } else if (rec.base !== base) {
+    rec.base = base;
+    rec.manual.delete(base);
+  }
+  return new Set(tl.groups.map((g) => g.dayKind ?? "").filter((key) => dayIsOpen(rec, key)));
+}
+
+/** 1 日分の折りたたみ：見出し「Day2（今日）［今］4 つ」と、段階の行 */
+function dayFold(g, opened, cohortId) {
+  const key = g.dayKind ?? "";
+  const name = `${g.label}${g.isToday ? "（今日）" : ""}`;
+  const word = stageStateLabel(g.state);
+  const count = `${g.rows.length} つ`;
+  const node = el(
+    "details",
+    { className: `plain-fold wk-day${g.state ? ` ${g.state}` : ""}`, open: opened.has(key), "data-day": key },
+    el(
+      "summary",
+      { "aria-label": [name, word, count].filter(Boolean).join("、") },
+      el("span", { className: "wk-day-name", text: name }),
+      word ? el("span", { className: `badge ${STATE_BADGE[g.state]}`, text: word }) : null,
+      el("span", { className: "meta tabular", text: count }),
+    ),
+    el("ol", { className: "wk-rows" }, ...g.rows.map(wkRow)),
+  );
+  node.addEventListener("toggle", () => {
+    // 描き直しで画面から外れた折りたたみの toggle は使わない。覚えている値と同じ（open の属性で届くもの）は触ったと数えない
+    if (!node.isConnected) return;
+    const rec = ui.openDays.get(cohortId);
+    if (!rec || node.open === dayIsOpen(rec, key)) return;
+    rec.manual.set(key, node.open);
+  });
+  return node;
+}
+
+/** 段階の行：状態の言葉・名前・クレジット数（今の行は aria-current） */
+function wkRow(r) {
+  const word = stageStateLabel(r.state);
+  return el(
+    "li",
+    { className: `wk-row${r.state ? ` ${r.state}` : ""}`, "aria-current": r.state === "now" ? "step" : null },
+    el("span", { className: "wk-state" }, word ? el("span", { className: `badge ${STATE_BADGE[r.state]}`, text: word }) : null),
+    el("span", { className: "wk-name", text: stageName(r.stage) }),
+    el("span", { className: "wk-credits tabular", text: r.stage.credits === null ? "—" : `${formatCredits(r.stage.credits)} クレジット` }),
+  );
+}
+
+/** 0179（回のクローズ）の枠。v2 では中身を描かない（0179 を載せるとき、Day2 の最後の段階が「今」になってから中身を出す） */
+function closeSlot() {
+  return el("section", { id: "cohort-close-panel", hidden: true, "aria-label": "回のクローズ" });
+}
+
+/** 取り消しの案内の文（1 行目。残りの秒数を含む） */
 function undoText(undo) {
-  return `段階を移しました。あと ${undo.remainingSec} 秒は、前の段階に戻せます。${
-    undo.jobsSince === null ? "" : `この間の生成：${formatCredits(undo.jobsSince)} 件（その分は移った先の段階に残ります）。`
-  }`;
+  return `移しました。あと ${undo.remainingSec} 秒は戻せます。`;
+}
+
+/** 取り消しの案内の 2 行目（その間の生成の件数。分からなければ空） */
+function undoJobsText(undo) {
+  return undo.jobsSince === null ? "" : `この間の生成 ${formatCredits(undo.jobsSince)} 件は、移った先の段階に残ります。`;
 }
 
 /** 取り消せる間に、段階と「この間の生成」の件数を読み直す間隔（秒） */
@@ -786,7 +895,7 @@ const UNDO_POLL_SEC = 10;
 
 /**
  * 取り消せる間だけ、1 秒ごとに残りの秒数の文を書き換える（入力中の欄を作り直さない）。
- * 時間は、読み込んだときのサーバーとの時刻の差を足した今の時刻で数え（undoView）、60 秒を過ぎたら描き直してボタンを消す。
+ * 時間は、読み込んだときのサーバーとの時刻の差を足した今の時刻で数え（undoView）、60 秒を過ぎたら取り消しの箱だけを消す。
  * 10 秒ごとに cohort_stage_status を読み直し、「この間の生成」の件数も新しくする
  */
 function updateUndoTimer() {
@@ -815,15 +924,24 @@ function updateUndoTimer() {
       document.getElementById("undo-box")?.remove();
       return;
     }
-    const text = document.querySelector("#undo-box > span");
+    const text = document.getElementById("undo-text");
     if (text) text.textContent = undoText(undo);
+    const jobs = document.getElementById("undo-jobs");
+    if (jobs) {
+      jobs.textContent = undoJobsText(undo);
+      jobs.hidden = undo.jobsSince === null;
+    }
   }, 1000);
 }
 
+/** 受講者：1 人 1 行（チェック・名前・残り・今の段階の使用 / 上限と棒・最後の生成）。残りの少ない順 */
 function studentsCard(s) {
   const rows = [...s.students].sort((a, b) => (a.remaining ?? Infinity) - (b.remaining ?? Infinity) || (a.name ?? a.email).localeCompare(b.name ?? b.email, "ja"));
   const activeEmails = rows.filter((r) => r.active).map((r) => r.email);
   const allOn = activeEmails.length > 0 && activeEmails.every((e) => state.selected.has(e));
+  // 同じ名前の人が 2 人以上いるときだけ、名前の下にメールを出す
+  const nameCount = new Map();
+  for (const r of rows) if (r.name) nameCount.set(r.name, (nameCount.get(r.name) ?? 0) + 1);
   const items = rows.map((r) => {
     const cb = el("input", { type: "checkbox", checked: r.active && state.selected.has(r.email), disabled: !r.active, "data-email": r.email });
     cb.addEventListener("change", () => {
@@ -838,22 +956,28 @@ function studentsCard(s) {
       {},
       el(
         "label",
-        { className: r.active ? "" : "disabled" },
+        { className: `st-row${r.active ? "" : " disabled"}`, title: r.email },
         cb,
         el(
           "span",
-          { className: "who" },
-          el("span", { className: "ellipsis", text: r.name ?? r.email }),
-          r.name ? el("span", { className: "small muted ellipsis tabular", text: r.email }) : null,
-          el("span", { className: "last", text: `最終生成 ${formatShortDateTime(r.lastUsedAt)}${r.active ? "" : "・利用停止中"}` }),
+          { className: "st-who" },
+          el("span", { className: "st-name ellipsis", text: r.name ?? r.email }),
+          r.active ? null : el("span", { className: "badge stopped", text: "停止中" }),
+          r.name && nameCount.get(r.name) > 1 ? el("span", { className: "st-mail small muted ellipsis tabular", text: r.email }) : null,
         ),
         el(
           "span",
-          { className: "quota tabular" },
-          el("span", { className: `rem ${low ? "low" : ""}`, text: r.remaining === null ? "残り —" : `残り ${formatCredits(r.remaining)}` }),
-          el("span", { className: "small muted", text: `使用 ${formatCredits(r.used)} / ${formatCredits(r.limit)}` }),
-          r.limit !== null ? el("span", { className: `bar ${low ? "low" : ""}`, role: "img", "aria-label": `使用 ${pct}%` }, el("span", { style: `width:${pct}%` })) : null,
+          { className: `st-rem tabular${low ? " low" : ""}` },
+          el("span", { className: "st-rem-label", text: "残り " }),
+          el("b", { text: r.remaining === null ? "—" : formatCredits(r.remaining) }),
         ),
+        el(
+          "span",
+          { className: "st-use tabular" },
+          r.limit !== null ? el("span", { className: `bar ${low ? "low" : ""}`, role: "img", "aria-label": `使用 ${pct}%` }, el("span", { style: `width:${pct}%` })) : null,
+          el("span", { className: "st-use-num", text: `${formatCredits(r.used)} / ${formatCredits(r.limit)}` }),
+        ),
+        el("span", { className: "st-last small muted tabular" }, el("span", { className: "st-last-label", text: "最後の生成 " }), el("span", { text: formatShortDateTime(r.lastUsedAt) })),
       ),
     );
   });
@@ -863,7 +987,7 @@ function studentsCard(s) {
     el(
       "div",
       { className: "card-head" },
-      el("h2", { id: "students-h", text: "受講者" }),
+      el("h2", { id: "students-h", text: `受講者 ${rows.length} 人` }),
       el("button", {
         type: "button",
         className: "btn compact",
@@ -878,35 +1002,62 @@ function studentsCard(s) {
         },
       }),
     ),
-    el("p", { className: "hint", text: "今の段階の使用と上限です。クレジットを追加する人にチェックを付けます。" }),
-    items.length ? el("ul", { className: "students", "aria-label": "受講者" }, ...items) : el("p", { className: "muted", text: "この回に所属している受講者がいません。" }),
+    items.length
+      ? el(
+        "div",
+        { className: "st-table" },
+        el(
+          "div",
+          { className: "st-head small muted", "aria-hidden": "true" },
+          el("span", { className: "h-who", text: "名前" }),
+          el("span", { className: "h-rem", text: "残り" }),
+          el("span", { className: "h-use", text: "今の段階の使用 / 上限" }),
+          el("span", { className: "h-last", text: "最後の生成" }),
+        ),
+        el("ul", { className: "students", "aria-label": "受講者" }, ...items),
+      )
+      : el("p", { className: "muted", text: "受講者がいません。" }),
   );
 }
 
+/** 追加の上限の行（単位はクレジット。畳んだ中の先頭に書く） */
 function limitItems(s) {
   const l = s.limits;
   const items = [];
   if (!state.isAdmin) {
-    if (l.perGrant !== null) items.push(["1 回に追加できる上限", `${formatCredits(l.perGrant)} クレジット`]);
-    if (l.perStudentStage !== null) items.push(["1 人・この段階への追加の合計の上限", `${formatCredits(l.perStudentStage)} クレジット`]);
+    if (l.perGrant !== null) items.push(`1 回の追加：${formatCredits(l.perGrant)} まで`);
+    if (l.perStudentStage !== null) items.push(`1 人・この段階の合計：${formatCredits(l.perStudentStage)} まで`);
     if (l.perCohortDay !== null) {
-      items.push([
-        "今日この回に追加できる合計",
+      items.push(
         l.cohortDayTotal === null
-          ? `上限 ${formatCredits(l.perCohortDay)} クレジット`
-          : `${formatCredits(l.cohortDayTotal)} / ${formatCredits(l.perCohortDay)} クレジット（あと ${formatCredits(Math.max(0, l.perCohortDay - l.cohortDayTotal))}）`,
-      ]);
+          ? `今日この回の合計：${formatCredits(l.perCohortDay)} まで`
+          : `今日この回の合計：${formatCredits(l.cohortDayTotal)} / ${formatCredits(l.perCohortDay)}（あと ${formatCredits(Math.max(0, l.perCohortDay - l.cohortDayTotal))}）`,
+      );
     }
   }
-  if (l.total !== null) items.push(["1 人あたり、この回の追加の合計の上限", `${formatCredits(l.total)} クレジット（取り消した追加も数えます）`]);
+  if (l.total !== null) items.push(`1 人・この回の合計：${formatCredits(l.total)} まで（取り消しも数える）`);
   return items;
+}
+
+/** 折りたたみ（開閉は ui に覚え、描き直しても閉じない） */
+function fold(key, title, ...children) {
+  const node = el("details", { className: "plain-fold minor", open: ui.folds.has(key), "data-fold": key }, el("summary", { text: title }), el("div", { className: "fold-in" }, ...children));
+  node.addEventListener("toggle", () => {
+    if (!node.isConnected) return; // 描き直しで画面から外れた折りたたみの toggle は使わない
+    if (node.open) ui.folds.add(key);
+    else ui.folds.delete(key);
+  });
+  return node;
 }
 
 function grantCard(s) {
   const credits = el("input", { type: "text", inputmode: "numeric", className: "input tabular", id: "grant-credits", autocomplete: "off", placeholder: "例：100" });
   credits.value = state.creditsText;
-  credits.addEventListener("input", () => (state.creditsText = credits.value));
-  const note = el("input", { type: "text", className: "input", id: "grant-note", autocomplete: "off", placeholder: "例：生成が足りなくなったため" });
+  credits.addEventListener("input", () => {
+    state.creditsText = credits.value;
+    updateGrantButton(); // ボタンの「+X」を変える（描き直さない）
+  });
+  const note = el("input", { type: "text", className: "input", id: "grant-note", autocomplete: "off", placeholder: "例：生成が足りない" });
   note.value = state.noteText;
   note.addEventListener("input", () => (state.noteText = note.value));
   const limits = limitItems(s);
@@ -918,68 +1069,83 @@ function grantCard(s) {
     "section",
     { className: "card", "aria-labelledby": "grant-h" },
     el("h2", { id: "grant-h", text: "クレジットを追加" }),
-    el("p", { className: "hint", text: "追加は、今の段階の上限に足されます（次の段階には持ち越されません）。全員分が通るか、1 人でも断られたら全員分とも追加されません。" }),
-    limits.length ? el("ul", { className: "limits", "aria-label": "追加の上限" }, ...limits.map(([k, v]) => el("li", {}, el("span", { text: `${k}：` }), el("b", { text: v })))) : null,
+    el("p", { className: "hint", text: "追加は今の段階だけに効きます。" }),
     el(
       "div",
       { className: "grant-form" },
       el("div", {}, el("label", { className: "field-label", for: "grant-credits", text: "1 人あたりのクレジット" }), credits),
-      el("div", {}, el("label", { className: "field-label", for: "grant-note", text: "メモ（任意。理由など）" }), note),
+      el("div", {}, el("label", { className: "field-label", for: "grant-note", text: "メモ（任意）" }), note),
     ),
-    avail.ok ? null : el("p", { className: "note-box", id: "grant-why", text: avail.why }),
     el("button", { type: "button", className: "btn primary big", id: "grant-btn", onclick: () => addGrant(s) }),
-    el("h3", { text: state.isAdmin ? "今の段階の追加（取り消せるもの）" : "今の段階のあなたの追加" }),
-    mine.length
-      ? el(
-        "ul",
-        { className: "my-grants", "aria-label": "取り消せる追加" },
-        ...mine.map((g) =>
-          el(
-            "li",
-            {},
-            el("span", { className: "what", text: `${nameOf(g.email)} に +${formatCredits(g.credits)}${g.note ? `「${g.note}」` : ""}・${formatShortDateTime(g.createdAt)}` }),
-            el("button", {
-              type: "button",
-              className: "btn compact",
-              text: "取り消す",
-              disabled: state.busy,
-              "aria-label": `${nameOf(g.email)} への追加（+${formatCredits(g.credits)}）を取り消す`,
-              onclick: () => revokeGrant(g, nameOf(g.email), s),
-            }),
+    avail.ok ? null : el("p", { className: "note-box", id: "grant-why", text: avail.why }),
+    el(
+      "div",
+      { className: "folds" },
+      limits.length
+        ? fold(
+          "limits",
+          "追加の上限",
+          el("p", { className: "small muted", text: "単位はクレジットです。" }),
+          el("ul", { className: "limits", "aria-label": "追加の上限" }, ...limits.map((t) => el("li", { className: "tabular", text: t }))),
+        )
+        : null,
+      fold(
+        "mine",
+        `${state.isAdmin ? "取り消せる追加" : "あなたの追加"}（${mine.length} 件）`,
+        mine.length
+          ? el(
+            "ul",
+            { className: "my-grants", "aria-label": "取り消せる追加" },
+            ...mine.map((g) =>
+              el(
+                "li",
+                {},
+                el("span", { className: "what", text: `${nameOf(g.email)} に +${formatCredits(g.credits)}${g.note ? `「${g.note}」` : ""}・${formatShortDateTime(g.createdAt)}` }),
+                el("button", {
+                  type: "button",
+                  className: "btn compact",
+                  text: "取り消す",
+                  disabled: state.busy,
+                  "aria-label": `${nameOf(g.email)} への追加（+${formatCredits(g.credits)}）を取り消す`,
+                  onclick: () => revokeGrant(g, nameOf(g.email), s),
+                }),
+              )
+            ),
           )
-        ),
-      )
-      : el("p", { className: "muted", text: "今の段階で、取り消せる追加はありません。" }),
-    revoked.length
-      ? el(
-        "div",
-        { className: "stack" },
-        el("h3", { text: "今の段階で取り消した追加（回の合計には数えます）" }),
-        el(
-          "ul",
-          { className: "my-grants revoked", "aria-label": "取り消した追加" },
-          ...revoked.map((g) =>
-            el(
-              "li",
-              {},
-              el("span", {
-                className: "what",
-                text: `${nameOf(g.email)} への +${formatCredits(g.credits)}${g.note ? `「${g.note}」` : ""}・取り消し済み${g.revokedNote ? `（取り消しのメモ：${g.revokedNote}）` : ""}`,
-              }),
-            )
+          : el("p", { className: "muted", text: "取り消せる追加はありません。" }),
+      ),
+      revoked.length
+        ? fold(
+          "revoked",
+          `取り消した追加（${revoked.length} 件）`,
+          el("p", { className: "small muted", text: "回の合計には数えます。" }),
+          el(
+            "ul",
+            { className: "my-grants revoked", "aria-label": "取り消した追加" },
+            ...revoked.map((g) =>
+              el(
+                "li",
+                {},
+                el("span", {
+                  className: "what",
+                  text: `${nameOf(g.email)} への +${formatCredits(g.credits)}${g.note ? `「${g.note}」` : ""}・取り消し済み${g.revokedNote ? `（取り消しのメモ：${g.revokedNote}）` : ""}`,
+                }),
+              )
+            ),
           ),
-        ),
-      )
-      : null,
+        )
+        : null,
+    ),
   );
 }
 
-/** 追加のボタンの文字と押せるか（選んだ人数で変わる） */
+/** 追加のボタンの文字と押せるか（選んだ人数と、入れた数で変わる） */
 function updateGrantButton() {
   const btn = $("grant-btn");
   if (!btn) return;
   const n = state.selected.size;
-  btn.textContent = n ? `選んだ ${n} 人に追加する` : "追加する人を選んでください";
+  const credits = parseStageGrantCredits(state.creditsText);
+  btn.textContent = !n ? "受講者を選んでください" : credits === undefined ? `${n} 人に追加` : `${n} 人に +${formatCredits(credits)} を追加`;
   const avail = state.status ? grantAvailability(state.status) : { ok: true };
   btn.disabled = state.busy || n === 0 || !avail.ok;
   if (!avail.ok) btn.title = avail.why;
@@ -1143,7 +1309,7 @@ async function main() {
     }
     if (chosen.guide) {
       // 共有のログインも管理コンソールのログインも使えない（鍵が無い・12 時間を過ぎた・取り消された）：3.7 の文と［管理コンソールを開く］を出す（5.3.1 の 3）
-      showLoginNote(MSG_INSTRUCTOR_LOGIN_FIRST + chosen.guide);
+      showLoginNote(MSG_TEACHER_LOGIN_FIRST + chosen.guide);
       $("login-console-btn").hidden = false;
     }
     watchConsoleKey();

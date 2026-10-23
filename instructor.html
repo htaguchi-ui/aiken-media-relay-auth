@@ -28,7 +28,8 @@
     --ok-bg: #E7EDE8; --ok-fg: #3D5B45;
     --warn-bg: #F6EEE4; --warn-fg: #74512C;
     --low: #A0573A; --low-text: #8A4B33;
-    --danger: #96413A;
+    --danger: #96413A; --danger-line: #E2CDC9;
+    --dot: #C4C9D2;
     --font: "IBM Plex Sans JP", "Hiragino Sans", "Hiragino Kaku Gothic ProN", "Noto Sans JP", "Yu Gothic UI", Meiryo, system-ui, sans-serif;
   }
   /* ダーク表示：紺基調のまま明度を反転（マイページ・管理コンソールと同じ） */
@@ -47,7 +48,8 @@
       --ok-bg: #1F3527; --ok-fg: #A9D4B4;
       --warn-bg: #3A2E20; --warn-fg: #EBC79C;
       --low: #D8916F; --low-text: #EBA887;
-      --danger: #EE968C;
+      --danger: #EE968C; --danger-line: #5C3631;
+      --dot: #4A5370;
     }
   }
   * { box-sizing: border-box; }
@@ -80,6 +82,7 @@
   .btn.primary:hover:not(:disabled) { background: var(--accent-hover); border-color: var(--accent-hover); }
   .btn.big { min-height: 52px; border-radius: 14px; font-size: 16px; }
   .btn.compact { min-height: 36px; padding: 0 12px; font-size: 13px; border-radius: 10px; }
+  .btn.danger { color: var(--danger); border-color: var(--danger-line); } /* 0179（回のクローズ）用。管理コンソールと同じ */
   .btn:disabled { opacity: 0.55; }
   .input { min-height: 44px; width: 100%; padding: 0 12px; border-radius: 10px; border: 1px solid var(--input-line); background: var(--surface); color: var(--text); font: inherit; }
   label.field-label { display: block; font-size: 13px; font-weight: 600; margin-bottom: 4px; }
@@ -90,8 +93,26 @@
   .badge.member { background: var(--member-bg); color: var(--member-fg); }
   .badge.admin { background: var(--admin-bg); color: var(--admin-fg); }
   .badge.instructor { background: var(--instructor-bg); color: var(--instructor-fg); }
-  .badge.now { background: var(--ok-bg); color: var(--ok-fg); }
-  .badge.off { background: var(--track); color: var(--muted); }
+  /* 回の状態・ワークショップの状態（管理コンソールと同じ組）：今＝active、これから＝upcoming、済み＝ended（線だけ） */
+  .badge.active { background: var(--student-bg); color: var(--student-fg); font-weight: 700; padding: 3px 10px; }
+  .badge.upcoming { background: var(--admin-bg); color: var(--admin-fg); font-weight: 700; padding: 3px 10px; }
+  .badge.stopped, .badge.ended { border: 1px solid var(--dot); color: var(--text-2); padding: 1px 8px; }
+  .badge.ended { font-weight: 700; padding: 2px 10px; }
+
+  /* ---- 折りたたみ・注意の箱（管理コンソールと同じ） ---- */
+  details.plain-fold > summary { list-style: none; cursor: pointer; min-height: 44px; display: flex; align-items: center; gap: 10px; font-weight: 700; border-radius: 10px; }
+  details.plain-fold > summary::-webkit-details-marker { display: none; }
+  details.plain-fold > summary::before {
+    content: ""; flex: none; width: 7px; height: 7px; border-right: 2px solid currentColor; border-bottom: 2px solid currentColor;
+    transform: rotate(-45deg); transition: transform 0.15s; margin: 0 3px;
+  }
+  details.plain-fold[open] > summary::before { transform: rotate(45deg); }
+  details.plain-fold > summary .meta { margin-left: auto; font-weight: 500; font-size: 13px; color: var(--text-2); }
+  details.plain-fold.minor > summary { font-weight: 600; color: var(--accent); }
+  .fold-in { display: flex; flex-direction: column; gap: 8px; padding: 2px 0 6px 20px; }
+  @media (prefers-reduced-motion: reduce) { details.plain-fold > summary::before { transition: none; } }
+  .warn-box { display: flex; align-items: flex-start; gap: 8px; background: var(--warn-bg); color: var(--warn-fg); border-radius: 10px; padding: 8px 10px; font-size: 13px; font-weight: 500; }
+  .warn-box svg { flex: none; margin-top: 2px; }
 
   /* ---- 読み込み・ログイン・エラー ---- */
   .center-card { max-width: 440px; margin: 14vh auto 0; background: var(--surface); border: 1px solid var(--line); border-radius: 16px; padding: 32px 28px; display: flex; flex-direction: column; gap: 16px; }
@@ -158,7 +179,9 @@
   .card { background: var(--surface); border: 1px solid var(--line); border-radius: 16px; padding: 24px; display: flex; flex-direction: column; gap: 16px; }
   @media (max-width: 560px) { .card { padding: 20px 18px; } }
   .card-head { display: flex; align-items: center; justify-content: space-between; gap: 12px; flex-wrap: wrap; }
+  .card-head h2 { min-width: 0; overflow-wrap: anywhere; }
   .card h2 { font-size: 16px; font-weight: 700; }
+  @media (max-width: 560px) { .content .btn.compact { min-height: 44px; } } /* スマホでは押せる所を 44px に */
   .card h3 { font-size: 14px; font-weight: 700; }
   .row-actions { display: flex; flex-wrap: wrap; gap: 8px; }
   .hint { font-size: 13px; color: var(--muted); }
@@ -173,38 +196,77 @@
   #notice .toast p { overflow-wrap: anywhere; }
   #notice .toast ul { margin: 4px 0 0; padding-left: 18px; }
 
-  /* ---- 段階 ---- */
-  .stage-now { display: flex; flex-direction: column; gap: 4px; }
-  .stage-now .label { font-size: 13px; color: var(--muted); }
-  .stage-now .name { font-size: 24px; font-weight: 700; color: var(--accent); overflow-wrap: anywhere; line-height: 1.4; }
-  ol.stage-list { list-style: none; margin: 0; padding: 0; display: flex; flex-direction: column; }
-  ol.stage-list li { display: grid; grid-template-columns: minmax(0, 1fr) auto; gap: 4px 12px; align-items: baseline; padding: 10px 0; border-top: 1px solid var(--line-soft); }
-  ol.stage-list li:first-child { border-top: 0; }
-  ol.stage-list li.current { font-weight: 700; }
-  ol.stage-list .name { overflow-wrap: anywhere; display: flex; gap: 8px; align-items: baseline; flex-wrap: wrap; }
-  ol.stage-list .credits { color: var(--text-2); white-space: nowrap; }
-  .move-row { display: grid; grid-template-columns: 1fr 1fr; gap: 12px; }
-  @media (max-width: 480px) { .move-row { grid-template-columns: 1fr; } }
-  .undo-box { background: var(--accent-soft); border: 1px solid var(--accent-soft-line); color: var(--accent-soft-text); border-radius: 12px; padding: 12px 14px; display: flex; flex-wrap: wrap; gap: 8px 16px; align-items: center; justify-content: space-between; }
+  /* ---- 回の見出し ---- */
+  .card h2.cohort-name { font-size: 20px; line-height: 1.4; }
+  .cohort-meta { font-size: 13px; color: var(--muted); margin-top: -8px; overflow-wrap: anywhere; }
+  .cohort-pick { max-width: 420px; }
+  .now-line { display: flex; flex-wrap: wrap; align-items: center; gap: 4px 12px; padding: 10px 14px; border-radius: 12px; background: var(--accent-soft); color: var(--accent-soft-text); }
+  .now-line .now-name { flex: 1 1 12em; min-width: 0; font-size: 17px; font-weight: 700; overflow-wrap: anywhere; line-height: 1.5; }
+  .now-line .now-credits { margin-left: auto; font-weight: 600; white-space: nowrap; }
+  .now-line.quiet { background: var(--line-soft); color: var(--text-2); }
 
-  /* ---- 受講者 ---- */
+  /* ---- ワークショップ（日ごとのリスト。今の行を強調：背景・左の線・太字・「今」の言葉） ---- */
+  .wk-list { display: flex; flex-direction: column; }
+  .wk-day { border-top: 1px solid var(--line-soft); }
+  .wk-day:first-child { border-top: 0; }
+  .wk-day-name { font-weight: 700; color: var(--text); }
+  ol.wk-rows { list-style: none; margin: 0 0 8px; padding: 0; display: flex; flex-direction: column; gap: 2px; }
+  .wk-row { display: grid; grid-template-columns: 84px minmax(0, 1fr) auto; gap: 0 12px; align-items: center; min-height: 44px; padding: 8px 12px; border-radius: 10px; border-left: 4px solid transparent; }
+  .wk-row .wk-name { overflow-wrap: anywhere; }
+  .wk-row .wk-credits { white-space: nowrap; color: var(--text-2); text-align: right; }
+  .wk-row.done .wk-name, .wk-row.done .wk-credits { color: var(--muted); }
+  .wk-row.now { background: var(--accent-soft); border-left-color: var(--accent); }
+  .wk-row.now .wk-name, .wk-row.now .wk-credits { font-weight: 700; color: var(--accent-soft-text); }
+  @media (max-width: 560px) {
+    .wk-row { grid-template-columns: 76px minmax(0, 1fr); padding: 8px 10px; }
+    .wk-row .wk-credits { grid-column: 2; text-align: left; font-size: 13px; }
+  }
+  .move-row { display: grid; grid-template-columns: 1fr 1fr; gap: 12px; } /* スマホでも横に 2 つ（リストとボタンを同じ画面に収める） */
+  .undo-box { background: var(--accent-soft); border: 1px solid var(--accent-soft-line); color: var(--accent-soft-text); border-radius: 12px; padding: 12px 14px; display: flex; flex-wrap: wrap; gap: 8px 16px; align-items: center; justify-content: space-between; }
+  .undo-lines { display: flex; flex-direction: column; gap: 2px; min-width: 0; flex: 1 1 16em; }
+
+  /* ---- 受講者（広い幅は列の見出しつきの 1 行・狭い幅は 1 人 2 行） ---- */
   .students { list-style: none; margin: 0; padding: 0; }
   .students li { border-top: 1px solid var(--line-soft); }
   .students li:first-child { border-top: 0; }
-  .students label { display: grid; grid-template-columns: auto minmax(0, 1fr) auto; gap: 4px 12px; align-items: center; padding: 10px 0; cursor: pointer; }
-  .students label.disabled { opacity: 0.6; cursor: default; }
-  .students .who { display: flex; flex-direction: column; min-width: 0; }
-  .students .quota { text-align: right; display: flex; flex-direction: column; align-items: flex-end; gap: 4px; min-width: 120px; }
-  .students .last { font-size: 12px; color: var(--muted); }
-  .students .rem.low { color: var(--low-text); font-weight: 700; }
+  .st-row, .st-head { display: grid; grid-template-columns: 22px minmax(0, 1fr) auto 220px; grid-template-areas: "cb who rem use" "cb last . ."; gap: 2px 12px; align-items: center; }
+  .st-row { padding: 10px 0; min-height: 44px; cursor: pointer; }
+  .st-row.disabled { opacity: 0.6; cursor: default; }
+  .st-row > input { grid-area: cb; width: 20px; height: 20px; margin: 0; }
+  .st-who { grid-area: who; display: flex; flex-wrap: wrap; align-items: center; gap: 0 8px; min-width: 0; }
+  .st-who .st-name { font-weight: 600; }
+  .st-who .st-mail { flex: 1 1 100%; }
+  .st-rem { grid-area: rem; text-align: right; white-space: nowrap; }
+  .st-rem-label { font-size: 13px; color: var(--muted); }
+  .st-rem b { font-size: 16px; }
+  .st-rem.low b { color: var(--low-text); }
+  .st-use { grid-area: use; display: flex; align-items: center; justify-content: flex-end; gap: 10px; }
+  .st-use-num { white-space: nowrap; color: var(--text-2); font-size: 13px; min-width: 84px; text-align: right; }
+  .st-last { grid-area: last; }
+  .st-head { display: none; }
+  .st-head .h-who { grid-area: who; } .st-head .h-rem { grid-area: rem; text-align: right; } .st-head .h-use { grid-area: use; text-align: right; } .st-head .h-last { grid-area: last; text-align: right; }
+  @media (min-width: 900px) {
+    .st-row, .st-head { grid-template-columns: 22px minmax(0, 1fr) 88px 240px 110px; grid-template-areas: "cb who rem use last"; }
+    .st-head { display: grid; padding-bottom: 6px; border-bottom: 1px solid var(--line); }
+    .st-last { text-align: right; }
+    /* 列の見出しがあるので、行の中の「残り」「最後の生成」は読み上げだけに残す */
+    .st-rem-label, .st-last-label { position: absolute; width: 1px; height: 1px; overflow: hidden; clip: rect(0, 0, 0, 0); white-space: nowrap; }
+  }
+  @media (max-width: 560px) {
+    .st-row { grid-template-columns: 22px minmax(0, 1fr) auto; grid-template-areas: "cb who rem" ". use use"; }
+    .st-use { justify-content: space-between; }
+    .st-use .bar { flex: 1 1 auto; width: auto; }
+    .st-last { display: none; }
+  }
   .bar { height: 6px; width: 120px; border-radius: 3px; background: var(--track); overflow: hidden; }
   .bar > span { display: block; height: 100%; border-radius: inherit; background: var(--accent); }
   .bar.low > span { background: var(--low); }
+
+  /* ---- クレジットを追加 ---- */
   .grant-form { display: grid; grid-template-columns: 1fr 2fr; gap: 12px; }
   @media (max-width: 560px) { .grant-form { grid-template-columns: 1fr; } }
-  ul.limits { list-style: none; margin: 0; padding: 0; display: grid; grid-template-columns: repeat(auto-fit, minmax(220px, 1fr)); gap: 8px 16px; font-size: 14px; }
-  ul.limits li { background: var(--accent-soft); border-radius: 10px; padding: 8px 12px; }
-  ul.limits b { font-variant-numeric: tabular-nums; }
+  .folds { display: flex; flex-direction: column; border-top: 1px solid var(--line-soft); padding-top: 4px; }
+  ul.limits { list-style: none; margin: 0; padding: 0; display: flex; flex-direction: column; gap: 4px; font-size: 14px; }
   ul.my-grants { list-style: none; margin: 0; padding: 0; }
   ul.my-grants li { display: grid; grid-template-columns: minmax(0, 1fr) auto; gap: 8px 12px; align-items: center; padding: 10px 0; border-top: 1px solid var(--line-soft); }
   ul.my-grants li:first-child { border-top: 0; }
@@ -265,7 +327,7 @@
 <section id="denied" class="center-card" hidden aria-labelledby="denied-title">
   <span class="brand-sub">A.I.KEN Studio</span>
   <h1 id="denied-title">講師の画面</h1>
-  <p class="error-text" id="denied-message">講師の画面は、担当する回の講師と管理者だけが使えます。担当の登録は管理者に確かめてください。</p>
+  <p class="error-text" id="denied-message">この画面は担当の講師と管理者だけが使えます。<br>担当の登録は管理者に確かめてください。</p>
   <p class="muted small"><span id="denied-email" class="tabular"></span></p>
   <p class="warn-text" id="admin-guide" role="status" hidden></p>
   <div class="row">
