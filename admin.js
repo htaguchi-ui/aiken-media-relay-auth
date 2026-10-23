@@ -139,6 +139,17 @@ import {
   SETTINGS_SUBTABS,
   subtabByKey,
   subtabOfSelection,
+  formatAxisCredits,
+  normalizeTrendDim,
+  normalizeTrendRange,
+  TREND_DIMS,
+  TREND_RANGES,
+  trendAxisLabels,
+  trendDataOk,
+  trendSeriesPlan,
+  trendStackGeometry,
+  trendTicks,
+  trendView,
 } from "./admin-lib.js";
 import {
   adminGrantGroups,
@@ -346,6 +357,27 @@ const state = {
     /** 設定の保存中（結果が決まるまで、ほかの項目の編集・タブの移動を止める） */
     busy: false,
   },
+  /**
+   * 消費の推移（228：admin_usage_trend。設定の［利用と上限］のグラフ）。設定を初めて開いたときに読む。
+   * status は idle | loading | ok | error | missing（DB に 228 が無い）。range は month | year、dim は model | role | cohort | kind
+   */
+  trend: {
+    status: "idle",
+    error: "",
+    data: null,
+    at: null,
+    range: "month",
+    dim: "model",
+    /** 表（「表で見る」）を開いているか */
+    tableOpen: false,
+    /** 描いている形（trendView の結果）・ホバー中の棒の番号と系列・描いた幅と位置（描き直すまで） */
+    view: null,
+    active: null,
+    activeKey: null,
+    geo: null,
+    /** 前に描いたときの鍵（同じなら描き直さない。ホバーの表示を消さないため） */
+    sig: "",
+  },
 };
 
 /**
@@ -359,6 +391,7 @@ const gates = {
   info: createLoadGate(),
   models: createLoadGate(),
   history: createLoadGate(),
+  trend: createLoadGate(),
 };
 
 function show(id) {
@@ -1247,10 +1280,13 @@ function tabParts(tab) {
   const stages = stagesAvailable() || F.stages.stale ? [F.stages] : [];
   if (tab === "roster") return [F.rows];
   if (tab === "cohorts") return [F.cohorts, ...stages];
+  // 消費の推移は、DB に 228 が無い（missing）間は数えない（読める時刻が来ないため）
+  const trend = state.trend.status === "missing" ? [] : [{ at: state.trend.at, stale: !!state.trend.error }];
   return [
     { at: S.infoAt, stale: !!S.error },
     { at: S.modelsAt, stale: !!S.modelsError },
     { at: S.historyAt, stale: !!S.historyError },
+    ...trend,
     ...stages,
   ];
 }
@@ -3868,7 +3904,10 @@ async function loadModels({ resetDraft = false } = {}) {
 async function loadSettingsAll(options = {}) {
   const S = state.settings;
   for (const k of ["status", "historyStatus", "modelsStatus"]) if (S[k] === "idle") S[k] = "loading";
+  if (state.trend.status === "idle") state.trend.status = "loading";
   renderSettings();
+  // 消費の推移（228）は待たない（集計が遅くても、上限と枠・保存のあとの読み直し〔S.busy の解除〕を止めない）。届いたら、その面だけ描き直す
+  reloadTrendInBackground();
   const [info, history, models] = await Promise.all([loadSettingsInfo(), loadSettingsHistory(), loadModels(options)]);
   if (appClosed) return { info: false, history: false, models: false };
   const stale = [];
@@ -3965,6 +4004,7 @@ function renderSettings() {
   if (state.tab !== "settings") {
     $("settings-aside").hidden = true;
     renderSettingsBar();
+    hideTrendTip();
     return;
   }
   keepFocus([$("view-settings"), $("settings-bar"), sheetKind === "setting" ? sheet : null], () => {
@@ -3973,6 +4013,7 @@ function renderSettings() {
     // 押した小さなタブの中身だけを作る（ほかは空にして隠す）
     $("settings-summary").hidden = sub !== "usage";
     $("settings-summary").replaceChildren(...(sub === "usage" ? summaryContent().filter(Boolean) : []));
+    renderTrend();
     $("settings-main").replaceChildren(...(sub === "usage" ? [limitsSection()] : []));
     $("settings-models").replaceChildren(...(sub === "models" ? [modelsSection()] : []));
     $("settings-templates").replaceChildren(
@@ -4172,6 +4213,576 @@ async function openMemberFromSettings(email) {
   if (!(await switchTab("roster"))) return;
   openMember(email);
 }
+
+// ---- 設定：消費の推移（228：admin_usage_trend。［利用と上限］の 2 つ目の面） ----
+// 単位はクレジット（1 クレジット＝$0.01。枠の消費と同じ数え方）。今月（日ごと）と直近 12 か月（月ごと）を、モデル・区分・回・種類で
+// 色分けした積み上げの棒で出す。SVG はここで描く（外のライブラリは CSP で読めない）。文字はすべて textContent。
+// 色は admin.html の --series-1〜8（明暗）と --series-other（その他）。どの項目に色を付けるかは admin-lib.js の trendSeriesPlan。
+// 値は棒のホバー・タップ（キーボードは左右の矢印）と、下の「表で見る」で読める（ホバーだけにしない）。
+
+async function loadTrend() {
+  const T = state.trend;
+  if (appClosed) return false;
+  const ticket = gates.trend.begin();
+  const { data, error } = await supabase.rpc("admin_usage_trend");
+  if (appClosed) return false;
+  if (!gates.trend.accept(ticket)) return true;
+  if (error && isMissingSchemaError(error)) {
+    // DB に 228 がまだ無い：欄に「DB の更新待ち」を出す（失敗の印は出さない）
+    T.status = "missing";
+    T.error = "";
+    return true;
+  }
+  if (error || !trendDataOk(data)) {
+    T.error = error ? explainError(error) : "消費の推移の形が正しくありません。";
+    if (T.status !== "ok") T.status = "error";
+    return false;
+  }
+  T.data = data;
+  T.status = "ok";
+  T.error = "";
+  T.at = Date.now();
+  return true;
+}
+const retryTrend = retryPart(loadTrend);
+
+/** 推移を裏で読み直す（設定の読み込みから。待たない）。前に読めていた値の読み直しに失敗したら知らせる */
+function reloadTrendInBackground() {
+  loadTrend().then((ok) => {
+    if (appClosed) return;
+    if (!ok && state.trend.status === "ok") notify("消費の推移を読み直せませんでした（前に読んだ値を出しています）。", "error", [state.trend.error]);
+    renderTrend();
+    renderHeader();
+  });
+}
+
+/** 今の切り口の系列（モデルの名前と並びは、読み込んだモデルの一覧から。まだ無ければ key のまま） */
+function trendPlanNow() {
+  const T = state.trend;
+  const models = Array.isArray(state.settings.models?.models) ? state.settings.models.models : [];
+  const labels = new Map(models.map((m) => [String(m.key), String(m.label ?? m.key)]));
+  return trendSeriesPlan(T.data, T.dim, { modelOrder: models.map((m) => String(m.key)), modelLabel: (k) => labels.get(k) ?? k });
+}
+
+const serClass = (slot) => (slot ? `ser-${slot}` : "ser-other");
+
+/** 消費の推移の面を描く（［利用と上限］のときだけ）。読み込み・切り替え・モデルの名前・円の目安が変わったときだけ作り直す */
+function renderTrend() {
+  const host = $("settings-trend");
+  const T = state.trend;
+  const show = state.tab === "settings" && state.settings.sub === "usage";
+  host.hidden = !show;
+  if (!show) {
+    hideTrendTip();
+    return;
+  }
+  const sig = [T.status, T.error, T.at, T.range, T.dim, state.settings.modelsAt, state.settings.infoAt].join("|");
+  if (sig === T.sig && host.firstChild) {
+    // 描き直さないときも、狭い幅はグラフの下の内訳を出しておく（ほかのタブ・小さなタブから戻ったとき）
+    if (T.geo?.narrow) showTrendTip(T.active ?? defaultTrendIndex(), T.activeKey);
+    return;
+  }
+  T.sig = sig;
+  keepFocus([host], () => {
+    T.view = null;
+    T.geo = null;
+    T.active = null;
+    T.activeKey = null;
+    host.replaceChildren(...trendContent().filter(Boolean));
+    drawTrendPlot();
+  });
+}
+
+function trendContent() {
+  const T = state.trend;
+  const head = el(
+    "div",
+    { className: "box-head" },
+    el("h3", { id: "trend-h", text: "消費の推移" }),
+    T.at ? el("div", { className: "head-side" }, el("span", { className: "checked num", text: checkedText(T.at) })) : null,
+  );
+  if (T.status === "missing") return [head, el("p", { className: "muted", text: "消費の推移は、DB の更新（228）のあとで使えます。" })];
+  if (T.status === "error") return [head, errorBox(T.error, retryTrend)];
+  if (T.status !== "ok") return [head, el("p", { className: "muted", text: "読み込み中…" })];
+  const plan = trendPlanNow();
+  const view = trendView(T.data, T.range, plan);
+  T.view = view;
+  const has = view.total.jobs > 0;
+  return [
+    head,
+    T.error ? staleLine(T.error, T.at, retryTrend) : null,
+    trendControls(),
+    el(
+      "div",
+      { className: "trend-figure" },
+      el(
+        "p",
+        { className: "trend-hero" },
+        el("span", { className: "trend-hero-n", text: formatCredits(view.total.credits) }),
+        el("span", { className: "trend-hero-u", text: "クレジット" }),
+      ),
+      el(
+        "p",
+        { className: "trend-sub num" },
+        view.periodText ? el("span", { text: `${view.periodText}（日本時間）` }) : null,
+        el("span", { text: `生成 ${formatCredits(view.total.jobs)} 回` }),
+        el("span", { text: formatYen(view.total.credits) }),
+      ),
+    ),
+    T.dim === "role" || T.dim === "cohort"
+      ? el("p", {
+        className: "trend-approx",
+        text: `${T.dim === "role" ? "区分" : "回"}は、今の名簿の値で分けた近似です（生成した時点の区分・回は記録していません）。` +
+          (T.dim === "role"
+            ? "途中で区分を変えた人の生成は今の区分に入り、名簿から消えた人の生成は「名簿にない人」に入ります。"
+            : "途中で回を変えた受講者の生成は今の回に入ります。回は受講者にだけ付くので、メンバー・講師・管理者・名簿から消えた人の生成は" +
+              "「受講者以外」、回に入っていない受講者の生成は「回なし」に入ります。"),
+      })
+      : null,
+    has ? trendLegend(view) : null,
+    has
+      ? el(
+        "div",
+        { className: "trend-plot", id: "trend-plot" },
+        el("div", { className: "trend-tip", id: "trend-tip", "aria-hidden": "true", hidden: true }),
+      )
+      : el("p", { className: "trend-empty", text: T.range === "month" ? "今月の生成はまだありません。" : "直近 12 か月の生成はありません。" }),
+    has ? el("p", { className: "sr-only", id: "trend-live", "aria-live": "polite" }) : null,
+    has ? trendTable(view) : null,
+    trendNotes(plan),
+  ];
+}
+
+/** 期間と切り口の切り替え（ラジオ。矢印キーで移れる）。切り替えても読み直さない（1 回の応答に両方の期間がある） */
+function trendControls() {
+  const T = state.trend;
+  const group = (name, label, items, value, pick) =>
+    el(
+      "div",
+      { className: "seg trend-switch", role: "radiogroup", "aria-label": label },
+      ...items.map((it) =>
+        el(
+          "label",
+          {},
+          el("input", {
+            type: "radio",
+            name,
+            value: it.key,
+            checked: it.key === value,
+            "data-focus-key": `${name}:${it.key}`,
+            onchange: () => pick(it.key),
+          }),
+          it.label,
+        )
+      ),
+    );
+  return el(
+    "div",
+    { className: "trend-controls" },
+    group("trend-range", "期間", TREND_RANGES, T.range, (k) => {
+      T.range = normalizeTrendRange(k);
+      renderTrend();
+    }),
+    group("trend-dim", "色分けの切り口", TREND_DIMS, T.dim, (k) => {
+      T.dim = normalizeTrendDim(k);
+      renderTrend();
+    }),
+  );
+}
+
+/** 凡例（四角は棒の色。文字は文字の色）。期間の合計のクレジットつき */
+function trendLegend(view) {
+  return el(
+    "ul",
+    { className: "trend-legend", "aria-label": "色の凡例（期間の合計クレジット）" },
+    ...view.series.map((s) =>
+      el(
+        "li",
+        {},
+        el("span", { className: `trend-swatch ${serClass(s.slot)}`, "aria-hidden": "true" }),
+        el("span", { className: "trend-legend-name", text: s.label }),
+        el("span", { className: "trend-legend-val num", text: formatCredits(s.credits) }),
+      )
+    ),
+  );
+}
+
+/** 表で見る：日（月）ごとの合計と系列ごとのクレジット・回数。今月はまだ来ていない日を出さない */
+function trendTable(view) {
+  const T = state.trend;
+  const cell = (v) =>
+    v && (v.credits || v.jobs)
+      ? el(
+        "td",
+        { className: "num" },
+        el("span", { className: "trend-td-c", text: formatCredits(v.credits) }),
+        el("span", { className: "trend-td-j", text: `${formatCredits(v.jobs)} 回` }),
+      )
+      : el("td", { className: "num trend-td-none", text: "—" });
+  const table = el(
+    "table",
+    { className: "trend-table" },
+    el("caption", { className: "sr-only", text: `${view.periodText}の消費（クレジットと生成の回数）` }),
+    el(
+      "thead",
+      {},
+      el(
+        "tr",
+        {},
+        el("th", { scope: "col", text: view.range === "month" ? "日" : "月" }),
+        el("th", { scope: "col", text: "合計" }),
+        ...view.series.map((s) =>
+          el("th", { scope: "col" }, el("span", { className: `trend-swatch ${serClass(s.slot)}`, "aria-hidden": "true" }), el("span", { text: s.label }))
+        ),
+      ),
+    ),
+    el(
+      "tbody",
+      {},
+      ...view.buckets.filter((b) => !b.future).map((b) =>
+        el("tr", {}, el("th", { scope: "row", text: b.title }), cell(b.total), ...view.series.map((s) => cell(b.values.get(s.key))))
+      ),
+    ),
+    el("tfoot", {}, el("tr", {}, el("th", { scope: "row", text: "合計" }), cell(view.total), ...view.series.map((s) => cell(s)))),
+  );
+  // その他にまとめた項目ごとの、期間の合計（F194-01。色の付く項目は上の表の列で読める）
+  const other = view.series.find((s) => !s.slot);
+  const parts = other && view.otherParts.length
+    ? el(
+      "table",
+      { className: "trend-table trend-parts" },
+      el("caption", { className: "trend-parts-cap", text: `「${other.label}」の内訳（${view.periodText}の合計）` }),
+      el("thead", {}, el("tr", {}, el("th", { scope: "col", text: "項目" }), el("th", { scope: "col", text: "クレジット" }), el("th", { scope: "col", text: "回数" }))),
+      el(
+        "tbody",
+        {},
+        ...view.otherParts.map((p) =>
+          el(
+            "tr",
+            {},
+            el("th", { scope: "row", text: p.label }),
+            el("td", { className: "num", text: formatCredits(p.credits) }),
+            el("td", { className: "num", text: `${formatCredits(p.jobs)} 回` }),
+          )
+        ),
+      ),
+    )
+    : null;
+  const d = el(
+    "details",
+    { className: "plain-fold minor trend-fold", open: T.tableOpen },
+    el("summary", { "data-focus-key": "trend-table" }, "表で見る（クレジットと回数）"),
+    el("div", { className: "table-scroll" }, table),
+    parts ? el("div", { className: "table-scroll" }, parts) : null,
+  );
+  d.addEventListener("toggle", () => {
+    T.tableOpen = d.open;
+  });
+  return d;
+}
+
+function trendNotes(plan) {
+  const T = state.trend;
+  return el(
+    "div",
+    { className: "trend-notes" },
+    el("p", {
+      className: "hint",
+      text: "クレジットは、生成ごとの見積額から数えた消費です（1 クレジット＝$0.01。上限の枠と同じ数え方）。" +
+        "投入できなかった生成と、提供元が失敗を返した生成（返金）は数えません。" +
+        "名簿の「今月の消費（目安）」は失敗した生成も含む見積額なので、ここより大きくなることがあります。日付は日本時間です。",
+    }),
+    T.dim === "kind" ? el("p", { className: "hint", text: "「動画」には口パク（リップシンク）を含みます。" }) : null,
+    plan.folded && T.dim === "model"
+      ? el("p", { className: "hint", text: `色は直近 12 か月で多く使った 7 つのモデルに付け、残りの ${plan.folded} つは「その他のモデル」にまとめています。` })
+      : null,
+    plan.folded && T.dim === "cohort"
+      ? el("p", { className: "hint", text: `色は新しい回と「受講者以外」に付け、それより前の ${plan.folded} つの回は「回なし・それより前の回」にまとめています。` })
+      : null,
+  );
+}
+
+function svgNode(tag, attrs = {}) {
+  const n = document.createElementNS(SVG_NS, tag);
+  for (const [k, v] of Object.entries(attrs)) if (v !== null && v !== undefined) n.setAttribute(k, String(v));
+  return n;
+}
+
+/** 上だけ角を丸めた棒の形（r が 0 なら角のない四角） */
+function topRoundedPath(x, y, w, h, r) {
+  if (r <= 0) return `M${x},${y}h${w}v${h}h${-w}Z`;
+  return `M${x},${y + h}V${y + r}Q${x},${y} ${x + r},${y}H${x + w - r}Q${x + w},${y} ${x + w},${y + r}V${y + h}Z`;
+}
+
+/** 棒グラフを、入れ物の今の幅で描く（幅が変われば描き直す。ResizeObserver） */
+function drawTrendPlot() {
+  const T = state.trend;
+  const plot = $("trend-plot");
+  const view = T.view;
+  if (!plot || !view) return;
+  const width = Math.floor(plot.clientWidth);
+  if (width <= 0) return;
+  const narrow = width < 520;
+  const ticks = trendTicks(view.max);
+  const top = ticks[ticks.length - 1];
+  const tickText = ticks.map(formatAxisCredits);
+  const x0 = Math.ceil(Math.max(...tickText.map((t) => t.length)) * 7 + 10);
+  const x1 = width - 2;
+  const padT = 10;
+  const plotH = narrow ? 170 : 210;
+  const xBand = view.range === "year" ? 38 : 22;
+  const height = padT + plotH + xBand;
+  const n = view.buckets.length;
+  const slotW = (x1 - x0) / n;
+  // 棒は 24px まで・枠いっぱいにしない（間を空ける）。積み上げの段の間は 2px の背景の色の隙間（線で囲まない）
+  const barW = Math.max(2, Math.min(24, slotW * 0.62));
+  const GAP = 2;
+  const yOf = (v) => padT + plotH - (v / top) * plotH;
+  const rangeText = view.range === "month" ? "今月の日ごと" : "直近 12 か月の月ごと";
+  const root = svgNode("svg", {
+    class: "trend-svg",
+    width,
+    height,
+    viewBox: `0 0 ${width} ${height}`,
+    role: "img",
+    tabindex: "0",
+    "data-focus-key": "trend-plot",
+    "aria-label": `${rangeText}の消費の積み上げ棒グラフ。合計 ${formatCredits(view.total.credits)} クレジット。` +
+      "左右の矢印キーで棒を選ぶと内訳を読み上げます。数は下の「表で見る」にもあります。",
+  });
+  // 目盛りの線（1px・実線・控えめ）と数（文字の色）
+  ticks.forEach((t, i) => {
+    const y = Math.round(yOf(t)) + 0.5;
+    root.append(svgNode("line", { class: i === 0 ? "trend-base" : "trend-grid", x1: x0, x2: x1, y1: y, y2: y }));
+    const label = svgNode("text", { class: "trend-tick", x: x0 - 6, y: y + 4, "text-anchor": "end" });
+    label.textContent = tickText[i];
+    root.append(label);
+  });
+  root.append(svgNode("rect", { class: "trend-wash", x: 0, y: padT, width: Math.max(1, slotW), height: plotH, visibility: "hidden" }));
+  // 棒：下から系列の順に積む。いちばん上の段だけ上の角を 4px 丸める
+  const geo = view.buckets.map((b, i) => {
+    const cx = x0 + slotW * (i + 0.5);
+    const x = cx - barW / 2;
+    const stack = trendStackGeometry(view.series.map((s) => b.values.get(s.key)?.credits ?? 0), { top, plotH, baseY: padT + plotH, gap: GAP });
+    const segs = stack.map((g) => {
+      const s = view.series[g.index];
+      const hh = g.y1 - g.y0;
+      const r = g.round ? Math.min(4, barW / 2, hh) : 0;
+      root.append(svgNode("path", { class: `trend-seg ${serClass(s.slot)}`, d: topRoundedPath(x, g.y0, barW, hh, r), "data-i": i, "data-key": s.key }));
+      return { key: s.key, y0: g.y0, y1: g.y1 };
+    });
+    return { cx, segs };
+  });
+  // 横の軸の文字：1 段目は日（今月）・月（12 か月）、2 段目は年。同じ段で重なるものは出さない（今日・今月は必ず出す。admin-lib.js の trendAxisLabels）
+  for (const l of trendAxisLabels(view, { x0, slotW })) {
+    const t = svgNode("text", { class: `trend-xlabel${l.today ? " today" : ""}`, x: l.x, y: padT + plotH + (l.row ? 32 : 16), "text-anchor": "middle" });
+    t.textContent = l.text;
+    root.append(t);
+  }
+  T.geo = { x0, x1, slotW, padT, plotH, width, narrow, n, segs: geo };
+  // 押せる範囲は棒の 1 本分の幅いっぱい・高さはグラフ全体（細い棒の上に指を正確に置かなくてよい）
+  const pick = (e) => {
+    const r = root.getBoundingClientRect();
+    const x = e.clientX - r.left;
+    const y = e.clientY - r.top;
+    if (x < x0 || x > x1 + 1) return null;
+    const i = Math.min(n - 1, Math.max(0, Math.floor((x - x0) / slotW)));
+    const seg = geo[i].segs.find((g) => y >= g.y0 - 1 && y <= g.y1 + 1);
+    return { i, key: seg?.key ?? null };
+  };
+  const onPoint = (e) => {
+    const p = pick(e);
+    if (p) showTrendTip(p.i, p.key);
+    else if (!narrow) hideTrendTip();
+  };
+  root.addEventListener("pointermove", onPoint);
+  root.addEventListener("pointerdown", onPoint);
+  root.addEventListener("pointerleave", (e) => {
+    if (e.pointerType === "mouse" && !narrow) hideTrendTip();
+  });
+  root.addEventListener("focus", () => {
+    if (T.active === null) showTrendTip(defaultTrendIndex(), null, true);
+  });
+  root.addEventListener("blur", () => {
+    if (!narrow && !T.redrawing) hideTrendTip();
+  });
+  root.addEventListener("keydown", (e) => {
+    if (e.key === "Escape" && !narrow) {
+      hideTrendTip();
+      return;
+    }
+    const cur = T.active ?? defaultTrendIndex();
+    const to = { ArrowRight: cur + 1, ArrowLeft: cur - 1, Home: 0, End: n - 1 }[e.key];
+    if (to === undefined) return;
+    e.preventDefault();
+    showTrendTip(Math.min(n - 1, Math.max(0, to)), null, true);
+  });
+  // 描き直す前にグラフにフォーカスがあれば、新しいグラフへ移す（幅が変わったとき。ホバーの内訳も同じ棒のまま）
+  const old = plot.querySelector("svg");
+  const hadFocus = !!old && document.activeElement === old;
+  const keepActive = T.active;
+  const keepKey = T.activeKey;
+  T.redrawing = true;
+  old?.remove();
+  plot.prepend(root);
+  plot.classList.toggle("narrow", narrow);
+  trendStepRow(plot, narrow, n, view.range);
+  if (hadFocus) root.focus({ preventScroll: true });
+  T.redrawing = false;
+  T.active = keepActive;
+  T.activeKey = keepKey;
+  // 狭い幅は、内訳をグラフの下にいつも出しておく（指で棒を押すと変わる）。広い幅はホバー・フォーカスのときだけ浮かべる
+  if (narrow) showTrendTip(T.active ?? defaultTrendIndex(), T.activeKey);
+  else if (T.active !== null) showTrendTip(T.active, T.activeKey);
+  else hideTrendTip();
+}
+
+/**
+ * 狭い幅（520px 未満）だけ、グラフの下に［前］［次］のボタン（44px 四方）と「なぞる」の案内を出す。
+ * 1 本の棒の幅が 8px ほどになるため、指で押す代わりに 1 本ずつ選べるようにする。広い幅では外す
+ */
+function trendStepRow(plot, narrow, n, range) {
+  plot.querySelector(".trend-step")?.remove();
+  if (!narrow) return;
+  const unit = range === "month" ? "日" : "月";
+  const step = (d) =>
+    el("button", {
+      type: "button",
+      className: "icon-btn trend-step-btn",
+      "data-step": String(d),
+      "aria-label": d < 0 ? `前の${unit}` : `次の${unit}`,
+      text: d < 0 ? "‹" : "›",
+      onclick: () => {
+        const T = state.trend;
+        const to = Math.min(n - 1, Math.max(0, (T.active ?? defaultTrendIndex()) + d));
+        showTrendTip(to, null, true);
+      },
+    });
+  const tip = $("trend-tip");
+  plot.insertBefore(
+    el("div", { className: "trend-step" }, step(-1), el("p", { className: "trend-step-hint", text: `棒を押したまま左右になぞるか、‹ › で${unit}を選べます` }), step(1)),
+    tip,
+  );
+}
+
+/** 最初に選ぶ棒：今日（今月）・今月（12 か月）。無ければ最後の棒 */
+function defaultTrendIndex() {
+  const b = state.trend.view?.buckets ?? [];
+  const i = b.findIndex((x) => x.today);
+  return i >= 0 ? i : Math.max(0, b.length - 1);
+}
+
+/** その棒の内訳（見出し・合計・系列ごとのクレジットと回数。上に積んだ段から）を出す。announce は読み上げの領域にも入れる */
+function showTrendTip(i, key = null, announce = false) {
+  const T = state.trend;
+  const view = T.view;
+  const g = T.geo;
+  const plot = $("trend-plot");
+  const tip = $("trend-tip");
+  if (!view || !g || !plot || !tip) return;
+  const b = view.buckets[i];
+  if (!b) return;
+  T.active = i;
+  T.activeKey = key;
+  const wash = plot.querySelector(".trend-wash");
+  if (wash) {
+    wash.setAttribute("x", String(g.x0 + g.slotW * i));
+    wash.setAttribute("visibility", "visible");
+  }
+  for (const n of plot.querySelectorAll(".trend-seg.is-hover")) n.classList.remove("is-hover");
+  if (key !== null) {
+    for (const n of plot.querySelectorAll(`.trend-seg[data-i="${i}"]`)) if (n.dataset.key === key) n.classList.add("is-hover");
+  }
+  const rows = [...view.series].reverse().filter((s) => {
+    const v = b.values.get(s.key);
+    return v && (v.credits || v.jobs);
+  });
+  const suffix = b.today && view.range === "month" ? "（今日）" : b.today ? "（今月）" : b.future ? "（これから）" : "";
+  tip.replaceChildren(
+    el("p", { className: "tip-title", text: `${b.title}${suffix}` }),
+    el(
+      "p",
+      { className: "tip-total" },
+      el("b", { className: "num", text: formatCredits(b.total.credits) }),
+      el("span", { className: "num", text: ` クレジット・${formatCredits(b.total.jobs)} 回` }),
+    ),
+    rows.length
+      ? el(
+        "ul",
+        { className: "tip-rows" },
+        ...rows.flatMap((s) => {
+          const v = b.values.get(s.key);
+          const li = el(
+            "li",
+            { className: s.key === key ? "is-hover" : "" },
+            el("span", { className: `tip-key ${serClass(s.slot)}`, "aria-hidden": "true" }),
+            el("b", { className: "num", text: formatCredits(v.credits) }),
+            el("span", { className: "tip-unit num", text: `クレジット・${formatCredits(v.jobs)} 回` }),
+            el("span", { className: "tip-name", text: s.label }),
+          );
+          // その他：まとめた項目ごとの名前と値（F194-01）
+          if (s.slot || !b.otherParts.length) return [li];
+          return [
+            li,
+            ...b.otherParts.map((p) =>
+              el("li", { className: "tip-part" }, el("span", { className: "tip-name", text: `${p.label}：${formatCredits(p.credits)} クレジット・${formatCredits(p.jobs)} 回` }))
+            ),
+          ];
+        }),
+      )
+      : el("p", { className: "tip-empty", text: b.future ? "まだ来ていない日です。" : "生成はありません。" }),
+  );
+  tip.hidden = false;
+  if (g.narrow) {
+    tip.style.left = "";
+    tip.style.top = "";
+  } else {
+    const cx = g.x0 + g.slotW * (i + 0.5);
+    const tw = tip.offsetWidth;
+    let left = cx + 16;
+    if (left + tw > g.width) left = cx - 16 - tw;
+    if (left < 0) left = Math.max(0, Math.min(g.width - tw, cx - tw / 2));
+    tip.style.left = `${Math.round(left)}px`;
+    tip.style.top = "0px";
+  }
+  if (announce) {
+    const live = $("trend-live");
+    if (live) {
+      live.textContent = `${b.title}${suffix}：合計 ${formatCredits(b.total.credits)} クレジット・${formatCredits(b.total.jobs)} 回。` +
+        rows.map((s) => `${s.label} ${formatCredits(b.values.get(s.key).credits)} クレジット・${formatCredits(b.values.get(s.key).jobs)} 回`).join("、") +
+        (b.otherParts.length
+          ? `。${view.series.find((s) => !s.slot)?.label ?? "その他"}の内訳：` +
+            b.otherParts.map((p) => `${p.label} ${formatCredits(p.credits)} クレジット・${formatCredits(p.jobs)} 回`).join("、")
+          : "");
+    }
+  }
+}
+
+function hideTrendTip() {
+  const T = state.trend;
+  const plot = $("trend-plot");
+  // 狭い幅は下にいつも出しておく（ほかのタブへ移って面が隠れている間も消さない。戻ったら同じ内訳）
+  if (T.geo?.narrow) return;
+  T.active = null;
+  T.activeKey = null;
+  const tip = $("trend-tip");
+  if (tip) tip.hidden = true;
+  if (!plot) return;
+  plot.querySelector(".trend-wash")?.setAttribute("visibility", "hidden");
+  for (const n of plot.querySelectorAll(".trend-seg.is-hover")) n.classList.remove("is-hover");
+}
+
+// 幅が変わったら描き直す（右の欄の開閉・画面の回転・窓の大きさ）。広い幅で、グラフの外を押したらホバーの内訳を閉じる
+if (typeof ResizeObserver === "function") {
+  new ResizeObserver(() => {
+    const plot = $("trend-plot");
+    if (plot && state.trend.geo && Math.floor(plot.clientWidth) !== state.trend.geo.width) drawTrendPlot();
+  }).observe($("settings-trend"));
+}
+document.addEventListener("pointerdown", (e) => {
+  const plot = $("trend-plot");
+  if (plot && state.trend.active !== null && !state.trend.geo?.narrow && !plot.contains(e.target)) hideTrendTip();
+});
 
 /** ② 上限と枠：まとまりごとに 1 件 1 行（項目名・今の値と単位・短い対象・［変更］）。行を押すと選ぶ */
 function limitsSection() {

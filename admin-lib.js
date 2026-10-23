@@ -2225,3 +2225,329 @@ export function subtabOfSelection(sel) {
   if (!sel) return null;
   return sel.kind === "template" ? "templates" : "usage";
 }
+
+// ---- 消費の推移（228：admin_usage_trend。設定の［利用と上限］のグラフ） ----
+// サーバーは「日（今月）・月（直近 12 か月）× モデル × 種類 × 区分 × 回」ごとのクレジットと回数を返す。ここで切り口ごとに足し直し、
+// 系列（色の付く項目）を決める。色は項目に付ける：どの項目に色を付けるか・どの順に配るかは、直近 12 か月の行（今月の行を含む）だけで
+// 決めるので、［今月］と［直近 12 か月］を切り替えても同じ項目は同じ色。配る順は項目の決まった順（モデルはカタログの順・区分と種類は
+// 決まった順・回は Day1 の日付の順）で、量の順位ではない。色は 8 つまで。9 つ目からは灰色の「その他」にまとめる。
+
+/** 期間の切り替え */
+export const TREND_RANGES = [
+  { key: "month", label: "今月（日ごと）" },
+  { key: "year", label: "直近12か月" },
+];
+/** 切り口の切り替え */
+export const TREND_DIMS = [
+  { key: "model", label: "モデル" },
+  { key: "role", label: "区分" },
+  { key: "cohort", label: "回" },
+  { key: "kind", label: "種類" },
+];
+/** 色の数（データの色の決まった 8 つ）。これを超える切り口は、7 つに色を付けて残りを「その他」にする */
+export const TREND_SLOTS = 8;
+/** 「その他」（色の無い項目をまとめたもの）の系列の鍵 */
+export const TREND_OTHER_KEY = "__other";
+/** 回の切り口の「受講者以外」（メンバー・講師・管理者・名簿にない人の生成。回は受講者にだけ付くので、回なしと分ける） */
+export const TREND_NON_STUDENT_KEY = "__nonstudent";
+
+const TREND_ROLE_ORDER = ["student", "member", "instructor", "admin"];
+const TREND_KIND_ORDER = ["video", "image", "speech", "music"];
+export const TREND_KIND_LABELS = { video: "動画", image: "画像", speech: "音声", music: "音楽" };
+const TREND_OTHER_LABELS = { model: "その他のモデル", role: "名簿にない人", cohort: "回なし", kind: "その他" };
+
+/** 期間・切り口の鍵を正しいものにする（知らない値は最初のもの） */
+export function normalizeTrendRange(value) {
+  return TREND_RANGES.some((r) => r.key === value) ? value : "month";
+}
+export function normalizeTrendDim(value) {
+  return TREND_DIMS.some((d) => d.key === value) ? value : "model";
+}
+
+/** ジョブの種類 → 種類の切り口（口パクは出力が動画なので「動画」） */
+export function trendKindOf(kind) {
+  if (kind === "lipsync") return "video";
+  return TREND_KIND_ORDER.includes(kind) ? kind : null;
+}
+
+/**
+ * 1 行の、切り口の値（null は「その他」側：名簿にない人・回の無い受講者・知らない種類）。
+ * 回の切り口では、受講者以外（名簿にない人を含む）は TREND_NON_STUDENT_KEY（色の付く項目。回なしとは分ける）
+ */
+export function trendKeyOf(row, dim) {
+  if (dim === "model") return row?.model_key ? String(row.model_key) : null;
+  if (dim === "role") return TREND_ROLE_ORDER.includes(row?.role) ? row.role : null;
+  if (dim === "cohort") {
+    if (row?.role !== "student") return TREND_NON_STUDENT_KEY;
+    return row?.cohort_id ? String(row.cohort_id) : null;
+  }
+  return trendKindOf(row?.kind);
+}
+
+/** 「その他」の内訳で、値の無い項目（名簿にない人・回に入っていない受講者など）の鍵と名前 */
+const TREND_NONE_PART = "__none";
+const TREND_NONE_LABELS = { model: "モデルの記録なし", role: "名簿にない人", cohort: "回に入っていない受講者", kind: "種類の記録なし" };
+
+/** 「その他」の内訳の鍵（まとめる前の値。種類は口パクを動画にまとめる前の値） */
+function trendPartKeyOf(row, dim) {
+  const raw = dim === "model" ? row?.model_key : dim === "role" ? row?.role : dim === "cohort" ? row?.cohort_id : row?.kind;
+  return raw ? String(raw) : TREND_NONE_PART;
+}
+
+/** 0 以上の整数（数でない・負は 0） */
+function trendInt(v) {
+  const n = Number(v);
+  return Number.isFinite(n) && n > 0 ? Math.round(n) : 0;
+}
+
+/** 応答の形が使えるか（month・year に、正しい日付の from・to と rows の配列があるか） */
+export function trendDataOk(data) {
+  const okPart = (p) => !!p && isValidDate(p.from) && isValidDate(p.to) && p.from <= p.to && Array.isArray(p.rows);
+  return !!data && typeof data === "object" && okPart(data.month) && okPart(data.year);
+}
+
+/**
+ * 切り口の系列（色の付く項目）を決める。直近 12 か月の行だけで決める（期間を切り替えても同じ色にするため）。
+ * opts.modelOrder：モデルの key の並び（カタログの順）、opts.modelLabel(key)：表示名。回の名前・日付は data.cohorts。
+ * 返り値：{ dim, series: [{ key, label, slot }]（slot は 1〜8。配る順＝下から積む順）, otherLabel, folded（その他にまとめた項目の数）,
+ *          slotOf(key)（色の無い項目と null は 0） }
+ */
+export function trendSeriesPlan(data, dim, opts = {}) {
+  const d = normalizeTrendDim(dim);
+  const totals = new Map();
+  for (const r of data?.year?.rows ?? []) {
+    const key = trendKeyOf(r, d);
+    if (key === null) continue;
+    const t = totals.get(key) ?? { credits: 0, jobs: 0 };
+    t.credits += trendInt(r.credits);
+    t.jobs += trendInt(r.jobs);
+    totals.set(key, t);
+  }
+  const cohorts = new Map((data?.cohorts ?? []).filter((c) => c?.id).map((c) => [String(c.id), c]));
+  const modelIdx = new Map((opts.modelOrder ?? []).map((k, i) => [String(k), i]));
+  const orderOf = (k) => {
+    if (d === "role") return [TREND_ROLE_ORDER.indexOf(k), k];
+    if (d === "kind") return [TREND_KIND_ORDER.indexOf(k), k];
+    // 回は Day1 の順。「受講者以外」はいつも回のあと（いちばん上に積む）
+    if (d === "cohort") return [k === TREND_NON_STUDENT_KEY ? "~" : String(cohorts.get(k)?.day1_date ?? "9999-12-31"), k];
+    return [modelIdx.has(k) ? modelIdx.get(k) : Number.MAX_SAFE_INTEGER, k];
+  };
+  const cmp = (a, b) => {
+    const [x, y] = [orderOf(a), orderOf(b)];
+    if (x[0] !== y[0]) return x[0] < y[0] ? -1 : 1;
+    return x[1] < y[1] ? -1 : x[1] > y[1] ? 1 : 0;
+  };
+  let keys = [...totals.keys()];
+  let folded = 0;
+  if (keys.length > TREND_SLOTS) {
+    // 8 つを超える：7 つに色を付ける（モデルは 12 か月のクレジットの多い順・同じなら回数・key。回は新しい回から）。残りは「その他」
+    const byPriority = d === "cohort"
+      ? [...keys].sort((a, b) => cmp(b, a))
+      : [...keys].sort((a, b) =>
+        totals.get(b).credits - totals.get(a).credits || totals.get(b).jobs - totals.get(a).jobs || (a < b ? -1 : a > b ? 1 : 0)
+      );
+    const keep = new Set(byPriority.slice(0, TREND_SLOTS - 1));
+    folded = keys.length - keep.size;
+    keys = keys.filter((k) => keep.has(k));
+  }
+  keys.sort(cmp);
+  const labelOf = (k) => {
+    if (d === "role") return ROLE_SHORT_LABELS[k] ?? k;
+    if (d === "kind") return TREND_KIND_LABELS[k] ?? k;
+    if (d === "cohort") return k === TREND_NON_STUDENT_KEY ? "受講者以外" : String(cohorts.get(k)?.name ?? "").trim() || k;
+    return typeof opts.modelLabel === "function" ? String(opts.modelLabel(k) ?? k) : k;
+  };
+  const series = keys.map((k, i) => ({ key: k, label: labelOf(k), slot: i + 1 }));
+  const slots = new Map(series.map((s) => [s.key, s.slot]));
+  const otherLabel = d === "cohort" && folded ? "回なし・それより前の回" : TREND_OTHER_LABELS[d];
+  /** 「その他」の内訳の名前（trendPartKeyOf の鍵から。値の無い鍵は、切り口ごとの決まった名前） */
+  const partLabel = (k) => {
+    if (k === TREND_NONE_PART) return TREND_NONE_LABELS[d];
+    if (d === "role") return ROLE_SHORT_LABELS[k] ?? k;
+    if (d === "kind") return TREND_KIND_LABELS[k] ?? k;
+    return labelOf(k);
+  };
+  return { dim: d, series, otherLabel, folded, partLabel, slotOf: (k) => (k === null ? 0 : slots.get(k) ?? 0) };
+}
+
+/** "2026-10-01" の n 日後・n か月後（月は 1 日にそろえる。UTC で数える日付だけの計算） */
+function addDays(date, n) {
+  const t = new Date(`${date}T00:00:00Z`);
+  t.setUTCDate(t.getUTCDate() + n);
+  return t.toISOString().slice(0, 10);
+}
+function addMonths(date, n) {
+  const t = new Date(`${date.slice(0, 7)}-01T00:00:00Z`);
+  t.setUTCMonth(t.getUTCMonth() + n);
+  return t.toISOString().slice(0, 10);
+}
+
+/**
+ * グラフ・表・ホバーに出す形。range は month（今月を日ごと）か year（直近 12 か月を月ごと）。
+ * buckets：[{ key, label（軸）, yearLabel（月ごとの最初と 1 月だけ）, title（ホバーの見出し）, future, today,
+ *             values: Map(系列の key か TREND_OTHER_KEY → { credits, jobs }), total: { credits, jobs } }]
+ * series：この期間に出てくる系列（plan の順。その他は最後に slot 0）。各系列の期間の合計（credits・jobs）つき。
+ * total：期間の合計。max：1 本の棒の最大のクレジット。periodText：今日までの期間の文
+ */
+export function trendView(data, range, plan) {
+  const rk = normalizeTrendRange(range);
+  const part = data?.[rk] ?? {};
+  const today = isValidDate(data?.today) ? data.today : null;
+  const thisMonth = today ? `${today.slice(0, 7)}-01` : null;
+  const buckets = [];
+  if (isValidDate(part.from) && isValidDate(part.to) && part.from <= part.to) {
+    for (let k = part.from, i = 0; k <= part.to && i < 40; k = rk === "month" ? addDays(k, 1) : addMonths(k, 1), i++) {
+      const [y, m, d] = k.split("-").map(Number);
+      buckets.push({
+        key: k,
+        label: rk === "month" ? String(d) : `${m}月`,
+        yearLabel: rk === "year" && (i === 0 || m === 1) ? `${y}年` : "",
+        title: rk === "month" ? `${m}月${d}日（${WEEKDAYS[new Date(`${k}T00:00:00Z`).getUTCDay()]}）` : `${y}年${m}月`,
+        future: today !== null && (rk === "month" ? k > today : k > thisMonth),
+        today: today !== null && (rk === "month" ? k === today : k === thisMonth),
+        values: new Map(),
+        parts: new Map(),
+        /** 「その他」の内訳（下で parts から作る） */
+        otherParts: [],
+        total: { credits: 0, jobs: 0 },
+      });
+    }
+  }
+  const byKey = new Map(buckets.map((b) => [b.key, b]));
+  const sums = new Map();
+  const parts = new Map();
+  const total = { credits: 0, jobs: 0 };
+  const add = (map, key, credits, jobs) => {
+    const v = map.get(key) ?? { credits: 0, jobs: 0 };
+    v.credits += credits;
+    v.jobs += jobs;
+    map.set(key, v);
+  };
+  for (const r of Array.isArray(part.rows) ? part.rows : []) {
+    const b = byKey.get(String(r?.bucket ?? "").slice(0, 10));
+    if (!b) continue;
+    const key = trendKeyOf(r, plan.dim);
+    const sk = plan.slotOf(key) ? key : TREND_OTHER_KEY;
+    const credits = trendInt(r.credits);
+    const jobs = trendInt(r.jobs);
+    add(b.values, sk, credits, jobs);
+    if (sk === TREND_OTHER_KEY) {
+      const pk = trendPartKeyOf(r, plan.dim);
+      add(b.parts, pk, credits, jobs);
+      add(parts, pk, credits, jobs);
+    }
+    b.total.credits += credits;
+    b.total.jobs += jobs;
+    add(sums, sk, credits, jobs);
+    total.credits += credits;
+    total.jobs += jobs;
+  }
+  const series = plan.series.filter((s) => sums.has(s.key)).map((s) => ({ ...s, ...sums.get(s.key) }));
+  if (sums.has(TREND_OTHER_KEY)) series.push({ key: TREND_OTHER_KEY, label: plan.otherLabel, slot: 0, ...sums.get(TREND_OTHER_KEY) });
+  // 「その他」の内訳（まとめた項目ごとの名前・クレジット・回数。多い順）。期間の合計と棒ごと
+  const partList = (m) =>
+    [...m.entries()]
+      .map(([key, v]) => ({ key, label: typeof plan.partLabel === "function" ? plan.partLabel(key) : key, ...v }))
+      .sort((a, b) => b.credits - a.credits || b.jobs - a.jobs || (a.label < b.label ? -1 : a.label > b.label ? 1 : 0));
+  for (const b of buckets) {
+    b.otherParts = partList(b.parts);
+  }
+  const max = buckets.reduce((n, b) => Math.max(n, b.total.credits), 0);
+  const shown = buckets.filter((b) => !b.future);
+  let periodText = "";
+  if (shown.length) {
+    const [a, z] = [shown[0].key, shown[shown.length - 1].key].map((k) => k.split("-").map(Number));
+    periodText = rk === "month"
+      ? `${a[0]}年${a[1]}月${a[2]}日〜${z[2]}日`
+      : `${a[0]}年${a[1]}月〜${z[0]}年${z[1]}月`;
+  }
+  return { range: rk, buckets, series, total, max, periodText, otherParts: partList(parts) };
+}
+
+/** 縦の軸の目盛り：0 から、きりのよい間隔（1・2・2.5・5 × 10 の累乗。1 未満にしない）で、max 以上になるまで。max が 0 以下なら [0, 10] */
+export function trendTicks(max, count = 4) {
+  const top = Number(max) || 0;
+  if (top <= 0) return [0, 10];
+  const raw = top / count;
+  const p = 10 ** Math.floor(Math.log10(raw));
+  const step = Math.max(1, [1, 2, 2.5, 5, 10].map((f) => f * p).find((s) => s >= raw));
+  const ticks = [0];
+  while (ticks[ticks.length - 1] < top) ticks.push(Math.round((ticks[ticks.length - 1] + step) * 100) / 100);
+  return ticks;
+}
+
+/** 軸の数（1 万からは「1.5万」。それより下は桁区切り） */
+export function formatAxisCredits(n) {
+  const v = Number(n) || 0;
+  if (Math.abs(v) >= 10000) return `${(Math.round((v / 10000) * 10) / 10).toLocaleString("en-US")}万`;
+  return v.toLocaleString("en-US");
+}
+
+/** 軸の文字（11px）の幅の目安：英数字は 6.6px、それ以外（漢字・かな）は 11px */
+function axisTextWidth(text) {
+  let w = 0;
+  for (const ch of String(text)) w += /[ -~]/.test(ch) ? 6.6 : 11;
+  return w;
+}
+
+/**
+ * 横の軸の文字の置き方。1 段目は日（今月）・月（12 か月）、2 段目は年（12 か月の最初と 1 月）。
+ * 同じ段で文字どうしの間が 4px 未満になるものは出さない（優先：今日・今月 → 最初 → 最後 → 区切りのよいもの → 残り）。
+ * 返り値：[{ i（棒の番号）, text, row（0 か 1）, x（中心）, w（幅の目安）, today }]
+ */
+export function trendAxisLabels(view, { x0, slotW }) {
+  const b = view?.buckets ?? [];
+  const n = b.length;
+  const cx = (i) => x0 + slotW * (i + 0.5);
+  const rank = (i) => {
+    if (b[i].today) return 0;
+    if (i === 0) return 1;
+    if (i === n - 1) return 2;
+    if (view.range === "year") return b[i].yearLabel ? 3 : i % 2 === 0 ? 4 : 5;
+    const d = Number(b[i].label);
+    return d % 10 === 0 ? 3 : d % 5 === 0 ? 4 : 5;
+  };
+  const out = [];
+  const place = (row, items) => {
+    for (const it of items) {
+      const w = axisTextWidth(it.text);
+      const x = cx(it.i);
+      if (out.some((o) => o.row === row && Math.abs(o.x - x) < (o.w + w) / 2 + 4)) continue;
+      out.push({ ...it, row, x, w });
+    }
+  };
+  const order = b.map((_x, i) => i).sort((p, q) => rank(p) - rank(q) || p - q);
+  place(0, order.map((i) => ({ i, text: b[i].label, today: !!b[i].today })));
+  place(1, b.map((x, i) => ({ i, text: x.yearLabel, today: false })).filter((x) => x.text));
+  return out.sort((p, q) => p.row - q.row || p.x - q.x);
+}
+
+/**
+ * 1 本の棒の積み上げの段の位置（下から）。values は系列の順のクレジット（0 以下の段は描かない）。
+ * 棒の高さは本来のまま（値に比例）。段の間の 2px の隙間は、上の段の下側から削る（線で囲まない）。削ると 1px 未満になる小さな段は描かない
+ * （値は内訳と表で読める）。そのため描く段どうしの間は、間に描かない段があっても、いつも gap 以上空く。
+ * 棒の上端は、描かない段も含めた本来の高さ（いちばん上に描く段を本来の上端まで伸ばす）。全部の段が小さいときは、いちばん大きい段の色で
+ * 棒全体（1px 以上）を 1 つの段として描く。いちばん上の段だけ round（上の角を丸める）。
+ * 返り値：[{ index（values の番号）, y0（上端）, y1（下端）, round }]
+ */
+export function trendStackGeometry(values, { top, plotH, baseY, gap = 2 }) {
+  const items = (values ?? []).map((v, index) => ({ index, n: Number(v) })).filter((x) => Number.isFinite(x.n) && x.n > 0);
+  if (!items.length) return [];
+  const segs = [];
+  let base = baseY;
+  for (const it of items) {
+    const trueTop = base - (it.n / top) * plotH;
+    const y1 = segs.length ? base - gap : base;
+    if (y1 - trueTop >= 1) segs.push({ index: it.index, y0: trueTop, y1, round: false });
+    base = trueTop;
+  }
+  const barTop = baseY - Math.max(1, baseY - base);
+  if (!segs.length) {
+    const big = items.reduce((m, x) => (x.n > m.n ? x : m));
+    return [{ index: big.index, y0: barTop, y1: baseY, round: true }];
+  }
+  const last = segs[segs.length - 1];
+  last.y0 = barTop;
+  last.round = true;
+  return segs;
+}
