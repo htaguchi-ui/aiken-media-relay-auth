@@ -2,11 +2,11 @@
 //
 // しくみ：
 //   - Vercel の build（vercel.json の buildCommand）で、asset-versions.mjs の check-build のあとに走る。Vercel は dist/（outputDirectory）だけを公開する。
-//   - 公開するのは、直下の名前が PUBLISH_FILE_RE（英小文字・数字・ハイフンだけの .html・.js・.css）に合うファイルと、PUBLISH_DIRS（img/・canvas/）の下だけ。
+//   - 公開するのは、直下の名前が PUBLISH_FILE_RE（英小文字・数字・ハイフンだけの .html・.js・.css）に合うファイルと、PUBLISH_DIRS（img/・canvas/・probe/）の下だけ。
 //     （出力が直下〔"."〕のままだと、vercel.json の rewrites はあるファイルより後にしか効かないので、直下のファイルを 404 にできない）
 //   - 公開しない直下のもののうち、黙って出さないのは .md・.json・.mjs・点で始まるもの・PRIVATE_DIRS（tools/）だけ。
 //     それ以外（.sh・.txt・決まりに合わない名前の JS・新しいフォルダなど）は、公開するか決まっていないので build を止める（黙って 404 にしない）。
-//   - あわせて、直下の HTML を確かめる。食い違えば build を止める：
+//   - あわせて、直下の HTML と CHECKED_DIRS（probe/）の下の HTML を確かめる。食い違えば build を止める：
 //       ・CSP の meta（script-src）と、その HTML のインラインのスクリプトの hash が合うか（合わないとその画面のスクリプトが動かない。
 //         consent.html なら ChatGPT などの接続が止まる）。正しい hash を知らせる。古い hash が残っていても止める
 //       ・見つかったのに読めない CSP の meta（content が無い・空）・閉じていない <script>
@@ -24,8 +24,10 @@ import { diskReader, lf, verify } from "./asset-versions.mjs";
 
 /** 直下で公開するファイル（名前の形） */
 export const PUBLISH_FILE_RE = /^[a-z0-9-]+\.(html|js|css)$/;
-/** 中身を全部公開する直下のフォルダ */
-export const PUBLISH_DIRS = ["img", "canvas"];
+/** 中身を全部公開する直下のフォルダ（probe は裏に回った画面の試しのページ。2026-10-24） */
+export const PUBLISH_DIRS = ["img", "canvas", "probe"];
+/** 直下の HTML と同じ確かめ（htmlProblems）をする、PUBLISH_DIRS の中のフォルダ（canvas/ は build-canvas-into-auth-page.sh と vercel.json の CSP で確かめる） */
+export const CHECKED_DIRS = ["probe"];
 /** 公開しない直下のフォルダ（黙って出さない） */
 export const PRIVATE_DIRS = ["tools"];
 export const OUT_DIR = "dist";
@@ -164,6 +166,9 @@ export function build(root, out) {
     problems.push(...htmlProblems(n, fs.readFileSync(path.join(root, n), "utf8")));
   }
   const plan = publishPlan(root);
+  for (const f of plan.files.filter((x) => x.endsWith(".html") && CHECKED_DIRS.includes(x.split("/")[0]))) {
+    problems.push(...htmlProblems(f, fs.readFileSync(path.join(root, f), "utf8")));
+  }
   for (const n of unplannedNames(plan.skipped)) {
     problems.push(`公開するか決まっていない直下のもの：${n}（公開するなら名前を PUBLISH_FILE_RE に合わせるか PUBLISH_DIRS に足す。公開しないなら PRIVATE_DIRS に足すか、置かない）`);
   }

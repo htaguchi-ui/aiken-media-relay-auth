@@ -2,7 +2,7 @@
 //
 // しくみ：
 //   - 版 = 直下の *.js・*.css（git で管理しているもの）の名前と中身（改行は LF にそろえる）から作る SHA-256 の頭 12 桁。
-//   - 4 つの画面（index・instructor・admin・about）は、直下の JS・CSS を /r/<版>/<名前> で読む。モジュールの中の import は
+//   - 版の住所で読む画面（PAGES：index・instructor・admin・about と、試しのページ probe/background.html）は、直下の JS・CSS を /r/<版>/<名前> で読む。モジュールの中の import は
 //     相対（"./auth-storage.js"）なので、同じ /r/<版>/ の下を読む。各画面の <head> には、その画面が import でたどるファイルの modulepreload。
 //   - vercel.json：/r/<今の版>/<直下の JS・CSS の名前のどれか> だけを直下のファイルに書き換え、1 年・immutable を付ける。
 //     ほかの /r/…（前の版・無い名前）は書き換えず（404）、no-cache。版と名前の並びは、この道具が vercel.json に書く。
@@ -20,8 +20,8 @@ import crypto from "node:crypto";
 import { execFileSync } from "node:child_process";
 import { fileURLToPath } from "node:url";
 
-/** 版の住所で読む画面 */
-export const PAGES = ["index.html", "instructor.html", "admin.html", "about.html"];
+/** 版の住所で読む画面（auth-page の直下からの住所。probe/background.html は裏に回った画面の試し〔2026-10-24〕。JS・CSS は直下のものを読む） */
+export const PAGES = ["index.html", "instructor.html", "admin.html", "about.html", "probe/background.html"];
 const ASSET_RE = /^[a-z0-9-]+\.(js|css)$/;
 const TOKEN = "[0-9a-f]{12}";
 
@@ -106,11 +106,12 @@ export function diskReader(root) {
   };
 }
 const git = (root, args) => execFileSync("git", ["-C", root, ...args], { encoding: "utf8", maxBuffer: 64 * 1024 * 1024, stdio: ["ignore", "pipe", "pipe"] });
-/** rev：":"（index。git add した中身）か "HEAD" */
+/** rev：":"（index。git add した中身）か "HEAD"。names は直下のファイルだけ、read はフォルダの下（PAGES の probe/…）も読める */
 export function gitReader(root, rev) {
-  const list = rev === ":" ? git(root, ["ls-files", "-z", "--", "."]) : git(root, ["ls-tree", "-z", "--name-only", "HEAD", "--", "."]);
-  const names = list.split("\0").filter((n) => n && !n.includes("/"));
-  const set = new Set(names);
+  const list = rev === ":" ? git(root, ["ls-files", "-z", "--", "."]) : git(root, ["ls-tree", "-r", "-z", "--name-only", "HEAD", "--", "."]);
+  const all = list.split("\0").filter(Boolean);
+  const names = all.filter((n) => !n.includes("/"));
+  const set = new Set(all);
   return {
     names: () => names,
     read: (n) => (set.has(n) ? git(root, ["show", `${rev === ":" ? ":" : "HEAD:"}./${n}`]) : null),
@@ -206,7 +207,7 @@ export function check(root) {
   const status = git(root, ["status", "--porcelain=v1", "-z", "--untracked-files=all", "--", "."]).split("\0").filter(Boolean);
   for (const line of status) {
     const name = line.slice(3);
-    if (!name.includes("/") && (ASSET_RE.test(name) || PAGES.includes(name) || name === "vercel.json")) problems.push(`${name}：commit していない変更・git に入っていないファイル（${line.slice(0, 2).trim()}）`);
+    if (PAGES.includes(name) || (!name.includes("/") && (ASSET_RE.test(name) || name === "vercel.json"))) problems.push(`${name}：commit していない変更・git に入っていないファイル（${line.slice(0, 2).trim()}）`);
   }
   const r = verify(gitReader(root, "HEAD"));
   return { token: r.token, problems: [...problems, ...r.problems] };

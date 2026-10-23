@@ -1,0 +1,14 @@
+/* 裏に回った画面の試し（probe/background.html。2026-10-24）だけが使う形。色・余白・ボタン・カードは studio.css（管理コンソールと同じ値） */
+.probe-steps { margin: 0; padding-left: 1.6em; font-size: 16px; font-weight: 600; display: flex; flex-direction: column; gap: var(--s1); }
+.probe-actions { display: flex; flex-wrap: wrap; gap: var(--s2) var(--s3); }
+.probe-actions .btn { flex: 1 1 200px; }
+.probe-status { color: var(--text-2); overflow-wrap: anywhere; }
+.probe-status.done { color: var(--text); font-weight: 600; }
+.probe-summary { margin: 0; padding-left: 1.2em; display: flex; flex-direction: column; gap: var(--s1); font-variant-numeric: tabular-nums; overflow-wrap: anywhere; }
+.probe-text {
+  width: 100%; margin: 0; padding: var(--s3); border: 1px solid var(--input-line); border-radius: var(--r-m);
+  background: var(--surface-2); color: var(--text); font: 14px/1.6 ui-monospace, SFMono-Regular, Consolas, "Liberation Mono", monospace;
+  white-space: pre-wrap; overflow-wrap: anywhere; resize: vertical;
+}
+.probe-events { margin: 0; padding-left: 1.2em; font-size: 14px; font-variant-numeric: tabular-nums; color: var(--text-2); overflow-wrap: anywhere; }
+.probe-events .time { display: inline-block; min-width: 4.2em; color: var(--muted); }

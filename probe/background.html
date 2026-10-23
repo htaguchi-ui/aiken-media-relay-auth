@@ -1,0 +1,69 @@
+<!doctype html>
+<html lang="ja">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+<meta name="robots" content="noindex">
+<meta name="referrer" content="no-referrer">
+<meta name="color-scheme" content="light dark">
+<meta http-equiv="Content-Security-Policy" content="default-src 'none'; script-src 'self'; worker-src 'self'; style-src 'self'; connect-src 'self' https://tnzwhwitgnzoehbjrmoy.supabase.co wss://tnzwhwitgnzoehbjrmoy.supabase.co; base-uri 'none'; form-action 'none'; object-src 'none'">
+<!-- 裏に回った画面の試し（2026-10-24）。ChatGPT・Codex のアプリの中のブラウザで、画面が裏に回ったときに
+     タイマー・Worker・通信・Supabase Realtime が続くかを測る。ログインなし。サーバーに保存しない（Realtime の試しの知らせを送って受けるだけ） -->
+<title>A.I.KEN Studio 裏に回った画面の試し</title>
+<link rel="stylesheet" href="/r/95d99f57a94f/studio.css">
+<link rel="stylesheet" href="/r/95d99f57a94f/probe-background.css">
+</head>
+<body>
+<header class="topbar">
+  <div class="topbar-inner">
+    <div class="brand">
+      <span class="brand-sub">A.I.KEN Studio</span>
+      <h1>裏に回った画面の試し</h1>
+    </div>
+  </div>
+</header>
+<main class="content">
+  <section class="card" aria-labelledby="steps-title">
+    <h2 id="steps-title" class="sr-only">手順</h2>
+    <ol class="probe-steps">
+      <li>［測り始める］を押す</li>
+      <li>チャットに戻って 5〜8 分待つ</li>
+      <li>この画面に戻り［結果をコピー］</li>
+    </ol>
+    <div class="probe-actions">
+      <button type="button" class="btn primary big" id="start">測り始める</button>
+      <button type="button" class="btn big" id="copy" disabled>結果をコピー</button>
+    </div>
+    <p class="probe-status" id="status" role="status">まだ測っていません。</p>
+  </section>
+
+  <section class="card" id="previous" aria-labelledby="previous-title" hidden>
+    <h2 id="previous-title">読み込み直す前の測定のまとめ</h2>
+    <p class="small" id="previous-lead">測っている間にこの画面が読み込み直されたので、前の測定は止まりました。自分で読み込み直していないなら、裏にいる間にブラウザが画面を捨てた可能性があります。下は、画面が裏に回る直前に残したまとめです。</p>
+    <textarea class="probe-text" id="previous-text" rows="10" readonly aria-labelledby="previous-title"></textarea>
+    <div class="probe-actions">
+      <button type="button" class="btn big" id="copy-previous">前の結果をコピー</button>
+    </div>
+    <p class="small" id="copy-previous-note" role="status"></p>
+  </section>
+
+  <section class="card" id="result" aria-labelledby="result-title" hidden>
+    <h2 id="result-title">結果のまとめ</h2>
+    <ul class="probe-summary" id="summary"></ul>
+    <label class="small muted" for="copy-text">チャットに貼る文（［結果をコピー］が効かないときは、ここを長押しして選んでコピーしてください）</label>
+    <textarea class="probe-text" id="copy-text" rows="10" readonly></textarea>
+    <p class="small" id="copy-note" role="status"></p>
+  </section>
+
+  <section class="card" id="events-card" aria-labelledby="events-title" hidden>
+    <h2 id="events-title">出来事の記録</h2>
+    <p class="small muted">時刻は［測り始める］を押してからの経過（分:秒）です。</p>
+    <ol class="probe-events" id="events"></ol>
+  </section>
+
+  <p class="small muted">この画面は測るだけです。サーバーには何も保存しません（Supabase Realtime の試しの知らせを、自分だけのチャンネルに送って受けるだけです）。測り始めてから 15 分で、測るのも送るのも自動で止まります。</p>
+</main>
+<script type="module" src="/r/95d99f57a94f/probe-background.js"></script>
+<script type="module" src="/r/95d99f57a94f/topbar-height.js"></script>
+</body>
+</html>
