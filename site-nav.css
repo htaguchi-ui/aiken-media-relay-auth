@@ -1,6 +1,9 @@
 /* 画面の間の移動（site-nav.js）の見た目。マイページ（index.html）・講師ページ（instructor.html）・管理ページ（admin.html）で共通。
    ヘッダー（.topbar）のいちばん上の細い帯。色は各ページの変数（--accent・--accent-soft・--text-2・--line-soft など。3 つのページで同じ名前）。
-   今いる画面は、管理コンソールで選んだ行と同じ組（--accent-soft の淡い地と --accent の下線）で示す。ほかの画面は文字だけのリンク。
+   今いる画面は、管理コンソールで選んだ行と同じ組（--accent-soft の淡い地と --accent の下線）で示す。
+   マイページ・講師ページ・管理ページはアイコンだけ（44×36、押せる範囲は 44×44。名前は title と読み上げ用の文字。2026-10-23 田口さんの依頼）。
+   Canvas は文字の左に、Canvas の画面の印と同じノードのアイコン（Lucide の workflow）。アイコンは線だけ・太さ 2（Lucide の既定。
+   2026-10-19 のマイページのヘッダーのアイコンと同じ）。
    Canvas だけは主ボタン（.btn.primary）と同じ塗り（--accent の地に --on-accent の文字。明るい配色は紺の地に白の文字で約 11:1、
    暗い配色は淡い青の地に濃紺の文字で約 9.5:1。どちらも 7:1 以上）にして目立たせる。今いる画面の印（淡い地＋下線）とは、塗りの濃さと下線の有無で見分けがつく（2026-10-23 田口さんの決定）。
    押せる範囲は 44px（見た目は 36px。上下の 4px の余白まで広げる。管理コンソール・マイページのヘッダーのボタンと同じ作り）。
@@ -17,20 +20,18 @@
 }
 /* 省略（…）は中の文字だけ。リンク自身に overflow を付けると、押せる範囲を広げた ::after が切れて 36px になる */
 .site-nav-label { min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.site-nav-icon { flex: none; display: block; }
+a.site-nav-item.primary { gap: 6px; padding: 0 12px 0 10px; } /* アイコンと「Canvas」の間 */
+/* アイコンだけ：幅 44px（押せる範囲は上下を 4px 広げて 44×44） */
+.site-nav-item.icon-only { width: 44px; padding: 0; }
+/* 読み上げ用の文字（見えない） */
+.site-nav-sr { position: absolute; width: 1px; height: 1px; padding: 0; margin: -1px; overflow: hidden; clip: rect(0, 0, 0, 0); white-space: nowrap; border: 0; }
 a.site-nav-item::after { content: ""; position: absolute; inset: -4px 0; } /* 見た目は 36px、押せる範囲は 44px */
 a.site-nav-item:hover { background: var(--accent-soft); color: var(--accent-soft-text); }
 a.site-nav-item.primary { background: var(--accent); color: var(--on-accent); font-weight: 700; }
 a.site-nav-item.primary:hover { background: var(--accent-hover); color: var(--on-accent); }
 .site-nav-item[aria-current="page"] { background: var(--accent-soft); color: var(--accent-soft-text); font-weight: 700; box-shadow: inset 0 -2px 0 var(--accent); }
-/* スマホの幅：帯の幅を等分して並べる（4 つでも 1 行。320px でも文字が切れないことを写真で確かめた） */
+/* スマホの幅：左右の余白をヘッダーの中身にそろえる（アイコンにしたので、320px でも 4 つが左から 1 行に収まる） */
 @media (max-width: 560px) {
   .site-nav { --site-nav-pad: 16px; }
-  .site-nav-list { display: grid; grid-auto-flow: column; grid-auto-columns: minmax(0, 1fr); gap: 2px; }
-  .site-nav-list > li { display: block; }
-  .site-nav-item { display: flex; width: 100%; padding: 0 4px; }
-}
-/* とても狭い幅（320px など）：左右の余白を 8px に詰め、文字を 13px に（16px のままだと「講師ページ」「管理ページ」が … で切れる） */
-@media (max-width: 359.98px) {
-  .site-nav { --site-nav-pad: 8px; }
-  .site-nav-item { font-size: 13px; padding: 0 2px; }
 }
