@@ -1,5 +1,7 @@
 {
   "$schema": "https://openapi.vercel.sh/vercel.json",
+  "buildCommand": "node tools/asset-versions.mjs check-build",
+  "outputDirectory": ".",
   "cleanUrls": false,
   "trailingSlash": false,
   "headers": [
@@ -37,6 +39,14 @@
       "headers": [{ "key": "Cache-Control", "value": "no-cache" }]
     },
     {
+      "source": "/r/(.*)",
+      "headers": [{ "key": "Cache-Control", "value": "no-cache" }]
+    },
+    {
+      "source": "/r/55eb80537e11/:file(admin-lib\\.js|admin\\.js|auth-storage\\.js|instructor\\.js|mypage-lib\\.js|mypage\\.js|redirect-check\\.js|site-nav\\.css|site-nav\\.js|stage-lib\\.js|studio\\.css|topbar-height\\.js)",
+      "headers": [{ "key": "Cache-Control", "value": "public, max-age=31536000, immutable" }]
+    },
+    {
       "source": "/canvas(/.*)?",
       "headers": [{ "key": "Content-Security-Policy", "value": "default-src 'self'; script-src 'self' 'sha256-9bV5uQZjk9iIYEZxpwPmNXHikPutSLJIq55fhKbeVNY='; style-src 'self' 'unsafe-inline'; connect-src 'self' https://tnzwhwitgnzoehbjrmoy.supabase.co wss://tnzwhwitgnzoehbjrmoy.supabase.co blob: data:; img-src 'self' https://tnzwhwitgnzoehbjrmoy.supabase.co blob: data:; media-src 'self' https://tnzwhwitgnzoehbjrmoy.supabase.co blob: data:; worker-src 'self' blob:; font-src 'self' data:; object-src 'none'; base-uri 'self'; form-action 'self'; frame-ancestors 'none'" }]
     },
@@ -50,6 +60,7 @@
     }
   ],
   "rewrites": [
+    { "source": "/r/55eb80537e11/:file(admin-lib\\.js|admin\\.js|auth-storage\\.js|instructor\\.js|mypage-lib\\.js|mypage\\.js|redirect-check\\.js|site-nav\\.css|site-nav\\.js|stage-lib\\.js|studio\\.css|topbar-height\\.js)", "destination": "/:file" },
     { "source": "/admin", "destination": "/admin.html" },
     { "source": "/mypage", "destination": "/index.html" },
     { "source": "/mypage.html", "destination": "/index.html" },

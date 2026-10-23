@@ -7,13 +7,20 @@
 <meta name="color-scheme" content="light dark">
 <meta http-equiv="Content-Security-Policy" content="default-src 'self'; script-src 'self' https://cdn.jsdelivr.net/npm/@supabase/supabase-js@2.117.2/dist/umd/supabase.js; connect-src https://tnzwhwitgnzoehbjrmoy.supabase.co; style-src 'self' 'unsafe-inline' https://fonts.googleapis.com; font-src https://fonts.gstatic.com; img-src 'self' data:; object-src 'none'; base-uri 'self'; form-action 'self'">
 <!-- supabase-js は版を固定し、改ざんされていないことを integrity（SRI）で確かめてから使う（window.supabase）。CSP もこのファイルだけを許す -->
-<script src="https://cdn.jsdelivr.net/npm/@supabase/supabase-js@2.117.2/dist/umd/supabase.js" integrity="sha384-Rj26LVGvoeRVR6+mwQmFfcR3QOBEwT+ZmuCWpuiqeTzJpCs0ER4ITAWGb4Hiy3Ok" crossorigin="anonymous"></script>
+<!-- defer：読み込みの間も HTML の読み進め（CSS・JS の取りに行き）を止めない。実行の順は今と同じ（下の type="module" より先に、文書の順で実行される） -->
+<script src="https://cdn.jsdelivr.net/npm/@supabase/supabase-js@2.117.2/dist/umd/supabase.js" integrity="sha384-Rj26LVGvoeRVR6+mwQmFfcR3QOBEwT+ZmuCWpuiqeTzJpCs0ER4ITAWGb4Hiy3Ok" crossorigin="anonymous" defer></script>
 <title>A.I.KEN Studio 管理コンソール</title>
 <link rel="preconnect" href="https://fonts.googleapis.com">
 <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<!-- ログインの確かめ・RPC の接続先へ先につないでおく（supabase-js の fetch は資格情報なしなので crossorigin） -->
+<link rel="preconnect" href="https://tnzwhwitgnzoehbjrmoy.supabase.co" crossorigin>
 <link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=IBM+Plex+Sans+JP:wght@400;500;600;700&amp;display=swap">
-<link rel="stylesheet" href="/studio.css">
-<link rel="stylesheet" href="/site-nav.css">
+<link rel="stylesheet" href="/r/55eb80537e11/studio.css">
+<link rel="stylesheet" href="/r/55eb80537e11/site-nav.css">
+<link rel="modulepreload" href="/r/55eb80537e11/admin-lib.js">
+<link rel="modulepreload" href="/r/55eb80537e11/auth-storage.js">
+<link rel="modulepreload" href="/r/55eb80537e11/site-nav.js">
+<link rel="modulepreload" href="/r/55eb80537e11/stage-lib.js">
 <style>
   /* 色・余白・角丸・ボタン・上部の帯の土台は共通の studio.css（マイページと同じ値。--muted・--low-text は重要な数字が明暗とも 7:1 になる値）。
      ここには管理コンソールだけが使う変数と、一覧・表・シートの形を置く（同じ名前の部品は、ここが後に読まれるので勝つ） */
@@ -990,7 +997,7 @@
 
 <dialog id="sheet" class="sheet" aria-labelledby="sheet-title"></dialog>
 <dialog id="ask" class="ask" aria-labelledby="ask-title"></dialog>
-<script type="module" src="./topbar-height.js"></script>
-<script type="module" src="./admin.js"></script>
+<script type="module" src="/r/55eb80537e11/topbar-height.js"></script>
+<script type="module" src="/r/55eb80537e11/admin.js"></script>
 </body>
 </html>

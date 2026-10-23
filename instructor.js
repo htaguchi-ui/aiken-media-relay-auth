@@ -336,8 +336,9 @@ function loadFailure(error) {
   return { action: "failed", message: explainError(error) };
 }
 
-async function loadCohorts() {
-  const { data, error } = await rpc("instructor_cohorts");
+/** first：もう受け取った instructor_cohorts の答え（chooseClient の 1 回目。同じ部品・同じ問い合わせを 2 回送らない）。無ければ読む */
+async function loadCohorts(first = null) {
+  const { data, error } = first ?? (await rpc("instructor_cohorts"));
   // ログアウトの途中・ほかのタブでのログアウトのあとに届いた応答は、state に入れない（F107-04）
   if (ending) return { stale: true };
   if (error) return { error };
@@ -373,10 +374,20 @@ async function loadStatus() {
   return true;
 }
 
+/** 担当の回を読み、読めたら選んでいる回の段階の状態を読む（段階の状態は回が決まってから）。{ c, ok }（c は loadCohorts の答え） */
+async function loadCohortsAndStatus(first = null) {
+  const c = await loadCohorts(first);
+  if (ending || c.stale || c.error) return { c, ok: false };
+  return { c, ok: await loadStatus() };
+}
+
 let loading = false;
 
-/** 読み込んで画面を切り替える。初回（読み込み中の画面）と「最新にする」の両方で使う */
-async function load({ fromApp = false } = {}) {
+/**
+ * 読み込んで画面を切り替える。初回（読み込み中の画面）と「最新にする」の両方で使う。
+ * cohorts：最初の読み込みで使う instructor_cohorts の答え（chooseClient がもう受け取ったもの。無ければ読む）
+ */
+async function load({ fromApp = false, cohorts = null } = {}) {
   if (loading) return;
   loading = true;
   if (!fromApp) {
@@ -385,17 +396,24 @@ async function load({ fromApp = false } = {}) {
   }
   try {
     // 各 await のあとに、ログアウトの途中（ending）でないかを照らす。途中なら state・ヘッダー・お知らせ・画面を変えずに終わる（F107-04）
+    let c;
+    let ok;
     if (!fromApp) {
-      const { data } = await rpc("is_admin");
+      // 区分（is_admin）・Google のメール・担当の回（と段階の状態）は互いの答えを待たないので、並べて読む（ページを開く速さ。2026-10-23）。
+      // どれも読むだけ。答えを使うのは、全部がそろってから ending を照らしたあと（loadCohorts・loadStatus は自分でも照らして state を変えない）
+      const [adminRes, emailRes, sessionRes, loaded] = await Promise.all([
+        rpc("is_admin"),
+        rpc("current_google_email"),
+        activeClient().auth.getSession(),
+        loadCohortsAndStatus(cohorts),
+      ]);
       if (ending) return;
-      state.isAdmin = data === true;
-      const { data: googleEmail } = await rpc("current_google_email");
-      if (ending) return;
-      const { data: sessionData } = await activeClient().auth.getSession();
-      if (ending) return;
-      state.myEmail = normalizeEmail(googleEmail ?? sessionData?.session?.user?.email ?? "");
+      state.isAdmin = adminRes?.data === true;
+      state.myEmail = normalizeEmail(emailRes?.data ?? sessionRes?.data?.session?.user?.email ?? "");
+      ({ c, ok } = loaded);
+    } else {
+      ({ c, ok } = await loadCohortsAndStatus());
     }
-    const c = await loadCohorts();
     if (ending || c.stale) return;
     if (c.error) {
       const f = loadFailure(c.error);
@@ -414,7 +432,6 @@ async function load({ fromApp = false } = {}) {
       }
       return;
     }
-    const ok = await loadStatus();
     if (ending) return;
     if (!ok && fromApp) notify(`最新の状態を読み込めませんでした。${state.statusError}`, "error");
     $("me-email").textContent = adminSession ? adminWho() : state.myEmail;
@@ -516,10 +533,12 @@ async function checkAdminConsole() {
  */
 async function chooseClient(hasShared) {
   if (hasShared) {
-    const { error } = await supabase.rpc("instructor_cohorts");
+    const first = await supabase.rpc("instructor_cohorts");
     if (ending) return { stale: true };
-    // 通った（講師の区分）・断り以外の失敗（通信など）は、今どおり共有のログインで読み込みに任せる
-    if (!error || loadFailure(error).action !== "denied") return { shared: true };
+    // 通った（講師の区分）・断り以外の失敗（通信など）は、今どおり共有のログインで読み込みに任せる。
+    // 通ったときは、その答えを最初の読み込みでそのまま使う（同じ部品で同じ問い合わせをもう 1 回送らない。2026-10-23）
+    if (!first.error) return { shared: true, cohorts: first };
+    if (loadFailure(first.error).action !== "denied") return { shared: true };
   }
   const r = await checkAdminConsole();
   if (ending) return { stale: true };
@@ -1334,7 +1353,8 @@ async function main() {
   // 講師の区分なら今どおり。区分が講師でない（管理者）なら、管理コンソールのセッションを試す（5.3.1 の 1〜2）
   const chosen = await chooseClient(true);
   if (chosen.stale) return;
-  await load();
+  // 講師の区分（共有のログインで通った）なら、確かめに使った担当の回の答えをそのまま使う。管理者として動くときは管理コンソールの部品で読み直す
+  await load(chosen.shared ? { cohorts: chosen.cohorts ?? null } : {});
 }
 
 /** 管理コンソールを新しいタブで開く（講師の画面からはログインを始めない） */

@@ -1,0 +1,2 @@
+# 改行はいつも LF で入れる（2026-10-23。JS・CSS の版〔tools/asset-versions.mjs〕は LF にそろえた中身から作る。このときの全部のファイルは LF）
+* text=auto eol=lf

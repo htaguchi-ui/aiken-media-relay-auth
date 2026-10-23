@@ -69,6 +69,13 @@ ChatGPT・Claude（claude.ai）・Codex・Claude Code の接続の操作から�
 - `site-nav.js` / `site-nav.css`：画面の間の移動（2026-10-23 田口さんの依頼「Canvas 以外の各ページに、Canvas・マイページ・講師ページ・管理ページのリンク。アクセス権のあるページだけ」）。マイページ・講師の画面・管理コンソールのヘッダーの 1 段の右側（題名の右・ログアウトなどの左。2026-10-23 田口さん「ヘッダーの高さがかさばりすぎる」）に、**Canvas・マイページ・講師ページ・管理ページ** の順で出す。今いる画面は `aria-current="page"` の印（リンクにしない）。**マイページ・講師ページ・管理ページはアイコンだけ**（2026-10-23 田口さんの依頼。マイページ＝家〔ホーム。田口さんの選択〕・講師ページ＝卒業の帽子・管理ページ＝歯車〔2026-10-19 のマイページのヘッダーのアイコンと同じ〕。名前はリンクの `aria-label` と `title`〔マウスを重ねると出る〕、今いる画面は見えない読み上げ用の文字と `title`）。**Canvas は文字の左に、Canvas の画面の印と同じノードのアイコン**（Lucide の workflow。四角 2 つを線でつないだ形）。アイコンは Lucide（ISC）の線を `site-nav.js` に写して `createElementNS` で描く（外の読み込みなし）。**Canvas だけは主ボタンと同じ塗り（`--accent` の地に `--on-accent` の文字。明暗とも 7:1 以上）で目立たせ、別のタブで開く**（`target="_blank"`・`rel="noopener noreferrer"`・読み上げ「Canvas（別のタブ）」・`/canvas?autologin=1`）。マイページ・講師ページ・管理ページは同じタブで移る（2026-10-23 田口さんの決定。管理コンソールの扱いは下の「保存していない設定」の文）。どれを出すかは、各画面がすでにサーバーから受け取っている答えだけで決める（新しい問い合わせはしない）：マイページは `/me` の `role`、講師の画面は `is_admin()`（管理コンソールのログインで動いているときだけ true）、管理コンソールは `is_admin()` が true のときだけ画面を出すので管理者の並び。区分ごとの出し方は `siteNavAccess`（受講者・AIKENメンバー＝Canvas・マイページ／講師＝＋講師ページ／管理者＝＋管理ページ）。**これは案内だけで守りではない**（開いた先の画面と DB が自分で権限を確かめる。管理ページは開いた先で管理コンソールのログインを求め、講師の画面は管理者には管理コンソールでのログインを案内する）。ログイン前・名簿に無い・失敗の画面には出さない。許可の画面（`consent.html`。OAuth の途中で、外へ出ると流れが切れる）・`about.html`（ログインの状態を読まない）・`terms.html`・`privacy.html` にも出さない。見た目は管理コンソールの作法（今の画面は選んだ行と同じ `--accent-soft` の淡い地と `--accent` の下線・押せる範囲 44px）。スマホ（560px 以下）では Canvas もアイコンだけ（名前は aria-label・title）。320px でも題名と同じ 1 段に収まり、題名が入りきらないときは題名を読み上げだけに残す（各ページの CSS の `@container brand`）。ヘッダーの［ログアウト］・管理コンソールのアカウントと左のメニューのアイコンも、`site-nav.js` の形（`fillIcons`）。帯の高さは 45px で、固定したヘッダーの高さの初期値（`--topbar-h`）は帯を含めて測り直した（マイページは `index.html` の中の `<style>`、講師の画面・管理コンソールは各 HTML の中の値。どれも選択子は `:root` だけで、管理コンソールの「選択中は 0px」より重くしない）。**保存していない設定**：管理コンソールで設定を保存していないときに帯の同じタブのリンクを押すと、タブを替えるときと同じ画面内の確かめ（［編集を続ける］／［破棄して移る］）が出る。設定の保存の結果を待っている間は、「設定の保存の結果を待っています」と知らせて移らない（`admin.js` の `onSiteNavClick`）。ページを閉じる・再読み込みするときに離れてよいかを聞く仕組み（beforeunload）は iPhone の Safari では働かないため、帯のリンクはこの画面内の確かめで守る。管理コンソールを閉じるとき（期限切れなど）は、終わらせる通信を待つ前に帯を隠す。マイページで `/me` の区分が知らない値のときも、Canvas とマイページは出す。試験は `scripts/site_nav_test.ts`（区分ごとの出し方）と `scripts/site_nav_nodetest.mjs`（各画面での描画・管理コンソールの帯のリンク）。**新しいファイルなので `git add` を忘れない。**
 - `auth-storage.js`：ログインの保存先と判定（決定 70・74）。マイページ・講師の画面・Canvas・接続の画面は localStorage の共有の鍵 `aiken-studio-auth`（`STUDIO_STORAGE_KEY`）、管理コンソールは別の鍵 `aiken-console-auth`（`ADMIN_CONSOLE_STORAGE_KEY`。ログインの途中の印は sessionStorage の `ADMIN_LOGIN_FLOW_KEY`）。管理コンソールの 12 時間はサーバーの期限で、画面の側は `ADMIN_SESSION_LIMIT_MS`（文に使う長さ）・`adminConsoleExpiresAt`・`adminConsoleExpired` で判定する。決定 70 の版の管理コンソールの鍵 `aiken-studio-admin-auth`（`ADMIN_STORAGE_KEY`。`OLD_ADMIN_STORAGE_PREFIXES`）は使わず、移さずに掃除するだけ。ほかのタブでの変化の判定（`sessionChangeKind`・`authEventKind`）、前の版の sessionStorage のセッションを捨てる `discardOldTabSessions`。以前の版が localStorage に残したセッション（`sb-<ref>-auth-token`）は、どの画面を開いた時点でも消す
 - supabase-js は版を固定（2.117.2 の UMD）し、`integrity`（SRI）と `crossorigin` を付けて読み込む（`admin.html`・`consent.html`・`index.html`〔マイページ〕）。版を上げるときは、配信されるファイルの sha384 を計算し直して 3 つの `integrity` と `admin.html`・`index.html` の CSP（`script-src` のファイルの URL）を合わせて直す
+- **ページを移るときの読み込み（2026-10-23 田口さんの依頼）**：
+  - **JS・CSS の版の住所**：マイページ・講師の画面・管理コンソール・`/about` は、直下の JS・CSS を `/r/<版>/<名前>` で読む。版は、git で管理している直下の `*.js`・`*.css` の名前と中身（改行は LF にそろえる）から作る 12 桁のハッシュ。`vercel.json` は、**今の版**の住所で**直下の JS・CSS の名前**のときだけ直下のファイルに書き換えて 1 年・immutable を付ける（どちらも `tools/asset-versions.mjs` が書く）。前の版・無い名前の `/r/…` は書き換えず 404 で、`no-cache`（404 に immutable を付けない）。2 回目からの移動では、HTML の確かめだけで JS・CSS を通信しない（以前は毎回、2〜3 段の 304 の確かめを待っていた）。モジュールの中の import は相対なので、同じ版の下を読む。版の無い住所（`/admin.js` など。`consent.html` の import も）は今までどおり毎回確かめる。各画面の `<head>` には、その画面のモジュールが import するファイルの `modulepreload`。
+  - **公開の途中の確かめ**：`vercel.json` の `buildCommand` で `node tools/asset-versions.mjs check-build` を走らせる（依存なしの node）。公開する中身（commit した中身）の版と、4 つの画面・`vercel.json` の版が合わない・画面や import が指すファイルが無いときは build が失敗し、**公開されない**（今の本番がそのまま残る）。出力の場所は今までどおり直下（`outputDirectory: "."`。`public` を作らない）。`tools/` は公開の中にも入る（中身は版の確かめだけ）。
+  - supabase-js（CDN）の `<script>` は `defer`（読み込みの間も HTML の読み進めを止めない。実行は今と同じく下の module より先）。Supabase の接続先へ `preconnect`。
+  - 開いたときの問い合わせは、互いの答えを待たないものを並べて送る（講師の画面：`is_admin`・Google のメール・担当の回と段階の状態。区分の確かめに使った `instructor_cohorts` の答えはそのまま使い、もう 1 回は送らない／管理コンソール：管理コンソールの確かめのあとに、メールと `is_admin`、段階の情報の 6 つ）。認証・権限の確かめの順（管理コンソールの確かめ → 管理者の確かめ → 表の読み込み）は変えていない。
+  - 改行は `.gitattributes`（`* text=auto eol=lf`）で LF に固定（2026-10-23 の時点で全部のファイルが LF）。
+  - 試験は `scripts/asset_versions_nodetest.mjs`（版・vercel.json・わざと壊すと build の確かめが止まること）・`scripts/page_speed_browser_nodetest.mjs`（実物のブラウザ）・`scripts/admin_boot_parallel_nodetest.mjs`（並べて読む間に閉じた・ログインし直したとき）。
 - ページ内の Supabase キーは公開用（publishable）で、秘密情報は含みません。
 
 ## 公開の前の注意
@@ -81,6 +88,23 @@ ChatGPT・Claude（claude.ai）・Codex・Claude Code の接続の操作から�
      `const CONSENT_END_SESSION = "signout-local";` → `const CONSENT_END_SESSION = "clear-storage-only";`
      に変えて公開し直す（サーバーには取り消しを送らず、このタブの保存先だけを消す。5 分の時間切れ・画面を離れたときの消去はそのまま効く）。そのあと 3. をやり直す。
    - それでも直らない・ほかの壊れ方のときは、公開した変更を `git revert` で戻して公開し直す。
+
+## JS・CSS を変えて公開する手順（版の住所。2026-10-23）
+
+JS・CSS の中身が 1 文字でも変わったら、版を書き直してから公開する。**版を書き直さずに出すと、新しい HTML と古い JS（または古い HTML と新しい JS）が食い違って画面が止まることがある**ので、公開の途中の確かめ（build）で止める作りにしてある。
+
+1. 変えたファイル（新しく作った JS・CSS も）を `git add` する。
+2. auth-page の直下で `node tools/asset-versions.mjs stamp` を流す（git add した中身から版を作り、4 つの画面と `vercel.json` を書き直す。add していない変更・git に入っていない JS・CSS があると、書かずに止まって知らせる）。
+3. 書き直した画面と `vercel.json` も `git add` して、全部を 1 つの commit にする。
+4. `node tools/asset-versions.mjs check` を流す（commit した中身で版が合うか・版に関わるファイルに commit していない変更が無いか）。通ってから push する。
+5. 公開（Vercel の build）の中でも `check-build` が走り、合わなければ build が失敗して公開されない（Vercel のデプロイの一覧で Error になる。今の本番は変わらない）。失敗したら、手元で 1〜4 をやり直して push する。
+6. 公開した直後に確かめる：
+   - `curl -s https://studio.a-i-ken-rc.com/admin | grep -o '/r/[0-9a-f]*/' | sort -u` が、手元の `check` が出した版の 1 つだけ。
+   - その版の `/r/<版>/` の全部（`admin.html` などの中の `/r/<版>/…` の住所すべて）が `curl -sI` で 200・正しい型（`.js` は `application/javascript` か `text/javascript`、`.css` は `text/css`）・`Cache-Control: public, max-age=31536000, immutable`。
+   - `/r/<版>/zz-not-exist.js` が 404 で immutable が付かない（`no-cache`）。
+   - `/admin.js` は今までどおり `max-age=0, must-revalidate`、`/admin` は `no-cache`。
+7. **404 や中身の食い違いを出してしまったとき**（版の住所に誤った中身が 1 年キャッシュされた疑いがあるとき）：同じ版のまま出し直しても、すでに受け取ったブラウザのキャッシュは直らない。**JS か CSS を 1 文字変えて（コメントでよい）版を変え**、1〜6 で出し直す（画面が新しい版の住所を読むので、古いキャッシュは使われなくなる）。
+8. **`git revert` で戻すとき**：戻した結果の中身で版が決まる。revert の commit のあとに 4. の `check` を流し、合わなければ 2.〜3. で版を書き直して commit してから push する（JS・CSS と画面・`vercel.json` を同じ commit の状態に戻せば、版はそのときの版に戻り、その版を前に受け取ったブラウザのキャッシュも同じ中身なので食い違わない）。
 
 ## マイページの公開
 

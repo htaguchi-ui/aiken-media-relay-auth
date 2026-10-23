@@ -5972,7 +5972,16 @@ async function loadStageInfo() {
   const S = state.stages;
   if (appClosed) return false;
   const ticket = gates.stages.begin();
-  const c = await supabase.from("cohorts").select("id, credit_mode, stage_template_id, stages_applied_at");
+  // 回の段階の情報と、ほかの 5 つ（段階・テンプレート・担当の講師・設定）は互いの答えを待たないので、まとめて並べて読む（ページを開く速さ 2026-10-23）。
+  // 回の読み込みが失敗したときは、今までどおりほかの 5 つの答えは使わない
+  const [c, st, tp, ti, ins, set] = await Promise.all([
+    supabase.from("cohorts").select("id, credit_mode, stage_template_id, stages_applied_at"),
+    supabase.from("cohort_stages").select("id, cohort_id, day_kind, seq, label, title, credits").order("seq"),
+    supabase.from("stage_templates").select("id, name, note, active, updated_at").order("name"),
+    supabase.from("stage_template_items").select("id, template_id, day_kind, seq, label, title, credits").order("seq"),
+    supabase.from("cohort_instructors").select("cohort_id, email"),
+    supabase.rpc("admin_get_settings"),
+  ]);
   if (appClosed) return false;
   if (c.error) {
     if (!gates.stages.accept(ticket)) return true;
@@ -5985,14 +5994,6 @@ async function loadStageInfo() {
     }
     return false;
   }
-  const [st, tp, ti, ins, set] = await Promise.all([
-    supabase.from("cohort_stages").select("id, cohort_id, day_kind, seq, label, title, credits").order("seq"),
-    supabase.from("stage_templates").select("id, name, note, active, updated_at").order("name"),
-    supabase.from("stage_template_items").select("id, template_id, day_kind, seq, label, title, credits").order("seq"),
-    supabase.from("cohort_instructors").select("cohort_id, email"),
-    supabase.rpc("admin_get_settings"),
-  ]);
-  if (appClosed) return false;
   if (!gates.stages.accept(ticket)) return true;
   S.available = true;
   S.loaded = true;
@@ -6761,12 +6762,15 @@ async function main() {
   };
   if (bootAborted()) return;
 
-  // 「自分」の判定は DB と同じく Google の ID 連携の email で行う（auth.users の email とは異なる場合がある）
-  const { data: googleEmail } = await supabase.rpc("current_google_email");
+  // 「自分」の判定は DB と同じく Google の ID 連携の email で行う（auth.users の email とは異なる場合がある）。
+  // メールと管理者の確かめは互いの答えを待たないので、並べて読む（どちらも読むだけ。答えを使うのは両方がそろって bootAborted を照らしたあと。
+  // 管理コンソールのセッションの確かめ〔consoleStatus〕と期限の確かめは、今どおりこの前に済ませる。ページを開く速さ 2026-10-23）
+  const [{ data: googleEmail }, { data: isAdmin, error: adminError }] = await Promise.all([
+    supabase.rpc("current_google_email"),
+    supabase.rpc("is_admin"),
+  ]);
   if (bootAborted()) return;
   const email = normalizeEmail(googleEmail ?? session.user.email ?? "");
-  const { data: isAdmin, error: adminError } = await supabase.rpc("is_admin");
-  if (bootAborted()) return;
   myEmail = email;
   if (adminError) {
     fatal(`権限を確認できませんでした。${explainError(adminError)}`);
