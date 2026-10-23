@@ -388,12 +388,53 @@ export const MAX_GRANT_TOTAL = 10000;
 /** AIKENメンバーを追加するときの月額の初期値（約 5,000 円） */
 export const DEFAULT_MONTHLY_CREDITS = 3300;
 
-/** 円の目安の換算（1 ドル＝150 円で固定。表示の参考だけに使う） */
+/** 円の目安の換算で、サーバーの値（直近 3 か月の平均）が無いときに使う 1 ドルあたりの円（表示の参考だけに使う） */
 export const YEN_PER_USD = 150;
 
-/** クレジット → 円の目安（1 クレジット＝$0.01） */
+/** サーバーの円の目安のドル円（admin_get_settings の fx_usd_jpy を setFxRate で読んだもの）。null は 150 を使う */
+let fxRate = null;
+
+/**
+ * admin_get_settings の fx_usd_jpy（227）を読む。ECB の公表値の平均（source が ecb_frankfurter）で、値が数の 50〜400 円・
+ * 期間の終わりが実在する日付のときだけ { yenPerUsd, periodEnd } を返す。初期値（initial）・無い・形が変なら null（150 を使う）。
+ * yenPerUsd は円の整数に丸めた値（注記の「1 ドル＝158 円」・円の目安の計算・1 クレジットあたりの円を、すべてこの 1 つの値から出す）
+ */
+export function parseFxRate(raw) {
+  if (!raw || typeof raw !== "object" || raw.source !== "ecb_frankfurter") return null;
+  const rate = raw.usd_jpy;
+  if (typeof rate !== "number" || !Number.isFinite(rate) || rate < 50 || rate > 400) return null;
+  if (!isValidDate(raw.period_end)) return null;
+  return { yenPerUsd: Math.round(rate), periodEnd: raw.period_end };
+}
+
+/** 円の目安の換算に使うドル円を入れ替える（admin_get_settings を読むたびに。読めない値なら 150 に戻す）。読んだ結果を返す */
+export function setFxRate(raw) {
+  fxRate = parseFxRate(raw);
+  return fxRate;
+}
+
+/** 今の 1 ドルあたりの円（サーバーの値を円の整数に丸めたもの。無ければ 150） */
+export function yenPerUsd() {
+  return fxRate?.yenPerUsd ?? YEN_PER_USD;
+}
+
+/** 円の目安の注記。「1 ドル＝158 円・直近 3 か月の平均・10/22 時点」／サーバーの値が無いとき「1 ドル＝150 円の目安」 */
+export function fxRateNote() {
+  if (!fxRate) return `1 ドル＝${YEN_PER_USD} 円の目安`;
+  return `1 ドル＝${fxRate.yenPerUsd} 円・直近 3 か月の平均・${formatMonthDay(fxRate.periodEnd)} 時点`;
+}
+
+/** 1 クレジット（$0.01）あたりの円の目安（1 ドルあたりの円の 100 分の 1。158 円なら 1.58・150 円なら 1.5） */
+export function yenPerCredit() {
+  return yenPerUsd() / 100;
+}
+
+/**
+ * クレジット → 円の目安（1 クレジット＝$0.01）。クレジット × 1 ドルあたりの円（整数）を先に整数で掛けてから 100 で割り、四捨五入する
+ * （0.01 を掛ける浮動小数だと、レート 50・29 クレジットの 14.5 円が 14 に下がる。Codex TASK-0189 F189-04）
+ */
 export function creditsToYen(credits) {
-  return Math.round(Number(credits ?? 0) * 0.01 * YEN_PER_USD);
+  return Math.round((Number(credits ?? 0) * yenPerUsd()) / 100);
 }
 
 /** 「約 4,950 円」 */

@@ -67,7 +67,9 @@ import {
   usageCellView,
   windowLastDayText,
   windowView,
-  YEN_PER_USD,
+  fxRateNote,
+  setFxRate,
+  yenPerCredit,
   catalogModes,
   enabledModelsPayload,
   applyMasterOptIn,
@@ -162,6 +164,7 @@ import {
   MAX_DAY_STAGE_TOTAL,
   MAX_STAGES_PER_DAY,
 } from "./stage-lib.js";
+import { renderSiteNav } from "./site-nav.js";
 
 // 他のサイトに埋め込まれて操作させられるのを防ぐ（GitHub Pages では frame-ancestors を指定できないため）
 if (window.top !== window.self) {
@@ -484,16 +487,35 @@ function readDate(input) {
   return readInputValue(input.value, input.validity?.badInput);
 }
 
-/** クレジットの入力の横に出す円の目安 */
-function yenHint(input, suffix = `（1 ドル＝${YEN_PER_USD} 円の目安）`) {
+/**
+ * 作った円の目安（要素への WeakRef）と、その書き直しの関数。名簿の追加の画面などは一度作った DOM を使い回すので、ドル円を読み直したら
+ * applyFxRate で、出ている金額と注記を一緒に今のレートに書き直す（Codex TASK-0189 F189-02）。要素が捨てられたら一覧から外す
+ */
+const yenHintRefs = new Set();
+const yenHintUpdaters = new WeakMap();
+
+/** クレジットの入力の横に出す円の目安（ドル円はサーバーの直近 3 か月の平均。無ければ 150 円）。注記は書き直すたびに今のレートから作る */
+function yenHint(input) {
   const hint = el("span", { className: "hint num" });
   const update = () => {
     const n = parseCredits(input.value);
-    hint.textContent = n === null ? "" : n === undefined ? "整数で入力してください" : `${formatYen(n)}${suffix}`;
+    hint.textContent = n === null ? "" : n === undefined ? "整数で入力してください" : `${formatYen(n)}（${fxRateNote()}）`;
   };
   input.addEventListener("input", update);
   update();
+  yenHintUpdaters.set(hint, update);
+  yenHintRefs.add(new WeakRef(hint));
   return hint;
+}
+
+/** 円の目安のドル円を入れ替え（admin_get_settings の fx_usd_jpy。読めない値なら 150）、作ってある円の目安をすべて書き直す */
+function applyFxRate(raw) {
+  setFxRate(raw);
+  for (const ref of yenHintRefs) {
+    const hint = ref.deref();
+    if (!hint) yenHintRefs.delete(ref);
+    else yenHintUpdaters.get(hint)?.();
+  }
 }
 
 function selectInput(options, value, props = {}) {
@@ -966,6 +988,8 @@ function clearAppView() {
   state.settings.edit = null;
   state.settings.drafts = null;
   for (const id of ["settings-summary", "settings-main", "settings-models", "settings-templates", "settings-history", "settings-aside", "settings-bar", "roster-list", "roster-aside", "cohorts-main", "cohort-aside", "overview"]) $(id).replaceChildren();
+  // 画面の間の移動の帯も隠す（期限切れなどで、ログインの画面を出す前に endConsoleSession の通信を待つ間も残さない。Codex TASK-0189 F189-03）
+  renderSiteNav($("site-nav"), null, "admin");
 }
 
 /** 確かめの途中（30 秒ごと・前に出たとき・読み直しが重なっても、1 つずつ） */
@@ -3370,7 +3394,7 @@ function creditsFieldset(f, currentPeriod = null) {
     el("div", { className: "grid-3" }, ...Object.entries(labels).map(([k, label]) => field(label, f.credits[k]))),
     el("span", {
       className: "hint",
-      text: `1 クレジット＝$0.01（約 ${YEN_PER_USD / 100} 円）。空欄のままだと、その期間は生成できません。${now ? "太枠は今の期間です。" : ""}`,
+      text: `1 クレジット＝$0.01（約 ${yenPerCredit()} 円）。空欄のままだと、その期間は生成できません。${now ? "太枠は今の期間です。" : ""}`,
     }),
   );
 }
@@ -3734,6 +3758,8 @@ async function loadSettingsInfo() {
     return false;
   }
   S.info = data;
+  // 円の目安のドル円（227。無い・読めない値なら 150 に戻す）。出ている円の目安も書き直す
+  applyFxRate(data?.fx_usd_jpy);
   S.status = "ok";
   S.error = "";
   S.infoAt = Date.now();
@@ -5368,7 +5394,11 @@ async function loadStageInfo() {
   if (!tp.error && !ti.error) S.templatesAt = Date.now();
   S.templatesError = tp.error || ti.error ? explainError(tp.error || ti.error) : "";
   if (!ins.error) S.instructors = ins.data ?? [];
-  if (!set.error) S.limitT = set.data?.settings?.stage_grant_total_limit ?? 10000;
+  if (!set.error) {
+    S.limitT = set.data?.settings?.stage_grant_total_limit ?? 10000;
+    // 円の目安のドル円（227）。起動・更新のたびにここで読む（設定の画面を開かなくても名簿・回の目安に効く）
+    applyFxRate(set.data?.fx_usd_jpy);
+  }
   const partial = [st, tp, ti, ins, set].some((x) => x.error);
   state.fresh.stages = partial ? { at: state.fresh.stages.at ?? null, stale: true } : { at: Date.now(), stale: false };
   return true;
@@ -6138,6 +6168,8 @@ async function main() {
   }
 
   $("me-email").textContent = myEmail;
+  // 画面の間の移動：is_admin() が true のときだけここに来るので、管理者の並び（案内だけ）
+  renderSiteNav($("site-nav"), "admin", "admin");
   $("me-btn").setAttribute("aria-label", `アカウント（${myEmail}）：メール・確認の時刻・ログアウト`);
   $("account-btn").setAttribute("aria-label", `アカウントと更新（${myEmail}）`);
   show("app");
@@ -6199,6 +6231,31 @@ document.addEventListener("keydown", (e) => {
     closeSelection();
   }
 });
+/**
+ * 帯（site-nav）の同じタブのリンク（マイページ・講師ページ）：保存していない設定の変更があれば、ブラウザの移動を止めて、
+ * タブを替えるときと同じ画面内の確かめ（confirmLeaveSettings）を通す。［破棄して移る］なら下書きを捨ててから移る。
+ * iPhone の Safari は beforeunload を出さないので、これが無いと黙って消える。別のタブで開くもの（Canvas）・修飾キー付きの押し方
+ * （新しいタブ・ウィンドウで開く）は、この画面が残るので止めない
+ */
+async function onSiteNavClick(e) {
+  const a = e.target?.closest?.("a[href]");
+  if (!a || a.target === "_blank") return;
+  if (e.defaultPrevented || e.button !== 0 || e.metaKey || e.ctrlKey || e.shiftKey || e.altKey) return;
+  if (appClosed) return;
+  // 設定の保存の結果を待っている間は、保存していない変更の有無より先に止める（送った保存は破棄できない。下書きのないリセットも。
+  // タブを替えるとき〔switchTab〕と同じ。Codex TASK-0189 F189-01）
+  if (state.settings.busy) {
+    e.preventDefault();
+    notify("設定の保存の結果を待っています。終わってから移ってください。");
+    return;
+  }
+  if (!unsavedSettings().length) return;
+  e.preventDefault();
+  if (!(await confirmLeaveSettings())) return;
+  location.assign(a.href);
+}
+$("site-nav").addEventListener("click", onSiteNavClick);
+
 // 保存していない設定の変更があるまま、ページを離れる・閉じるときは知らせる（ブラウザの確かめ）
 window.addEventListener("beforeunload", (e) => {
   if (appClosed || !unsavedSettings().length) return;

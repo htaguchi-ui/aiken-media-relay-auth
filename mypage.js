@@ -1,5 +1,5 @@
 // マイページ（トップ / ・/mypage・/mypage.html。ファイルは index.html）。ログイン中の本人の「残りクレジット」と「使えるモデル（目安単価）」を、
-// Edge Function user-api（GET /me）から読んで表示する。Canvas は別のタブで開く普通のリンク（この画面からは何も送らない）。
+// Edge Function user-api（GET /me）から読んで表示する。Canvas・講師ページ・管理ページへは、ヘッダーの上の帯（site-nav.js）の普通のリンク（Canvas だけ別のタブ。この画面からは何も送らない）。
 // 読み取り専用（書き込みは一切しない）。ドルの金額・換算は出さない。メールアドレスは画面に出さない（2026-10-19 田口さんの決定）。
 // ただし「登録されていない」画面だけは、違うアカウントで入ったと気づけるよう、ログインしたメールアドレスを出す（同日 main の決定）。
 // 表示はすべて textContent / createElement で組み立てる（データを innerHTML に入れない）。
@@ -21,7 +21,6 @@ import {
   decideApiOutcome,
   deniedMessage,
   groupModels,
-  headerTools,
   COPY_OK_CLEAR_MS,
   copyTextOf,
   createLatestGate,
@@ -36,6 +35,7 @@ import {
   roleBadgeClass,
   shouldReloadOnReturn,
 } from "./mypage-lib.js";
+import { renderSiteNav } from "./site-nav.js";
 
 // 他のサイトに埋め込まれて操作させられるのを防ぐ（GitHub Pages では frame-ancestors を指定できないため。admin.js と同じ）
 if (window.top !== window.self) {
@@ -154,7 +154,7 @@ function hideContent(message = "ログアウトしています…") {
   lastSuccessAt = null;
   $("me-role").textContent = "";
   $("me-role").hidden = true;
-  renderTools(null);
+  renderSiteNav($("site-nav"), null, "mypage");
   $("denied-message").textContent = MSG_DENIED;
   $("checked-at").textContent = "";
   $("checked-at").hidden = true;
@@ -408,20 +408,9 @@ function render(me) {
   role.textContent = me.role_label || "";
   role.className = `badge ${roleBadgeClass(me.role)}`;
   role.hidden = !me.role_label;
-  renderTools(me.role);
+  renderSiteNav($("site-nav"), me.role, "mypage");
   renderCredits(me.credits, me.role);
   renderModels(me.models);
-}
-
-/** ヘッダーの講師の画面・管理コンソールのボタン（区分で出し分ける。見た目だけ） */
-function renderTools(role) {
-  const tools = headerTools(role);
-  $("instructor-link").hidden = !tools.instructor;
-  $("admin-link").hidden = !tools.admin;
-  // ボタンが増えると狭い幅で 1 行に収まらないので、そのときはログアウトをアイコンにする（CSS）
-  $("account").classList.toggle("with-tools", tools.instructor || tools.admin);
-  // 管理者（ボタンが 4 つ）だけ、とても狭い幅では題名の代わりに小さなマークを見せる（CSS）
-  $("account").classList.toggle("with-admin", tools.admin);
 }
 
 /** 文字を入れて、空なら隠す */

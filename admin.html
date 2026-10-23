@@ -13,6 +13,7 @@
 <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
 <link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=IBM+Plex+Sans+JP:wght@400;500;600;700&amp;display=swap">
 <link rel="stylesheet" href="/studio.css">
+<link rel="stylesheet" href="/site-nav.css">
 <style>
   /* 色・余白・角丸・ボタン・上部の帯の土台は共通の studio.css（マイページと同じ値。--muted・--low-text は重要な数字が明暗とも 7:1 になる値）。
      ここには管理コンソールだけが使う変数と、一覧・表・シートの形を置く（同じ名前の部品は、ここが後に読まれるので勝つ） */
@@ -184,9 +185,11 @@
   /* ---- 上部（画面の上に固定。すりガラス・横向きで固定しない・高さの補助は studio.css と topbar-height.js の共通の作り）---- */
   /* 共通の骨組み（提案書 11.2）：左にサービス名、中央に［名簿］［回］［設定］、右に確認の時刻・更新・本人（スマホは ☰ のシート）。
      --topbar-h ＝ 固定したヘッダーの高さ（ノッチ分を含む）。ここは幅ごとの実測の初期値で、topbar-height.js が実際の高さに入れ直す */
-  :root { --topbar-h: calc(61px + env(safe-area-inset-top)); } /* 900px 未満（1 段）。実測 61px */
+  /* 実測は、上に画面の間の移動の帯（site-nav。45px）を足したあとの高さ（2026-10-23 測り直し。帯なしは 45px 引いた値） */
+  :root { --topbar-h: calc(112px + env(safe-area-inset-top)); } /* 900px 未満（帯＋1 段）。実測 112px */
   :root:has(body.selecting) { --topbar-h: 0px; } /* 選択中はヘッダーを隠す */
   .topbar-inner { max-width: none; flex-wrap: wrap; gap: 8px; padding: 8px 12px; }
+  .site-nav { --site-nav-max: none; --site-nav-pad: 12px; } /* 画面の間の移動（site-nav.css）の横の位置を .topbar-inner にそろえる */
   .topbar .brand-sub { display: none; } /* ログイン画面のカードの見出しは残す */
   .brand h1 { font-size: 17px; white-space: nowrap; }
   .tabs { flex: none; padding: 3px; gap: 2px; border-radius: var(--r-m); }
@@ -196,9 +199,9 @@
     flex: none; width: 44px; height: 44px; border-radius: var(--r-m); border: 1px solid var(--line-2); background: var(--surface);
     color: var(--text); display: inline-flex; align-items: center; justify-content: center; padding: 0;
   }
-  /* 320px など：タブを 2 段目に回す（ラベルは省略しない）。実測 113px */
+  /* 320px など：タブを 2 段目に回す（ラベルは省略しない）。実測 164px（帯を含む） */
   @media (max-width: 359.98px) {
-    :root { --topbar-h: calc(113px + env(safe-area-inset-top)); }
+    :root { --topbar-h: calc(164px + env(safe-area-inset-top)); }
     :root:has(body.selecting) { --topbar-h: 0px; }
     .tabs { order: 3; flex: 1 1 100%; display: grid; }
   }
@@ -620,9 +623,10 @@
   /* ---- PC（900px 以上）：表＋右のパネル／中央のダイアログ ---- */
   @media (min-width: 900px) {
     .mobile-only { display: none !important; }
-    :root { --topbar-h: calc(65px + env(safe-area-inset-top)); } /* 900px 以上（1 段）。実測 65px（右の欄は折り返さない） */
+    :root { --topbar-h: calc(118px + env(safe-area-inset-top)); } /* 900px 以上（帯＋1 段）。実測 118px（右の欄は折り返さない） */
     :root:has(body.selecting) { --topbar-h: 0px; }
     .topbar-inner { max-width: 1240px; margin: 0 auto; padding: 12px 24px; flex-wrap: nowrap; }
+    .site-nav { --site-nav-max: 1240px; --site-nav-pad: 24px; }
     .topbar .brand-sub { display: inline; }
     .brand { flex: none; flex-direction: row-reverse; align-items: baseline; gap: 12px; white-space: nowrap; } /* 縮むのは右のメールの欄だけ */
     .brand h1 { font-size: 20px; }
@@ -788,6 +792,9 @@
 
 <div id="app" hidden>
   <header class="topbar">
+    <!-- 画面の間の移動（共通の部品 site-nav.js・site-nav.css）。ここに来るのは管理者だけ（is_admin() が true のときだけ #app を出す）なので、
+         Canvas・マイページ・講師ページ・管理ページ（今の画面の印）の 4 つ。案内だけ（守りは各画面と DB） -->
+    <nav class="site-nav" id="site-nav" aria-label="ページの移動" hidden></nav>
     <div class="topbar-inner">
       <div class="brand">
         <span class="brand-sub">A.I.KEN Studio</span>

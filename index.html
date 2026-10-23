@@ -15,6 +15,16 @@
 <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
 <link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=IBM+Plex+Sans+JP:wght@400;500;600;700&amp;display=swap">
 <link rel="stylesheet" href="/studio.css">
+<link rel="stylesheet" href="/site-nav.css">
+<style>
+  /* 固定したヘッダーの高さの初期値（--topbar-h）：上に画面の間の移動の帯（site-nav。45px）を足したあとの実測（2026-10-23）。
+     studio.css の値は、帯の無い案内のページ（about.html）・管理コンソールと共通なので、このページの中だけで上書きする。
+     選択子は :root だけ（重みを上げない）。実際の高さは topbar-height.js が入れ直す */
+  :root { --topbar-h: calc(123px + env(safe-area-inset-top)); } /* 561〜899px。実測 122.6px */
+  @media (min-width: 900px) { :root { --topbar-h: calc(114px + env(safe-area-inset-top)); } }
+  @media (max-width: 560px) { :root { --topbar-h: calc(102px + env(safe-area-inset-top)); } }
+  @media (orientation: landscape) and (max-height: 500px) { :root { --topbar-h: 0px; } } /* 横向きは固定しない（studio.css と同じ） */
+</style>
 </head>
 <body>
 <div id="status" class="center-card" role="status"><p class="muted">読み込み中…</p></div>
@@ -75,40 +85,24 @@
 
 <div id="app" hidden>
   <header class="topbar">
+    <!-- 画面の間の移動（Canvas・マイページ・講師ページ・管理ページ。共通の部品 site-nav.js・site-nav.css）。
+         どれを出すかは /me の区分（role）で決める（案内だけ。守りは各画面が自分で権限を確かめる）。区分が分かるまでは隠す -->
+    <nav class="site-nav" id="site-nav" aria-label="ページの移動" hidden></nav>
     <div class="topbar-inner">
       <div class="brand">
         <span class="brand-sub">A.I.KEN Studio</span>
         <h1>マイページ</h1>
-        <!-- とても狭い幅（360px 以下）でボタンが多いときだけ、題名の代わりに見せる小さな犬のマーク（題名は読み上げには残す） -->
-        <picture class="brand-mark" aria-hidden="true">
-          <source srcset="/img/aiken-logo-white.png" media="(prefers-color-scheme: dark)">
-          <img src="/img/aiken-logo.png" alt="" width="34" height="24">
-        </picture>
       </div>
-      <!-- 右側：区分の印 →（講師の画面）→（管理コンソール）→［Canvas］→［ログアウト］。
-           講師の画面・管理コンソール・Canvas は別のタブで開く（同じタブで移ると、マイページの「離れたらログアウト」が働くため）。
-           どのボタンを出すかは /me の区分（role）で決める（見た目だけ。守りは各画面が自分で権限を確かめる）。
-           アイコンは Lucide（ISC License。Copyright (c) Lucide Icons and Contributors）の graduation-cap・settings・log-out の線をそのまま使う
-           （canvas-app/node_modules/lucide-react 1.59.0 の dist/esm/icons から写した） -->
+      <!-- 右側：区分の印 →［ログアウト］ -->
       <div class="account" id="account">
         <span id="me-role" class="badge" hidden></span>
-        <a class="icon-btn tool" id="instructor-link" href="/instructor" target="_blank" rel="noopener noreferrer" aria-label="講師の画面（別のタブ）" title="講師の画面" hidden>
-          <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true" focusable="false"><path d="M21.42 10.922a1 1 0 0 0-.019-1.838L12.83 5.18a2 2 0 0 0-1.66 0L2.6 9.08a1 1 0 0 0 0 1.832l8.57 3.908a2 2 0 0 0 1.66 0z"/><path d="M22 10v6"/><path d="M6 12.5V16a6 3 0 0 0 12 0v-3.5"/></svg>
-        </a>
-        <a class="icon-btn tool" id="admin-link" href="/admin" target="_blank" rel="noopener noreferrer" aria-label="管理コンソール（別のタブ）" title="管理コンソール" hidden>
-          <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true" focusable="false"><path d="M9.671 4.136a2.34 2.34 0 0 1 4.659 0 2.34 2.34 0 0 0 3.319 1.915 2.34 2.34 0 0 1 2.33 4.033 2.34 2.34 0 0 0 0 3.831 2.34 2.34 0 0 1-2.33 4.033 2.34 2.34 0 0 0-3.319 1.915 2.34 2.34 0 0 1-4.659 0 2.34 2.34 0 0 0-3.32-1.915 2.34 2.34 0 0 1-2.33-4.033 2.34 2.34 0 0 0 0-3.831A2.34 2.34 0 0 1 6.35 6.051a2.34 2.34 0 0 0 3.319-1.915"/><circle cx="12" cy="12" r="3"/></svg>
-        </a>
-        <a class="btn primary" id="canvas-link" href="/canvas?autologin=1" target="_blank" rel="noopener noreferrer" aria-label="Canvas を開く（別のタブ）">Canvas</a>
-        <button type="button" class="btn logout" id="logout-btn" aria-label="ログアウト" title="ログアウト">
-          <svg class="logout-icon" width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true" focusable="false"><path d="m16 17 5-5-5-5"/><path d="M21 12H9"/><path d="M9 21H5a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h4"/></svg>
-          <span class="logout-label">ログアウト</span>
-        </button>
+        <button type="button" class="btn logout" id="logout-btn">ログアウト</button>
       </div>
     </div>
   </header>
 
   <main class="content">
-    <!-- 残りの主カード：残り → 段階・期間 → Canvas を開く。読み上げ・Tab の順もこのとおり -->
+    <!-- 残りの主カード：残り → 段階・期間。読み上げ・Tab の順もこのとおり（Canvas への入口はヘッダーの上の帯） -->
     <section class="card hero" id="hero" aria-labelledby="credits-title">
       <div class="card-head">
         <h2 id="credits-title" tabindex="-1">残りクレジット</h2>

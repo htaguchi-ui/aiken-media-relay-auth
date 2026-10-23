@@ -13,6 +13,7 @@
 <link rel="preconnect" href="https://fonts.googleapis.com">
 <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
 <link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=IBM+Plex+Sans+JP:wght@400;500;600;700&amp;display=swap">
+<link rel="stylesheet" href="/site-nav.css">
 <style>
   :root {
     --accent: #26396E; --accent-hover: #1B2B55; --on-accent: #FFFFFF;
@@ -122,7 +123,8 @@
 
   /* ---- 上部の帯（画面の上に固定。見た目は管理コンソール admin.html と同じ）---- */
   /* --topbar-h ＝ 固定したヘッダーの高さ（ノッチ分を含む）。ヘッダーの下に隠れてはいけない部品（お知らせ・移動先）はこの 1 か所の値で下げる */
-  :root { --topbar-h: calc(82px + env(safe-area-inset-top)); } /* 561〜899px。実測 82px */
+  /* 実測は、上に画面の間の移動の帯（site-nav。45px）を足したあとの高さ（2026-10-23 測り直し。帯なしは 45px 引いた値） */
+  :root { --topbar-h: calc(127px + env(safe-area-inset-top)); } /* 561〜899px。実測 127px */
   html { scroll-padding-top: var(--topbar-h); }
   .sticky-top { position: sticky; top: 0; z-index: 20; background: var(--bg); } /* お知らせの余白から後ろの本文が透けないよう、背景は画面の地の色 */ /* ヘッダーとお知らせを 1 つの箱にして貼り付ける（お知らせが増えても、ヘッダーの高さの変数に頼らない） */
   .topbar { background: var(--surface); border-bottom: 1px solid var(--line); padding-top: env(safe-area-inset-top); line-height: 1.5; }
@@ -146,8 +148,9 @@
   .account .who { display: flex; align-items: center; gap: 8px; min-width: 0; }
   .account .btn { flex: none; white-space: nowrap; }
   #me-email { max-width: 260px; font-size: 13px; }
+  .site-nav { --site-nav-max: 960px; } /* 画面の間の移動（site-nav.css）の横の位置を、下の .topbar-inner にそろえる */
   @media (min-width: 900px) {
-    :root { --topbar-h: calc(69px + env(safe-area-inset-top)); } /* 900px 以上。実測 69px */
+    :root { --topbar-h: calc(114px + env(safe-area-inset-top)); } /* 900px 以上。実測 114px */
     .topbar-inner { flex-wrap: nowrap; }
     .brand { flex: none; flex-direction: row-reverse; align-items: baseline; gap: 12px; white-space: nowrap; }
     .brand h1 { font-size: 20px; }
@@ -155,9 +158,9 @@
     .account { gap: 12px; }
     .account .btn { min-height: 40px; border-radius: 10px; font-weight: 600; }
   }
-  /* スマホの幅（560px 以下）：詰めて常に表示する。小さい見出しは隠し、1 行目は題名とログアウト、2 行目はメール・区分。実測 82px */
+  /* スマホの幅（560px 以下）：詰めて常に表示する。小さい見出しは隠し、1 行目は題名とログアウト、2 行目はメール・区分。実測 127px（帯を含む） */
   @media (max-width: 560px) {
-    :root { --topbar-h: calc(82px + env(safe-area-inset-top)); }
+    :root { --topbar-h: calc(127px + env(safe-area-inset-top)); }
     .topbar-inner { padding: 8px 16px; gap: 4px 12px; }
     .topbar .brand-sub { display: none; }
     .brand { order: 1; }
@@ -349,6 +352,9 @@
 <div id="app" hidden>
   <div class="sticky-top">
   <header class="topbar">
+    <!-- 画面の間の移動（共通の部品 site-nav.js・site-nav.css）。講師は Canvas・マイページ・講師ページ、管理者として動いているときは
+         管理ページも（is_admin() の答えで決める。案内だけ。守りは各画面と DB）。読み込みが済むまでは隠す -->
+    <nav class="site-nav" id="site-nav" aria-label="ページの移動" hidden></nav>
     <div class="topbar-inner">
       <div class="brand">
         <span class="brand-sub">A.I.KEN Studio</span>

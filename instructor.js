@@ -55,6 +55,7 @@ import {
   stageTimeline,
   undoView,
 } from "./stage-lib.js";
+import { renderSiteNav } from "./site-nav.js";
 
 // 他のサイトに埋め込まれて操作させられるのを防ぐ（マイページ・管理コンソールと同じ）
 if (window.top !== window.self) {
@@ -189,6 +190,7 @@ function hideContent(message = "ログアウトしています…") {
   $("me-email").textContent = "";
   $("me-email").removeAttribute("title");
   $("me-role").textContent = "";
+  renderSiteNav($("site-nav"), null, "instructor");
   $("denied-email").textContent = "";
   $("view").replaceChildren();
   $("notice").replaceChildren();
@@ -419,6 +421,8 @@ async function load({ fromApp = false } = {}) {
     const role = $("me-role");
     role.textContent = state.isAdmin ? "管理者" : "講師";
     role.className = `badge ${state.isAdmin ? "admin" : "instructor"}`;
+    // 画面の間の移動：区分の印と同じ is_admin() の答えで決める（管理者として動いているときだけ管理ページも。案内だけ）
+    renderSiteNav($("site-nav"), state.isAdmin ? "admin" : "instructor", "instructor");
     render();
     show("app");
   } finally {

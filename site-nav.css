@@ -1,0 +1,36 @@
+/* 画面の間の移動（site-nav.js）の見た目。マイページ（index.html）・講師ページ（instructor.html）・管理ページ（admin.html）で共通。
+   ヘッダー（.topbar）のいちばん上の細い帯。色は各ページの変数（--accent・--accent-soft・--text-2・--line-soft など。3 つのページで同じ名前）。
+   今いる画面は、管理コンソールで選んだ行と同じ組（--accent-soft の淡い地と --accent の下線）で示す。ほかの画面は文字だけのリンク。
+   Canvas だけは主ボタン（.btn.primary）と同じ塗り（--accent の地に --on-accent の文字。明るい配色は紺の地に白の文字で約 11:1、
+   暗い配色は淡い青の地に濃紺の文字で約 9.5:1。どちらも 7:1 以上）にして目立たせる。今いる画面の印（淡い地＋下線）とは、塗りの濃さと下線の有無で見分けがつく（2026-10-23 田口さんの決定）。
+   押せる範囲は 44px（見た目は 36px。上下の 4px の余白まで広げる。管理コンソール・マイページのヘッダーのボタンと同じ作り）。
+   横の位置は各ページのヘッダーの中身にそろえる：--site-nav-max（中身の最大の幅）・--site-nav-pad（左右の余白）を各ページの CSS で上書きする */
+.site-nav { --site-nav-max: 880px; --site-nav-pad: 20px; border-bottom: 1px solid var(--line-soft); }
+.site-nav-list {
+  list-style: none; margin: 0 auto; max-width: var(--site-nav-max); padding: 4px var(--site-nav-pad);
+  display: flex; flex-wrap: nowrap; align-items: center; gap: 4px;
+}
+.site-nav-list > li { flex: none; min-width: 0; display: flex; }
+.site-nav-item {
+  position: relative; display: inline-flex; align-items: center; justify-content: center; min-width: 0; min-height: 36px; padding: 0 12px;
+  border-radius: 8px; font-size: 14px; font-weight: 600; line-height: 1.3; color: var(--text-2); text-decoration: none; white-space: nowrap;
+}
+/* 省略（…）は中の文字だけ。リンク自身に overflow を付けると、押せる範囲を広げた ::after が切れて 36px になる */
+.site-nav-label { min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+a.site-nav-item::after { content: ""; position: absolute; inset: -4px 0; } /* 見た目は 36px、押せる範囲は 44px */
+a.site-nav-item:hover { background: var(--accent-soft); color: var(--accent-soft-text); }
+a.site-nav-item.primary { background: var(--accent); color: var(--on-accent); font-weight: 700; }
+a.site-nav-item.primary:hover { background: var(--accent-hover); color: var(--on-accent); }
+.site-nav-item[aria-current="page"] { background: var(--accent-soft); color: var(--accent-soft-text); font-weight: 700; box-shadow: inset 0 -2px 0 var(--accent); }
+/* スマホの幅：帯の幅を等分して並べる（4 つでも 1 行。320px でも文字が切れないことを写真で確かめた） */
+@media (max-width: 560px) {
+  .site-nav { --site-nav-pad: 16px; }
+  .site-nav-list { display: grid; grid-auto-flow: column; grid-auto-columns: minmax(0, 1fr); gap: 2px; }
+  .site-nav-list > li { display: block; }
+  .site-nav-item { display: flex; width: 100%; padding: 0 4px; }
+}
+/* とても狭い幅（320px など）：左右の余白を 8px に詰め、文字を 13px に（16px のままだと「講師ページ」「管理ページ」が … で切れる） */
+@media (max-width: 359.98px) {
+  .site-nav { --site-nav-pad: 8px; }
+  .site-nav-item { font-size: 13px; padding: 0 2px; }
+}
