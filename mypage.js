@@ -35,7 +35,7 @@ import {
   roleBadgeClass,
   shouldReloadOnReturn,
 } from "./mypage-lib.js";
-import { renderSiteNav } from "./site-nav.js";
+import { fillIcons, renderSiteNav } from "./site-nav.js";
 
 // 他のサイトに埋め込まれて操作させられるのを防ぐ（GitHub Pages では frame-ancestors を指定できないため。admin.js と同じ）
 if (window.top !== window.self) {
@@ -564,6 +564,8 @@ window.addEventListener("pageshow", (e) => {
 $("login-btn").addEventListener("click", () => signIn());
 // 小さな「別のアカウントでログイン」：Google のアカウントを選ぶ画面を出す（ログイン後に替えるときは、ログアウトしてからここ）
 $("login-other-btn").addEventListener("click", () => signIn({ selectAccount: true }));
+// ヘッダーの［ログアウト］のアイコン（スマホの幅で出す。形は site-nav.js）
+fillIcons();
 $("logout-btn").addEventListener("click", signOut);
 $("denied-logout-btn").addEventListener("click", signOut);
 $("failed-logout-btn").addEventListener("click", signOut);

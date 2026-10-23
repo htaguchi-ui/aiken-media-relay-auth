@@ -55,7 +55,7 @@ import {
   stageTimeline,
   undoView,
 } from "./stage-lib.js";
-import { renderSiteNav } from "./site-nav.js";
+import { fillIcons, renderSiteNav } from "./site-nav.js";
 
 // 他のサイトに埋め込まれて操作させられるのを防ぐ（マイページ・管理コンソールと同じ）
 if (window.top !== window.self) {
@@ -190,6 +190,7 @@ function hideContent(message = "ログアウトしています…") {
   $("me-email").textContent = "";
   $("me-email").removeAttribute("title");
   $("me-role").textContent = "";
+  $("me-role").title = "";
   renderSiteNav($("site-nav"), null, "instructor");
   $("denied-email").textContent = "";
   $("view").replaceChildren();
@@ -421,6 +422,8 @@ async function load({ fromApp = false } = {}) {
     const role = $("me-role");
     role.textContent = state.isAdmin ? "管理者" : "講師";
     role.className = `badge ${state.isAdmin ? "admin" : "instructor"}`;
+    // メール（管理者として動いているときは期限の説明も）は画面に出さず、区分の印の title に置く（2026-10-23 田口さん：説明の文字は消す）
+    role.title = $("me-email").textContent;
     // 画面の間の移動：区分の印と同じ is_admin() の答えで決める（管理者として動いているときだけ管理ページも。案内だけ）
     renderSiteNav($("site-nav"), state.isAdmin ? "admin" : "instructor", "instructor");
     render();
@@ -445,6 +448,8 @@ async function reloadStatus() {
 // 呼ぶか」を選ぶだけで、管理者・講師の判定は DB が決める。この画面は登録を作れず、管理コンソールの Google のログインも始めない。
 // 古い管理コンソールの鍵（aiken-studio-admin-auth）は読まない。
 
+/** 管理者として動いているときの［ログアウト］の title：管理コンソールのログインだけを終え、共有のログイン（マイページ・Canvas）は残す */
+const MSG_END_ADMIN_CONSOLE = "管理コンソールのログインだけを終えます（マイページ・Canvas のログインはそのまま）";
 const MSG_ADMIN_CONSOLE_NEEDED = "管理者として講師ページを使うには、管理コンソールでログインしてから開いてください。";
 // ログインの画面でだけ、管理者向けの案内の前に置く（講師が迷わないように。田口さん 2026-10-23）
 const MSG_TEACHER_LOGIN_FIRST = "講師の方は上の［Google でログイン］から入ってください。";
@@ -535,7 +540,9 @@ async function chooseClient(hasShared) {
 function enterAdminMode(r) {
   adminSession = { client: r.client, expiresAt: r.expiresAt, userId: r.userId };
   adminHint = null;
-  $("logout-btn").textContent = "管理コンソールのログインを終える";
+  // ボタンの文字は「ログアウト」のまま（短く。2026-10-23 田口さん）。何が起きるかは title と読み上げの名前で伝える
+  $("logout-btn").title = MSG_END_ADMIN_CONSOLE;
+  $("logout-btn").setAttribute("aria-label", `ログアウト：${MSG_END_ADMIN_CONSOLE}`);
   adminTimer = setInterval(checkAdminExpiry, 30000);
   // スリープ・背面のタブではタイマーが遅れるので、前に出たときにも確かめる
   document.addEventListener("visibilitychange", () => {
@@ -571,6 +578,7 @@ async function checkAdminExpiry() {
     if (r.ok && r.userId === adminSession.userId) {
       adminSession.expiresAt = r.expiresAt;
       $("me-email").textContent = adminWho();
+      $("me-role").title = adminWho();
       return false;
     }
     leaveAdmin(MSG_ADMIN_CONSOLE_EXPIRED);
@@ -1344,6 +1352,8 @@ window.addEventListener("pageshow", (e) => {
 $("login-btn").addEventListener("click", () => signIn());
 // 小さな「別のアカウントでログイン」：Google のアカウントを選ぶ画面を出す（ログイン後に替えるときは、ログアウトしてからここ）
 $("login-other-btn").addEventListener("click", () => signIn({ selectAccount: true }));
+// ヘッダーの［ログアウト］のアイコン（スマホの幅で出す。形は site-nav.js）
+fillIcons();
 $("logout-btn").addEventListener("click", signOut);
 $("denied-logout-btn").addEventListener("click", signOut);
 $("failed-logout-btn").addEventListener("click", signOut);

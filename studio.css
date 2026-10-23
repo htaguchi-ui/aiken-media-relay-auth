@@ -182,6 +182,13 @@ html { scroll-padding-top: var(--topbar-h); }
   .account .btn { font-size: 14px; }
 }
 
+/* マイページのヘッダーの 1 段（帯 .site-nav がある .topbar-inner だけ）：区分の印は広い幅（900px 以上）だけ。
+   題名「マイページ」の幅（実測：20px で 100px・22px で 109px・18px で 90px）より題名の欄が狭いときは、題名を読み上げだけに残す */
+@media (max-width: 899.98px) { .topbar-inner:has(> .site-nav) .account .badge { display: none; } }
+@media (min-width: 900px) { @container brand (max-width: 101.98px) { .brand h1 { position: absolute; width: 1px; height: 1px; padding: 0; margin: -1px; overflow: hidden; clip: rect(0, 0, 0, 0); white-space: nowrap; border: 0; } } }
+@media (min-width: 561px) and (max-width: 899.98px) { @container brand (max-width: 110.98px) { .brand h1 { position: absolute; width: 1px; height: 1px; padding: 0; margin: -1px; overflow: hidden; clip: rect(0, 0, 0, 0); white-space: nowrap; border: 0; } } }
+@media (max-width: 560px) { @container brand (max-width: 91.98px) { .brand h1 { position: absolute; width: 1px; height: 1px; padding: 0; margin: -1px; overflow: hidden; clip: rect(0, 0, 0, 0); white-space: nowrap; border: 0; } } }
+
 /* 横向きのスマホ（高さが低い）：画面を圧迫するので固定しない */
 @media (orientation: landscape) and (max-height: 500px) {
   :root { --topbar-h: 0px; }

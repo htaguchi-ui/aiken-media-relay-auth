@@ -1,5 +1,7 @@
 // 画面の間の移動（Canvas・マイページ・講師ページ・管理ページ）。マイページ（mypage.js）・講師ページ（instructor.js）・管理ページ（admin.js）の
-// ヘッダーのいちばん上に、同じ並びで出す（2026-10-23 田口さん）。見た目は site-nav.css。
+// ヘッダーの 1 段の右側（題名の右・ログアウトなどの左）に、同じ並びで出す（2026-10-23 田口さん）。見た目は site-nav.css。
+// スマホの幅では Canvas もアイコンだけ（名前は aria-label・title）。ヘッダーのボタン・管理コンソールの左のメニューのアイコンも、
+// ここの形（SITE_ICONS）を fillIcons で入れる（形と出典の表示を 1 か所にまとめる）。
 // どのリンクを出すかは、各画面がすでにサーバーから受け取っている区分（role）だけで決める。新しい問い合わせはしない。
 // これは案内だけで、守りではない（各画面と DB が、開いた先で自分で権限を確かめる）。
 // 今いる画面は aria-current="page" の印にして、リンクにしない。Canvas だけは主ボタンの色で目立たせ、別のタブで開く。
@@ -22,7 +24,10 @@ export const SITE_PAGES = [
  * そのまま写した（canvas-app/node_modules/lucide-react 1.59.0 の dist/esm/icons から）。
  * workflow：Canvas の画面の印（canvas-app/src/icons.ts の canvas）／house：マイページ（トップ。2026-10-23 田口さん「ホーム（家）の形」）／
  * graduation-cap・settings：2026-10-19 のマイページのヘッダーの講師の画面・管理コンソールのボタンと同じ。
- * 4 つとも Lucide の LICENSE の「Feather から派生したアイコン」の一覧には無いので、ISC License だけが掛かる。許諾の文（lucide-react 1.59.0 の LICENSE から）：
+ * log-out：ヘッダーの［ログアウト］（スマホの幅ではアイコンだけ）／circle-user-round：管理コンソールのアカウントのボタン（Canvas のアカウントの印と同じ）／users・calendar-days・sliders-horizontal：管理コンソールの左のメニューの
+ * ［名簿］［回］［設定］（歯車は管理ページの印に使っているので、設定は Canvas の設定と同じ sliders-horizontal）。
+ * log-out だけは Lucide の LICENSE の「Feather から派生したアイコン」の一覧にあるので、下の MIT License も掛かる。ほかは ISC License だけ。
+ * 許諾の文（lucide-react 1.59.0 の LICENSE から）：
  *
  * ISC License
  *
@@ -64,12 +69,77 @@ export const SITE_ICONS = {
     ],
     ["circle", { cx: "12", cy: "12", r: "3" }],
   ],
+  "circle-user-round": [
+    ["path", { d: "M17.925 20.056a6 6 0 0 0-11.851.001" }],
+    ["circle", { cx: "12", cy: "11", r: "4" }],
+    ["circle", { cx: "12", cy: "12", r: "10" }],
+  ],
+  "log-out": [
+    ["path", { d: "m16 17 5-5-5-5" }],
+    ["path", { d: "M21 12H9" }],
+    ["path", { d: "M9 21H5a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h4" }],
+  ],
+  users: [
+    ["path", { d: "M16 21v-2a4 4 0 0 0-4-4H6a4 4 0 0 0-4 4v2" }],
+    ["path", { d: "M16 3.128a4 4 0 0 1 0 7.744" }],
+    ["path", { d: "M22 21v-2a4 4 0 0 0-3-3.87" }],
+    ["circle", { cx: "9", cy: "7", r: "4" }],
+  ],
+  "calendar-days": [
+    ["path", { d: "M8 2v3" }],
+    ["path", { d: "M16 2v3" }],
+    ["rect", { x: "3", y: "3", width: "18", height: "18", rx: "2" }],
+    ["path", { d: "M3 9h18" }],
+    ["path", { d: "M8 13h.01" }],
+    ["path", { d: "M12 13h.01" }],
+    ["path", { d: "M16 13h.01" }],
+    ["path", { d: "M8 17h.01" }],
+    ["path", { d: "M12 17h.01" }],
+    ["path", { d: "M16 17h.01" }],
+  ],
+  "sliders-horizontal": [
+    ["path", { d: "M10 5H3" }],
+    ["path", { d: "M12 19H3" }],
+    ["path", { d: "M14 3v4" }],
+    ["path", { d: "M16 17v4" }],
+    ["path", { d: "M21 12h-9" }],
+    ["path", { d: "M21 19h-5" }],
+    ["path", { d: "M21 5h-7" }],
+    ["path", { d: "M8 10v4" }],
+    ["path", { d: "M8 12H3" }],
+  ],
 };
+
+/*
+ * log-out に掛かる MIT License（lucide-react 1.59.0 の LICENSE から。log-out は "The following Lucide icons are derived from the Feather project" の一覧にある）：
+ *
+ * The MIT License (MIT) (for the icons listed above)
+ *
+ * Copyright (c) 2013-present Cole Bemis
+ *
+ * Permission is hereby granted, free of charge, to any person obtaining a copy
+ * of this software and associated documentation files (the "Software"), to deal
+ * in the Software without restriction, including without limitation the rights
+ * to use, copy, modify, merge, publish, distribute, sublicense, and/or sell
+ * copies of the Software, and to permit persons to whom the Software is
+ * furnished to do so, subject to the following conditions:
+ *
+ * The above copyright notice and this permission notice shall be included in all
+ * copies or substantial portions of the Software.
+ *
+ * THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND, EXPRESS OR
+ * IMPLIED, INCLUDING BUT NOT LIMITED TO THE WARRANTIES OF MERCHANTABILITY,
+ * FITNESS FOR A PARTICULAR PURPOSE AND NONINFRINGEMENT. IN NO EVENT SHALL THE
+ * AUTHORS OR COPYRIGHT HOLDERS BE LIABLE FOR ANY CLAIM, DAMAGES OR OTHER
+ * LIABILITY, WHETHER IN AN ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING FROM,
+ * OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE
+ * SOFTWARE.
+ */
 
 const SVG_NS = "http://www.w3.org/2000/svg";
 
 /** アイコンの svg（飾り。読み上げない・フォーカスしない）。size は表示の大きさ（px） */
-function siteIcon(doc, name, size) {
+export function siteIcon(doc, name, size) {
   const svg = doc.createElementNS(SVG_NS, "svg");
   const attrs = {
     class: "site-nav-icon", width: String(size), height: String(size), viewBox: "0 0 24 24", fill: "none", stroke: "currentColor",
@@ -82,6 +152,17 @@ function siteIcon(doc, name, size) {
     svg.append(part);
   }
   return svg;
+}
+
+/**
+ * HTML に置いた data-icon="名前"（data-icon-size="大きさ"。無ければ 20）の要素の先頭に、そのアイコンを入れる（1 回だけ）。
+ * ヘッダーの［ログアウト］・管理コンソールの左のメニューなど、静的なボタンのアイコンに使う
+ */
+export function fillIcons(root = document, doc = document) {
+  for (const slot of root.querySelectorAll("[data-icon]")) {
+    if (slot.querySelector("svg")) continue;
+    slot.prepend(siteIcon(doc, slot.getAttribute("data-icon"), Number(slot.getAttribute("data-icon-size")) || 20));
+  }
 }
 
 /**
@@ -129,8 +210,9 @@ export function renderSiteNav(nav, role, current, doc = document) {
       }
     }
     node.className = ["site-nav-item", item.primary ? "primary" : "", item.iconOnly ? "icon-only" : ""].filter(Boolean).join(" ");
-    // アイコンだけのものは、マウスを重ねると名前が出る（title）
+    // アイコンだけのものは、マウスを重ねると名前が出る（title）。Canvas もスマホの幅ではアイコンだけになるので title を付ける
     if (item.iconOnly) node.setAttribute("title", item.label);
+    else if (item.newTab) node.setAttribute("title", `${item.label}（別のタブ）`);
     if (item.icon) node.append(siteIcon(doc, item.icon, item.iconOnly ? 20 : 18));
     // 文字は中の span に入れる（省略の overflow を中だけに付け、リンクの押せる範囲〔::after〕を切らない）。
     // アイコンだけのものは、見えない読み上げ用の文字にする（今いる画面の span は aria-label を持てないので、名前はこの文字で伝える）

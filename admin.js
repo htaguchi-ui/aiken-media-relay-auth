@@ -175,7 +175,7 @@ import {
   MAX_DAY_STAGE_TOTAL,
   MAX_STAGES_PER_DAY,
 } from "./stage-lib.js";
-import { renderSiteNav } from "./site-nav.js";
+import { fillIcons, renderSiteNav } from "./site-nav.js";
 
 // 他のサイトに埋め込まれて操作させられるのを防ぐ（GitHub Pages では frame-ancestors を指定できないため）
 if (window.top !== window.self) {
@@ -6778,10 +6778,9 @@ async function main() {
     return;
   }
 
-  $("me-email").textContent = myEmail;
   // 画面の間の移動：is_admin() が true のときだけここに来るので、管理者の並び（案内だけ）
   renderSiteNav($("site-nav"), "admin", "admin");
-  $("me-btn").setAttribute("aria-label", `アカウント（${myEmail}）：メール・確認の時刻・ログアウト`);
+  // ヘッダーにメールは出さない（2026-10-23 田口さん：説明の文字は消す）。アカウントのボタンの読み上げの名前とシートにある
   $("account-btn").setAttribute("aria-label", `アカウントと更新（${myEmail}）`);
   show("app");
   renderAll();
@@ -6790,12 +6789,13 @@ async function main() {
   renderAll();
 }
 
+// アカウントのボタン・左のメニューのアイコン（形は site-nav.js）
+fillIcons();
 $("login-btn").addEventListener("click", signIn);
 $("denied-logout-btn").addEventListener("click", signOut);
 $("reload-btn").setAttribute("data-reload", "");
 $("reload-btn").addEventListener("click", onReload);
 $("account-btn").addEventListener("click", openAccount);
-$("me-btn").addEventListener("click", openAccount);
 $("tab-roster").addEventListener("click", () => switchTab("roster"));
 $("tab-cohorts").addEventListener("click", () => switchTab("cohorts"));
 $("tab-settings").addEventListener("click", () => switchTab("settings"));

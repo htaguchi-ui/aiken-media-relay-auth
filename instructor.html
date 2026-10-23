@@ -123,8 +123,8 @@
 
   /* ---- 上部の帯（画面の上に固定。見た目は管理コンソール admin.html と同じ）---- */
   /* --topbar-h ＝ 固定したヘッダーの高さ（ノッチ分を含む）。ヘッダーの下に隠れてはいけない部品（お知らせ・移動先）はこの 1 か所の値で下げる */
-  /* 実測は、上に画面の間の移動の帯（site-nav。45px）を足したあとの高さ（2026-10-23 測り直し。帯なしは 45px 引いた値） */
-  :root { --topbar-h: calc(127px + env(safe-area-inset-top)); } /* 561〜899px。実測 127px */
+  /* 実測は、ヘッダーを 1 段にした（帯を題名の右に並べた）あとの高さ（2026-10-23 測り直し） */
+  :root { --topbar-h: calc(61px + env(safe-area-inset-top)); } /* 561〜899px。実測 61px */
   html { scroll-padding-top: var(--topbar-h); }
   .sticky-top { position: sticky; top: 0; z-index: 20; background: var(--bg); } /* お知らせの余白から後ろの本文が透けないよう、背景は画面の地の色 */ /* ヘッダーとお知らせを 1 つの箱にして貼り付ける（お知らせが増えても、ヘッダーの高さの変数に頼らない） */
   .topbar { background: var(--surface); border-bottom: 1px solid var(--line); padding-top: env(safe-area-inset-top); line-height: 1.5; }
@@ -140,35 +140,30 @@
     .sticky-top { background: var(--bg); -webkit-backdrop-filter: none; backdrop-filter: none; border-bottom: 0; }
     .topbar { background: var(--surface); }
   }
-  .topbar-inner { max-width: 960px; margin: 0 auto; display: flex; flex-wrap: wrap; align-items: center; justify-content: space-between; gap: 8px 16px; padding: 14px 20px; }
-  .brand { display: flex; flex-direction: column; gap: 2px; min-width: 0; }
-  .brand-sub { font-size: 12px; color: var(--muted); letter-spacing: 0.04em; }
-  .brand h1 { font-size: 22px; font-weight: 700; letter-spacing: 0.01em; }
-  .account { display: flex; align-items: center; justify-content: flex-end; gap: 8px 12px; min-width: 0; font-size: 13px; color: var(--muted); }
+  .topbar-inner { max-width: 960px; margin: 0 auto; display: flex; align-items: center; justify-content: space-between; gap: 12px; padding: 12px 20px; }
+  .brand { display: flex; min-width: 0; }
+  .brand h1 { font-size: 20px; font-weight: 700; letter-spacing: 0.01em; }
+  .account { display: flex; align-items: center; justify-content: flex-end; gap: 12px; min-width: 0; font-size: 13px; color: var(--muted); }
   .account .who { display: flex; align-items: center; gap: 8px; min-width: 0; }
   .account .btn { flex: none; white-space: nowrap; }
-  #me-email { max-width: 260px; font-size: 13px; }
-  .site-nav { --site-nav-max: 960px; } /* 画面の間の移動（site-nav.css）の横の位置を、下の .topbar-inner にそろえる */
+  /* メール・管理者として操作中の説明は見せない（読み上げには残す。区分の印の title にも同じ文） */
+  #me-email { position: absolute; width: 1px; height: 1px; padding: 0; margin: -1px; overflow: hidden; clip: rect(0, 0, 0, 0); white-space: nowrap; border: 0; }
   @media (min-width: 900px) {
-    :root { --topbar-h: calc(114px + env(safe-area-inset-top)); } /* 900px 以上。実測 114px */
-    .topbar-inner { flex-wrap: nowrap; }
-    .brand { flex: none; flex-direction: row-reverse; align-items: baseline; gap: 12px; white-space: nowrap; }
-    .brand h1 { font-size: 20px; }
-    .brand-sub { font-size: 13px; letter-spacing: 0; }
-    .account { gap: 12px; }
+    :root { --topbar-h: calc(65px + env(safe-area-inset-top)); } /* 900px 以上。実測 65px */
     .account .btn { min-height: 40px; border-radius: 10px; font-weight: 600; }
   }
-  /* スマホの幅（560px 以下）：詰めて常に表示する。小さい見出しは隠し、1 行目は題名とログアウト、2 行目はメール・区分。実測 127px（帯を含む） */
+  /* 区分の印は広い幅（900px 以上）だけ。題名「講師の画面」の幅（実測：20px で 101px・18px で 91px）より題名の欄が狭いときは、
+     題名を読み上げだけに残す（site-nav.css の container: brand） */
+  @media (max-width: 899.98px) { .account .who { display: none; } }
+  @media (min-width: 561px) { @container brand (max-width: 102.98px) { .brand h1 { position: absolute; width: 1px; height: 1px; padding: 0; margin: -1px; overflow: hidden; clip: rect(0, 0, 0, 0); white-space: nowrap; border: 0; } } }
+  @media (max-width: 560px) { @container brand (max-width: 92.98px) { .brand h1 { position: absolute; width: 1px; height: 1px; padding: 0; margin: -1px; overflow: hidden; clip: rect(0, 0, 0, 0); white-space: nowrap; border: 0; } } }
+  /* スマホの幅（560px 以下）：1 段に詰める。区分の印は隠し、［ログアウト］はアイコンだけ（site-nav.css の .hdr-btn） */
   @media (max-width: 560px) {
-    :root { --topbar-h: calc(127px + env(safe-area-inset-top)); }
-    .topbar-inner { padding: 8px 16px; gap: 4px 12px; }
-    .topbar .brand-sub { display: none; }
-    .brand { order: 1; }
+    :root { --topbar-h: calc(57px + env(safe-area-inset-top)); } /* 実測 57px */
+    .topbar-inner { padding: 8px 16px; gap: 8px; }
     .brand h1 { font-size: 18px; }
-    .account { display: contents; } /* メールの行（.who）とログアウトを、題名の行と並べ替えるため */
-    .account .btn { order: 2; min-height: 40px; }
-    .account .who { order: 3; flex: 1 1 100%; }
-    #me-email { max-width: none; }
+    .account { gap: 8px; }
+    .account .btn { min-height: 40px; }
   }
   /* 横向きのスマホ（高さが低い）：画面を圧迫するので固定しない */
   @media (orientation: landscape) and (max-height: 500px) {
@@ -352,20 +347,23 @@
 <div id="app" hidden>
   <div class="sticky-top">
   <header class="topbar">
-    <!-- 画面の間の移動（共通の部品 site-nav.js・site-nav.css）。講師は Canvas・マイページ・講師ページ、管理者として動いているときは
-         管理ページも（is_admin() の答えで決める。案内だけ。守りは各画面と DB）。読み込みが済むまでは隠す -->
-    <nav class="site-nav" id="site-nav" aria-label="ページの移動" hidden></nav>
+    <!-- ヘッダーは 1 段（2026-10-23 田口さん）：左に題名、右に 画面の間の移動（共通の部品 site-nav.js・site-nav.css）→ 区分の印 →［ログアウト］。
+         帯は、講師は Canvas・マイページ・講師ページ、管理者として動いているときは管理ページも（is_admin() の答えで決める。案内だけ。
+         守りは各画面と DB）。読み込みが済むまでは隠す。説明の文字（「A.I.KEN Studio」・メール・管理者として操作中の説明）は見せない：
+         メールと管理者の期限の説明は、読み上げ用の文字（#me-email）と区分の印の title に残す。スマホの幅では区分の印を隠し、
+         ［ログアウト］はアイコンだけ（名前は title と読み上げ。管理者として動いているときは title・読み上げの名前で「管理コンソールのログインを終える」と伝える） -->
     <div class="topbar-inner">
       <div class="brand">
-        <span class="brand-sub">A.I.KEN Studio</span>
         <h1>講師の画面</h1>
       </div>
+      <nav class="site-nav" id="site-nav" aria-label="ページの移動" hidden></nav>
       <div class="account">
+        <!-- 読み上げ用の文字（メール・管理者の期限の説明）は、区分の印（.who。狭い幅で隠す）の外に置き、どの幅でも読み上げに残す -->
+        <span id="me-email" class="tabular"></span>
         <div class="who">
-          <span id="me-email" class="ellipsis tabular"></span>
           <span id="me-role" class="badge"></span>
         </div>
-        <button type="button" class="btn compact" id="logout-btn">ログアウト</button>
+        <button type="button" class="btn compact hdr-btn" id="logout-btn" data-icon="log-out" title="ログアウト"><span class="hdr-label">ログアウト</span></button>
       </div>
     </div>
   </header>
