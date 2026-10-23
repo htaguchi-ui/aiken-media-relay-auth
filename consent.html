@@ -4,6 +4,10 @@
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
 <meta name="robots" content="noindex">
+<!-- CSP（SEC-03。2026-10-23）：スクリプトは自分のサイトの JS（redirect-check.js・auth-storage.js）・版を固定した supabase-js・下のインラインのモジュール（hash）だけ。
+     通信は Supabase（Auth・RPC）だけ。フォームは送らない。埋め込みの禁止（frame-ancestors）は meta では効かないので vercel.json の全体の見出しで付ける。
+     下のインラインのモジュール（type="module" のスクリプト）の中身を 1 文字でも変えたら hash が合わなくなり、この画面が動かなくなる。公開の build（tools/build-site.mjs）が食い違いで止め、正しい hash を知らせるので、ここを直す -->
+<meta http-equiv="Content-Security-Policy" content="default-src 'none'; script-src 'self' https://cdn.jsdelivr.net/npm/@supabase/supabase-js@2.117.2/dist/umd/supabase.js 'sha256-IKG7bpAZBcHazhxXps8KDRo9UjQSgxn+h++0qhzEo/A='; connect-src https://tnzwhwitgnzoehbjrmoy.supabase.co; style-src 'unsafe-inline'; img-src 'self'; object-src 'none'; base-uri 'none'; form-action 'none'">
 <title>A.I.KEN Studio ログイン</title>
 <!-- supabase-js は版を固定し、改ざんされていないことを integrity（SRI）で確かめてから使う（window.supabase） -->
 <script src="https://cdn.jsdelivr.net/npm/@supabase/supabase-js@2.117.2/dist/umd/supabase.js" integrity="sha384-Rj26LVGvoeRVR6+mwQmFfcR3QOBEwT+ZmuCWpuiqeTzJpCs0ER4ITAWGb4Hiy3Ok" crossorigin="anonymous"></script>

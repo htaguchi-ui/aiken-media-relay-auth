@@ -1,0 +1,2 @@
+# 公開の中身（tools/build-site.mjs が作る。Vercel の build の中で作り、commit しない）
+/dist/
