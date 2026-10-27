@@ -1,0 +1,89 @@
+/* 「Google でログイン」のボタン（W-GSI。2026-10-27）。Google の Sign in with Google のブランドの決まりに合わせる。
+   https://developers.google.com/identity/branding-guidelines
+   - 明るい表示：地 #FFFFFF・枠 #747775 1px（内側）・文字 #1F1F1F。暗い表示：地 #131314・枠 #8E918F 1px・文字 #E3E3E3（OS の配色に従う）
+   - 標準色の G のロゴは必ず入れる。色・形・大きさ（20px）は変えない。ロゴは Google が配る資料（signin-assets.zip の Android + Web・PNG @4x）の
+     「Show text=No」の G を、ボタンの地の色ごと 28px 四方に切り出した画像（img/google-g-light.png・img/google-g-dark.png。ロゴの外は地の色だけ）。
+     同じ origin の画像なので、CSP の img-src 'self' で読める（data: は使わない）
+   - 文字は 14px/20px・Medium（500）。Google Sans は配れないので、下の字体の並びで代える（無ければ OS の字体）
+   - 並び：左右の余白 12px（枠の 1px を含む）・ロゴ 20px・ロゴと文字の間 10px
+   使い方（この CSS を読む画面：マイページ・講師・管理。許可の画面は読み込めないので、同じ規則を <style> の中に置く。scripts/gsi_button_test.ts が一致を確かめる）:
+     <button type="button" class="gsi-btn" id="login-btn"><span class="gsi-g" aria-hidden="true"></span><span class="gsi-label">Google でログイン</span></button> */
+.gsi-btn {
+  --gsi-fill: #ffffff;
+  --gsi-stroke: #747775;
+  --gsi-text: #1f1f1f;
+  --gsi-state: #303030;
+  --gsi-focus: #0b57d0;
+  --gsi-logo: url("/img/google-g-light.png");
+  appearance: none;
+  -webkit-appearance: none;
+  box-sizing: border-box;
+  position: relative;
+  overflow: hidden;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  gap: 10px;
+  width: 100%;
+  min-height: 44px;
+  margin: 0;
+  padding: 0 11px;
+  border: 1px solid var(--gsi-stroke);
+  border-radius: 999px;
+  background: var(--gsi-fill);
+  color: var(--gsi-text);
+  font: 500 14px/20px "Google Sans", "Google Sans Text", Roboto, "Hiragino Sans", "Hiragino Kaku Gothic ProN", "Noto Sans JP", "Yu Gothic UI", Meiryo, system-ui, sans-serif;
+  white-space: nowrap;
+  cursor: pointer;
+}
+@media (prefers-color-scheme: dark) {
+  .gsi-btn {
+    --gsi-fill: #131314;
+    --gsi-stroke: #8e918f;
+    --gsi-text: #e3e3e3;
+    --gsi-state: #e3e3e3;
+    --gsi-focus: #a8c7fa;
+    --gsi-logo: url("/img/google-g-dark.png");
+  }
+}
+.gsi-btn .gsi-g {
+  flex: none;
+  width: 28px;
+  height: 28px;
+  margin: -4px;
+  background: var(--gsi-logo) center / 28px 28px no-repeat;
+}
+.gsi-btn .gsi-label {
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+.gsi-btn::after {
+  content: "";
+  position: absolute;
+  inset: 0;
+  background: var(--gsi-state);
+  opacity: 0;
+  pointer-events: none;
+  transition: opacity 0.2s;
+}
+.gsi-btn:hover:not(:disabled)::after {
+  opacity: 0.08;
+}
+.gsi-btn:active:not(:disabled)::after,
+.gsi-btn:focus-visible:not(:disabled)::after {
+  opacity: 0.12;
+}
+.gsi-btn:focus-visible {
+  outline: 2px solid var(--gsi-focus);
+  outline-offset: 2px;
+}
+.gsi-btn:disabled {
+  opacity: 0.55;
+  cursor: default;
+}
+@media (prefers-reduced-motion: reduce) {
+  .gsi-btn::after {
+    transition: none;
+  }
+}

@@ -17,11 +17,12 @@
 <!-- ログインの確かめ・RPC の接続先へ先につないでおく（supabase-js の fetch は資格情報なしなので crossorigin） -->
 <link rel="preconnect" href="https://tnzwhwitgnzoehbjrmoy.supabase.co" crossorigin>
 <link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=IBM+Plex+Sans+JP:wght@400;500;600;700&amp;display=swap">
-<link rel="stylesheet" href="/r/fddc64fe78ec/studio.css">
-<link rel="stylesheet" href="/r/fddc64fe78ec/site-nav.css">
-<link rel="modulepreload" href="/r/fddc64fe78ec/auth-storage.js">
-<link rel="modulepreload" href="/r/fddc64fe78ec/mypage-lib.js">
-<link rel="modulepreload" href="/r/fddc64fe78ec/site-nav.js">
+<link rel="stylesheet" href="/r/2acbe1f5e596/studio.css">
+<link rel="stylesheet" href="/r/2acbe1f5e596/gsi-button.css">
+<link rel="stylesheet" href="/r/2acbe1f5e596/site-nav.css">
+<link rel="modulepreload" href="/r/2acbe1f5e596/auth-storage.js">
+<link rel="modulepreload" href="/r/2acbe1f5e596/mypage-lib.js">
+<link rel="modulepreload" href="/r/2acbe1f5e596/site-nav.js">
 <style>
   /* 固定したヘッダーの高さの初期値（--topbar-h）：ヘッダーを 1 段にした（帯を題名の右に並べた）あとの実測（2026-10-23）。
      studio.css の値は、帯の無い案内のページ（about.html）・管理コンソールと共通なので、このページの中だけで上書きする。
@@ -63,7 +64,7 @@
   </picture>
   <h1 id="login-title">A.I.KEN Studio</h1>
   <p class="warn-text" id="login-note" role="status" hidden></p>
-  <button type="button" class="btn primary big" id="login-btn">Google でログイン</button>
+  <button type="button" class="gsi-btn" id="login-btn"><span class="gsi-g" aria-hidden="true"></span><span class="gsi-label">Google でログイン</span></button>
   <button type="button" class="alt-login" id="login-other-btn">別のアカウントでログイン</button>
   <nav class="links" aria-label="方針と規約">
     <a href="https://a-i-ken.com/privacy/">プライバシーポリシー</a>
@@ -382,7 +383,7 @@
   <!-- 読み上げだけに知らせる（手動の更新の結果など。数字の更新は必要なときだけ） -->
   <p class="sr-only" id="live" role="status" aria-live="polite"></p>
 </div>
-<script type="module" src="/r/fddc64fe78ec/topbar-height.js"></script>
-<script type="module" src="/r/fddc64fe78ec/mypage.js"></script>
+<script type="module" src="/r/2acbe1f5e596/topbar-height.js"></script>
+<script type="module" src="/r/2acbe1f5e596/mypage.js"></script>
 </body>
 </html>

@@ -6,6 +6,10 @@
 // 1932 のあと is_admin() は管理コンソールのセッションだけ）。講師の区分の人は、今までどおり共有のログインで動く。
 // 表示はすべて textContent / createElement で組み立てる（データを innerHTML に入れない）。
 // supabase-js は instructor.html で版を固定し、integrity（SRI）を付けて読み込む（window.supabase）
+// ページは 2 つ：回の一覧（/instructor）と、ある回の操作（/instructor/c/<回の ID>）。同じ instructor.html・instructor.js が、道（ROUTE）を見て描き分ける
+// （設計書 docs/design-instructor-split.md）。ログイン・ログアウト・管理者として使う部分は道に関わらず同じ
+import { backToListLink, cohortListView, cohortMissingView } from "./instructor-list.js";
+import { extraTargets, groupCohorts, instructorRoute } from "./instructor-list-lib.js";
 import {
   ADMIN_CONSOLE_STORAGE_KEY,
   adminConsoleExpired,
@@ -146,6 +150,19 @@ function el(tag, props = {}, ...children) {
 
 // 講師の画面は 016 の DB でだけ働く（016 の前は「まだ使えません」）。DB の日本語の hint をそのまま出す
 setStageDbReady(true);
+
+/** このページの道：一覧（/instructor）か、ある回の操作（/instructor/c/<回の ID>）か。ページを移るたびにこの画面は作り直されるので、開いたときに 1 回だけ読む */
+const ROUTE = instructorRoute(location.pathname);
+
+/**
+ * 一覧のページだけが使う画面の状態（描き直しても保つ。回の操作のページは使わない）。
+ * endedOpen：「終わった回」の折りたたみを開いているか（最初は閉じる）／closed：クローズ済みと分かった回の ID／stages：回ごとの { studentCount, stageLabel }
+ * （どちらもあとから届く追加の情報。読めなかった回は入れない）／seq：追加の情報の読み込みの通し番号（古い応答を捨てる）
+ */
+const listUi = { endedOpen: false, closed: new Set(), stages: new Map(), seq: 0 };
+
+/** 回の操作のページで、URL の回が自分の一覧に無いとき true（その回の RPC を 1 つも呼ばない。pinRouteCohort が決める） */
+let routeMissing = false;
 
 /** 画面の状態 */
 const state = {
@@ -431,10 +448,98 @@ async function loadStatus() {
   return true;
 }
 
+/**
+ * 回を道（ROUTE）に固定する。共有の loadCohorts は、選んでいる回が一覧に無いと最初の回を黙って選ぶので、そのすぐあとで呼ぶ
+ * （操作のページで URL と違う回に化けさせない）。
+ * 操作のページ：URL の回が自分の一覧にあれば、その回に固定する。無ければ（形が正しくない・担当から外れた・回が消えた）回を持たず、
+ * 「開けない回」の印を立てて、前の回の段階・クローズの状態・選んだ受講者を消す（その回の RPC は 1 つも呼ばない）。
+ * 一覧のページ：回を持たない（段階の読み込みは呼ばれない）
+ */
+function pinRouteCohort() {
+  routeMissing = false;
+  if (ROUTE.kind !== "cohort") {
+    state.cohortId = null;
+    return;
+  }
+  if (ROUTE.cohortId !== null && state.cohorts.some((c) => c.id === ROUTE.cohortId)) {
+    state.cohortId = ROUTE.cohortId;
+    return;
+  }
+  routeMissing = true;
+  state.cohortId = null;
+  state.status = null;
+  state.statusError = "";
+  state.closeStatus = null;
+  state.closeStatusError = "";
+  statusSeq++;
+  closeStatusSeq++;
+  state.selected.clear();
+}
+
+/** 操作のページで、書き込みを送ってよいか：URL の回と、この画面が持っている回が同じで、開けない回の印が立っていないとき */
+function operableCohort() {
+  return ROUTE.kind === "cohort" && !routeMissing && state.cohortId !== null && state.cohortId === ROUTE.cohortId;
+}
+
+/**
+ * 一覧のページの追加の情報（読むだけ。待たない。失敗しても知らせず、その行を空けておく）。
+ * Day2 の回は cohort_close_status でクローズ済みかを聞き（並べ方に要る）、上の段の先頭の数件は cohort_stage_status で受講者の数と今の段階を聞く。
+ * 古い応答（ログアウトの途中・もう 1 回の読み込み・部品やログインの切り替わり）は入れない。届いたら一覧を描き直す
+ */
+async function loadListExtras() {
+  if (ROUTE.kind !== "list" || ending) return;
+  const seq = ++listUi.seq;
+  const client = activeClient();
+  const identity = closeIdentity();
+  const { closeIds, stageIds } = extraTargets(groupCohorts(state.cohorts));
+  for (const id of [...listUi.stages.keys()]) if (!stageIds.includes(id)) listUi.stages.delete(id);
+  const live = () => !ending && ROUTE.kind === "list" && seq === listUi.seq && client === activeClient() && cohortCloseSameIdentity(closeIdentity(), identity);
+  const changed = [];
+  const read = async (name, id, use) => {
+    let response;
+    try {
+      response = await rpc(name, { p_cohort_id: id });
+    } catch {
+      return;
+    }
+    if (!live() || response?.error || !state.cohorts.some((c) => c.id === id)) return;
+    try {
+      if (use(response.data) !== false) changed.push(id);
+    } catch {
+      // 形が違う応答は、その行を空けておく
+    }
+  };
+  await Promise.all([
+    ...closeIds.map((id) =>
+      read("cohort_close_status", id, (data) => {
+        const status = normalizeCohortCloseStatus(data, id);
+        if (!status) return false; // 読めなかった：クローズ済みとも、そうでないとも決めない
+        if (status.state === "closed") listUi.closed.add(id);
+        else listUi.closed.delete(id);
+      })
+    ),
+    ...stageIds.map((id) =>
+      read("cohort_stage_status", id, (data) => {
+        const s = normalizeStageStatus(data);
+        // Day ごとの枠の回は段階も受講者の数も出さない
+        if (s.creditMode !== "stage") return false;
+        listUi.stages.set(id, { studentCount: s.students.length, stageLabel: s.current ? stageName(s.current) : "" });
+      })
+    ),
+  ]);
+  if (changed.length && live()) render();
+}
+
 /** 担当の回を読み、読めたら選んでいる回の段階の状態を読む（段階の状態は回が決まってから）。{ c, ok }（c は loadCohorts の答え） */
 async function loadCohortsAndStatus(first = null) {
   const c = await loadCohorts(first);
   if (ending || c.stale || c.error) return { c, ok: false };
+  pinRouteCohort();
+  // 一覧のページ・開けない回：回ごとの読み込み（段階・クローズ・タイマー）は 1 つも呼ばない。一覧は追加の情報だけ、待たずに読み始める
+  if (state.cohortId === null) {
+    if (ROUTE.kind === "list") void loadListExtras();
+    return { c, ok: true };
+  }
   return { c, ok: await loadStatusAndClose() };
 }
 
@@ -499,7 +604,9 @@ async function load({ fromApp = false, cohorts = null } = {}) {
     // メール（管理者として動いているときは期限の説明も）は画面に出さず、区分の印の title に置く（2026-10-23 田口さん：説明の文字は消す）
     role.title = $("me-email").textContent;
     // 画面の間の移動：区分の印と同じ is_admin() の答えで決める（管理者として動いているときだけ管理ページも。案内だけ）
-    renderSiteNav($("site-nav"), state.isAdmin ? "admin" : "instructor", "instructor");
+    // 回の操作のページだけ、メニューの「講師ページ」を一覧へのリンクにする（ハイライトはそのまま。一覧のページは今までどおりリンクにしない）
+    const navArgs = ROUTE.kind === "cohort" ? [document, { linkCurrent: true }] : [];
+    renderSiteNav($("site-nav"), state.isAdmin ? "admin" : "instructor", "instructor", ...navArgs);
     render();
     show("app");
   } finally {
@@ -526,7 +633,7 @@ async function reloadStatus() {
 const MSG_END_ADMIN_CONSOLE = "管理コンソールのログインだけを終えます（マイページ・Canvas のログインはそのまま）";
 const MSG_ADMIN_CONSOLE_NEEDED = "管理者として講師ページを使うには、管理コンソールでログインしてから開いてください。";
 // ログインの画面でだけ、管理者向けの案内の前に置く（講師が迷わないように。田口さん 2026-10-23）
-const MSG_TEACHER_LOGIN_FIRST = "講師の方は上の［Google でログイン］から入ってください。";
+const MSG_TEACHER_LOGIN_FIRST = "講師の方は、上の「Google でログイン」のボタンから入ってください。";
 const MSG_ADMIN_CONSOLE_EXPIRED ="管理コンソールのログインから 12 時間たちました。管理コンソールでもう一度ログインしてから開いてください。";
 
 /** 管理者として動いている間の { client, expiresAt, userId }（講師・ログイン前は null） */
@@ -733,9 +840,22 @@ function stopUndoTimer() {
   undoTimer = null;
 }
 
+/** 回の一覧のページの［最新にする］・「この回は開けません」の［最新にする］ */
+async function refreshFromView() {
+  clearNotice();
+  await load({ fromApp: true });
+}
+
 function render() {
   if (ending) return; // ログアウトの途中・ほかのタブでログアウトしたあとは描かない
   const view = $("view");
+  if (ROUTE.kind === "cohort" && routeMissing) {
+    // URL の回が自分の一覧に無い：操作のボタン・入力欄ごと消して、札だけを出す（書き込みも読み込みもその回では行わない）
+    stopUndoTimer();
+    document.title = "この回は開けません – A.I.KEN Studio 講師の画面";
+    view.replaceChildren(cohortMissingView({ el, cohortId: ROUTE.cohortId, onRefresh: refreshFromView }));
+    return;
+  }
   if (!state.cohorts.length) {
     stopUndoTimer();
     view.replaceChildren(
@@ -748,7 +868,26 @@ function render() {
     );
     return;
   }
-  const parts = [cohortCard()];
+  if (ROUTE.kind === "list") {
+    // 回の一覧のページ：1 つの回が 1 つのリンク。実施中とこれからは上、終わった回は折りたたみ。操作・時計は持たない
+    stopUndoTimer();
+    document.title = "回の一覧 – A.I.KEN Studio 講師の画面";
+    view.replaceChildren(
+      cohortListView({
+        el,
+        groups: groupCohorts(state.cohorts, listUi.closed),
+        extras: listUi,
+        endedOpen: listUi.endedOpen,
+        onToggleEnded: (open) => (listUi.endedOpen = open),
+        onRefresh: refreshFromView,
+        busy: state.busy,
+      }),
+    );
+    return;
+  }
+  const here = state.cohorts.find((x) => x.id === state.cohortId);
+  document.title = `${here?.name ?? here?.id ?? "回の操作"} – A.I.KEN Studio 講師の画面`;
+  const parts = [backToListLink({ el }), cohortCard()];
   const s = state.status;
   if (!s) {
     parts.push(
@@ -778,7 +917,7 @@ function cohortCard() {
     c.day1Date ? `Day1 ${formatMonthDay(c.day1Date)}` : null,
     c.day2Date ? `Day2 ${formatMonthDay(c.day2Date)}` : null,
   ].filter(Boolean).join(" · ");
-  const picker = state.cohorts.length > 1
+  const picker = ROUTE.kind !== "cohort" && state.cohorts.length > 1
     ? el(
       "div",
       { className: "cohort-pick" },
@@ -1281,7 +1420,7 @@ function updateGrantButton() {
 const cohortCloseAction = createCohortCloseAction({
   rpc,
   confirm: confirmDialog,
-  canStart: () => !state.busy && !ending,
+  canStart: () => !state.busy && !ending && operableCohort(),
   onBusy: (busy) => {
     state.busy = busy;
     if (busy) {
@@ -1319,7 +1458,7 @@ function changeCohortClose(kind) {
 
 /** 操作の通信中は二重に押せないようにして、終わったら描き直す */
 async function withBusy(fn) {
-  if (state.busy) return;
+  if (state.busy || !operableCohort()) return; // 操作のページで、URL の回と画面の回が同じときだけ送る（それ以外は 1 つも送らない）
   state.busy = true;
   statusSeq++; // 操作の前に始まった読み込みの応答は、操作のあとの状態を上書きしないよう捨てる
   render();

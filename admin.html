@@ -15,14 +15,15 @@
 <!-- ログインの確かめ・RPC の接続先へ先につないでおく（supabase-js の fetch は資格情報なしなので crossorigin） -->
 <link rel="preconnect" href="https://tnzwhwitgnzoehbjrmoy.supabase.co" crossorigin>
 <link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=IBM+Plex+Sans+JP:wght@400;500;600;700&amp;display=swap">
-<link rel="stylesheet" href="/r/fddc64fe78ec/studio.css">
-<link rel="stylesheet" href="/r/fddc64fe78ec/site-nav.css">
-<link rel="modulepreload" href="/r/fddc64fe78ec/admin-lib.js">
-<link rel="modulepreload" href="/r/fddc64fe78ec/auth-storage.js">
-<link rel="modulepreload" href="/r/fddc64fe78ec/cohort-close-lib.js">
-<link rel="modulepreload" href="/r/fddc64fe78ec/site-nav.js">
-<link rel="modulepreload" href="/r/fddc64fe78ec/stage-lib.js">
-<link rel="modulepreload" href="/r/fddc64fe78ec/storage-usage-lib.js">
+<link rel="stylesheet" href="/r/2acbe1f5e596/studio.css">
+<link rel="stylesheet" href="/r/2acbe1f5e596/gsi-button.css">
+<link rel="stylesheet" href="/r/2acbe1f5e596/site-nav.css">
+<link rel="modulepreload" href="/r/2acbe1f5e596/admin-lib.js">
+<link rel="modulepreload" href="/r/2acbe1f5e596/auth-storage.js">
+<link rel="modulepreload" href="/r/2acbe1f5e596/cohort-close-lib.js">
+<link rel="modulepreload" href="/r/2acbe1f5e596/site-nav.js">
+<link rel="modulepreload" href="/r/2acbe1f5e596/stage-lib.js">
+<link rel="modulepreload" href="/r/2acbe1f5e596/storage-usage-lib.js">
 <style>
   /* 色・余白・角丸・ボタン・上部の帯の土台は共通の studio.css（マイページと同じ値。--muted・--low-text は重要な数字が明暗とも 7:1 になる値）。
      ここには管理コンソールだけが使う変数と、一覧・表・シートの形を置く（同じ名前の部品は、ここが後に読まれるので勝つ） */
@@ -887,7 +888,7 @@
   <h1 id="login-title">A.I.KEN Studio</h1>
   <p class="brand-sub" id="login-sub">管理コンソール</p>
   <p class="warn-text" id="login-note" role="status" hidden></p>
-  <button type="button" class="btn primary big" id="login-btn">Google でログイン</button>
+  <button type="button" class="gsi-btn" id="login-btn"><span class="gsi-g" aria-hidden="true"></span><span class="gsi-label">Google でログイン</span></button>
   <nav class="links" aria-label="方針と規約">
     <a href="https://a-i-ken.com/privacy/">プライバシーポリシー</a>
     <a href="/terms.html">利用規約</a>
@@ -1003,7 +1004,7 @@
 
 <dialog id="sheet" class="sheet" aria-labelledby="sheet-title"></dialog>
 <dialog id="ask" class="ask" aria-labelledby="ask-title"></dialog>
-<script type="module" src="/r/fddc64fe78ec/topbar-height.js"></script>
-<script type="module" src="/r/fddc64fe78ec/admin.js"></script>
+<script type="module" src="/r/2acbe1f5e596/topbar-height.js"></script>
+<script type="module" src="/r/2acbe1f5e596/admin.js"></script>
 </body>
 </html>

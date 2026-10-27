@@ -1,16 +1,15 @@
 // 画面の間の移動（Canvas・マイページ・講師ページ・管理ページ）。マイページ（mypage.js）・講師ページ（instructor.js）・管理ページ（admin.js）の
 // ヘッダーの 1 段の右側（題名の右・ログアウトなどの左）に、同じ並びで出す（2026-10-23 田口さん）。見た目は site-nav.css。
-// スマホの幅では Canvas もアイコンだけ（名前は aria-label・title）。ヘッダーのボタン・管理コンソールの左のメニューのアイコンも、
+// ページの切り替えは文字のリンク。狭い幅では右側の開閉ボタンにまとめる。ヘッダーのボタン・管理コンソールの左のメニューのアイコンも、
 // ここの形（SITE_ICONS）を fillIcons で入れる（形と出典の表示を 1 か所にまとめる）。
 // どのリンクを出すかは、各画面がすでにサーバーから受け取っている区分（role）だけで決める。新しい問い合わせはしない。
 // これは案内だけで、守りではない（各画面と DB が、開いた先で自分で権限を確かめる）。
-// 今いる画面は aria-current="page" の印にして、リンクにしない。Canvas だけは主ボタンの色で目立たせ、別のタブで開く。
+// 今いる画面は aria-current="page" の印にして、リンクにしない。Canvas は別のタブで開く。
 // マイページ・講師ページ・管理ページは同じタブで移る（2026-10-23 田口さんの決定）。
-// 見た目（2026-10-23 田口さんの依頼）：マイページ・講師ページ・管理ページはアイコンだけ（名前は aria-label・title と読み上げ用の文字）。
-// Canvas は文字の左に、Canvas の画面の印（ノードを線でつないだ形）と同じアイコン。
+// 見た目（2026-10-26 田口さんの依頼）：ロゴの右に文字だけの案内、狭い幅はハンバーガー。
 // 表示は createElement / createElementNS / textContent で組み立てる（innerHTML を使わない）。
 
-/** 並びの順（この順で出す）。href は同じサイトの中だけ。primary：主ボタンの色で目立たせる／newTab：別のタブで開く */
+/** 並びの順。href は同じサイトの中だけ。newTab：別のタブで開く。旧 primary/iconOnly は項目の互換用。 */
 export const SITE_PAGES = [
   // Canvas は、ログインしていなければ自動でログインを始める印（autologin=1）を付ける（マイページの今までのリンクと同じ。2026-10-19 田口さん）
   { key: "canvas", label: "Canvas", href: "/canvas?autologin=1", primary: true, newTab: true, icon: "workflow" },
@@ -179,50 +178,146 @@ export function siteNavAccess(role) {
 /** 出す項目（並びの順）。current は今いる画面の key。{ key, label, href, current } の配列 */
 export function siteNavItems(role, current) {
   const access = siteNavAccess(role);
-  return SITE_PAGES.filter((p) => access[p.key]).map((p) => ({ ...p, current: p.key === current }));
+  const items = SITE_PAGES.filter((p) => access[p.key]).map((p) => ({ ...p, current: p.key === current }));
+  // B の提出画面にも現在地を出す。ほかの画面・区分に移動先を追加しない。
+  if (current === "submissions" && access.instructor) {
+    items.push({ key: "submissions", label: "提出ページ", href: "/submissions", current: true });
+  }
+  return items;
 }
+
+// 再描画・ログアウトのたびに前の文書リスナーと監視を外す。
+const navCleanup = new WeakMap();
+let nextNavId = 0;
 
 /**
  * nav（<nav class="site-nav">）の中身を作り直す。出す項目が無いとき（区分が不明・ログアウトの途中）は中身を消して隠す。
- * doc は document（試験では小さな DOM を渡す）
+ * doc は document（試験では小さな DOM を渡す）。
+ * options.linkCurrent：true のとき、今いる項目もリンクにする（aria-current="page" の印とハイライトはそのまま）。
+ * 講師ページの「回の操作」のページが、メニューの「講師ページ」を回の一覧へのリンクにするために渡す（設計 docs/design-instructor-split.md 2.6）。
+ * 渡さない（既定）ページの描き方は、この引数を足す前と同じ
  */
-export function renderSiteNav(nav, role, current, doc = document) {
+export function renderSiteNav(nav, role, current, doc = document, { linkCurrent = false } = {}) {
   if (!nav) return;
+  navCleanup.get(nav)?.();
+  navCleanup.delete(nav);
   const items = siteNavItems(role, current);
   const list = doc.createElement("ul");
   list.className = "site-nav-list";
+  list.id = `site-nav-links-${++nextNavId}`;
   for (const item of items) {
     const li = doc.createElement("li");
     let node;
-    if (item.current) {
+    if (item.current && !linkCurrent) {
       node = doc.createElement("span");
       node.setAttribute("aria-current", "page");
     } else {
       node = doc.createElement("a");
       node.setAttribute("href", item.href);
+      if (item.current) node.setAttribute("aria-current", "page");
       if (item.newTab) {
         node.setAttribute("target", "_blank");
         node.setAttribute("rel", "noopener noreferrer");
         node.setAttribute("aria-label", `${item.label}（別のタブ）`);
-      } else if (item.iconOnly) {
-        // アイコンだけのリンク：読み上げの名前は画面の名前
-        node.setAttribute("aria-label", item.label);
       }
     }
-    node.className = ["site-nav-item", item.primary ? "primary" : "", item.iconOnly ? "icon-only" : ""].filter(Boolean).join(" ");
-    // アイコンだけのものは、マウスを重ねると名前が出る（title）。Canvas もスマホの幅ではアイコンだけになるので title を付ける
-    if (item.iconOnly) node.setAttribute("title", item.label);
-    else if (item.newTab) node.setAttribute("title", `${item.label}（別のタブ）`);
-    if (item.icon) node.append(siteIcon(doc, item.icon, item.iconOnly ? 20 : 18));
-    // 文字は中の span に入れる（省略の overflow を中だけに付け、リンクの押せる範囲〔::after〕を切らない）。
-    // アイコンだけのものは、見えない読み上げ用の文字にする（今いる画面の span は aria-label を持てないので、名前はこの文字で伝える）
+    node.className = "site-nav-item";
+    if (item.newTab) node.setAttribute("title", `${item.label}（別のタブ）`);
     const label = doc.createElement("span");
-    label.className = item.iconOnly ? "site-nav-sr" : "site-nav-label";
+    label.className = "site-nav-label";
     label.textContent = item.label;
     node.append(label);
     li.append(node);
     list.append(li);
   }
-  nav.replaceChildren(...(items.length ? [list] : []));
+  const toggle = doc.createElement("button");
+  toggle.className = "site-nav-toggle";
+  toggle.setAttribute("type", "button");
+  toggle.setAttribute("aria-label", "ページのメニューを開く");
+  toggle.setAttribute("aria-expanded", "false");
+  toggle.setAttribute("aria-controls", list.id);
+  const icon = doc.createElementNS(SVG_NS, "svg");
+  for (const [key, value] of Object.entries({ viewBox: "0 0 24 24", width: "22", height: "22", fill: "none", stroke: "currentColor", "stroke-width": "1.5", "stroke-linecap": "round", "aria-hidden": "true", focusable: "false" })) icon.setAttribute(key, value);
+  const lines = doc.createElementNS(SVG_NS, "path");
+  lines.setAttribute("d", "M4 6h16M4 12h16M4 18h16");
+  icon.append(lines);
+  toggle.append(icon);
+  nav.replaceChildren(...(items.length ? [toggle, list] : []));
   nav.hidden = items.length === 0;
+  if (!items.length) return;
+
+  // 通常の disclosure navigation。リンクは通常の Tab 順のまま（menu ロールを使わない）。
+  const view = doc.defaultView;
+  const media = view?.matchMedia?.("(max-width: 719.98px)");
+  const bar = nav.closest?.(".topbar-inner");
+  let compact = !!media?.matches;
+  let neededWidth = 0;
+  let open = false;
+  function setOpen(value, returnFocus = false) {
+    open = compact && value;
+    nav.classList.toggle("is-open", open);
+    toggle.setAttribute("aria-expanded", String(open));
+    toggle.setAttribute("aria-label", open ? "ページのメニューを閉じる" : "ページのメニューを開く");
+    list.hidden = compact && !open;
+    if (returnFocus) toggle.focus();
+  }
+  function updateLayout() {
+    const wasCompact = compact;
+    compact = !!media?.matches;
+    if (!compact && bar) {
+      // 720px 以上でも文字拡大や長い見出しでは折り返さずにまとめる。
+      const available = bar.clientWidth;
+      if (wasCompact && neededWidth && available < neededWidth) compact = true;
+      else {
+        nav.classList.remove("is-compact");
+        list.hidden = false;
+        const excess = bar.scrollWidth - available;
+        if (excess > 1) {
+          neededWidth = available + excess + 8;
+          compact = true;
+        }
+      }
+    }
+    nav.classList.toggle("is-compact", compact);
+    // デスクトップへ戻るとき、消えるボタンへフォーカスを残さない。
+    if (wasCompact && !compact && doc.activeElement === toggle) list.querySelector("a")?.focus();
+    setOpen(false);
+  }
+  function onToggle() { setOpen(!open); }
+  function onKey(event) {
+    if (event.key === "Escape" && open) {
+      event.preventDefault();
+      setOpen(false, true);
+    } else if (event.target === toggle && (event.key === "ArrowDown" || event.key === "ArrowUp")) {
+      event.preventDefault();
+      setOpen(true);
+      const links = list.querySelectorAll("a");
+      (event.key === "ArrowUp" ? links[links.length - 1] : links[0])?.focus();
+    }
+  }
+  function onOutside(event) {
+    if (open && !nav.contains(event.target)) setOpen(false);
+  }
+  function onFocus(event) {
+    if (open && !nav.contains(event.target)) setOpen(false);
+  }
+  function onLink(event) {
+    if (event.target.closest?.("a")) setOpen(false);
+  }
+  toggle.addEventListener("click", onToggle);
+  nav.addEventListener("keydown", onKey);
+  list.addEventListener("click", onLink);
+  doc.addEventListener("pointerdown", onOutside);
+  doc.addEventListener("focusin", onFocus);
+  media?.addEventListener?.("change", updateLayout);
+  const observer = bar && view?.ResizeObserver ? new view.ResizeObserver(updateLayout) : null;
+  observer?.observe(bar);
+  updateLayout();
+  navCleanup.set(nav, () => {
+    doc.removeEventListener("pointerdown", onOutside);
+    doc.removeEventListener("focusin", onFocus);
+    media?.removeEventListener?.("change", updateLayout);
+    observer?.disconnect();
+    nav.classList.remove("is-compact", "is-open");
+  });
 }

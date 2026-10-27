@@ -12,6 +12,25 @@
   body { margin: 0; min-height: 100vh; display: grid; place-items: center; padding: 16px;
     background: var(--bg); color: var(--text); font-family: "Hiragino Sans", "Noto Sans JP", system-ui, sans-serif; }
   a { color: var(--link); }
+
+  /* TASK-0233: 既存 style 内だけで共通の帯・細字・下側の影をそろえる。 */
+  :root { --header-card: #ffffff; --header-border: #dadce0; --block-shadow: 0 8px 24px -12px rgba(15, 23, 42, .22); }
+  body { display: block; padding: 92px 20px 48px; font-family: "Hiragino Sans", "Yu Gothic UI", "Noto Sans JP", "Hiragino Kaku Gothic ProN", Meiryo, system-ui, sans-serif; font-weight: 300; line-height: 1.8; }
+  body :where(*) { font-weight: inherit !important; }
+  body :is(h1, h2, h3, h4, h5, h6, strong, b, button, dt, label) { font-weight: 500 !important; }
+  body::before { content: "A.I.KEN Studio"; position: fixed; z-index: 30; top: 0; left: 0; right: 0; box-sizing: border-box; height: 60px; padding: 0 20px 0 80px; display: flex; align-items: center; background: var(--header-card) url("/img/aiken-logo.png") 20px center / 48px 34px no-repeat; border-bottom: 1px solid var(--header-border); color: var(--text); font-size: 15px; font-weight: 500; line-height: 1.5; white-space: nowrap; }
+  main { box-shadow: var(--block-shadow); }
+  @media (prefers-color-scheme: dark) {
+    :root { --header-card: #1e1f20; --header-border: #444746; --block-shadow: 0 10px 28px -12px rgba(0, 0, 0, .5); }
+    body::before { background-image: url("/img/aiken-logo-white.png"); }
+  }
+  @media (max-width: 719.98px) {
+    body { padding-left: 16px; padding-right: 16px; }
+    body::before { padding-left: 72px; padding-right: 16px; background-position-x: 16px; font-size: 14px; }
+  }
+  body > p { box-sizing: border-box; width: 100%; max-width: 880px; margin: 0 auto; padding: 20px 24px; background: var(--header-card); border-left: 1px solid var(--header-border); border-right: 1px solid var(--header-border); box-shadow: var(--block-shadow); }
+  body > p:first-of-type { border-top: 1px solid var(--header-border); border-radius: 16px 16px 0 0; padding-bottom: 8px; }
+  body > p:last-of-type { border-bottom: 1px solid var(--header-border); border-radius: 0 0 16px 16px; padding-top: 8px; }
 </style>
 </head>
 <body>

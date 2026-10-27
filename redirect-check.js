@@ -3,17 +3,20 @@
 
 /**
  * 認可コードを渡してよい https の戻り先（origin の完全一致。サブドメインは許可しない）。
- * origin ごとに、接続元の種類（kind）と、戻り先のパス（path）を持つ。
- * - path がある origin は、パスが完全に一致するときだけ許可する（query は許す。fragment は許さない）
- * - path が無い origin は、origin 全体を許可する
+ * origin ごとに、接続元の種類（kind）と、戻り先の道（パス）を持つ。道が合わない戻り先は許可しない（道を持たない行は何も許可しない）
+ * - paths：道が完全に一致するときだけ許可する
+ * - idPaths：「その道 + ID 1 つ」のときだけ許可する（ID は英数字・. _ ~ - だけ。空・/ を含む・符号化された文字は許可しない）
+ * - どちらも query は許す。fragment は許さない
  * ALLOWED_REDIRECT_ORIGINS と redirectKind は、この表から作る（片方だけに足す誤りを起こさない）。
- * ChatGPT（ウェブ・デスクトップアプリ）と、Claude（claude.ai のウェブ・デスクトップアプリのカスタムコネクタ）。
+ * ChatGPT（ウェブ・デスクトップアプリ）は戻り先の道が 2 つだけ（W-CGPT。2026-10-25）：
+ * /connector_platform_oauth_redirect（接続の戻り）と /connector/oauth/<ID>（プラグイン・コネクタの戻り）。
+ * Claude（claude.ai のウェブ・デスクトップアプリのカスタムコネクタ）。
  * Claude は将来 claude.com に変わる可能性があるため、claude.ai と claude.com の両方を許可する
  */
 export const REDIRECT_TARGETS = {
-  "https://chatgpt.com": { kind: "chatgpt" },
-  "https://claude.ai": { kind: "claude", path: "/api/mcp/auth_callback" },
-  "https://claude.com": { kind: "claude", path: "/api/mcp/auth_callback" },
+  "https://chatgpt.com": { kind: "chatgpt", paths: ["/connector_platform_oauth_redirect"], idPaths: ["/connector/oauth/"] },
+  "https://claude.ai": { kind: "claude", paths: ["/api/mcp/auth_callback"] },
+  "https://claude.com": { kind: "claude", paths: ["/api/mcp/auth_callback"] },
 };
 
 export const ALLOWED_REDIRECT_ORIGINS = Object.keys(REDIRECT_TARGETS);
@@ -24,18 +27,26 @@ export const ALLOWED_REDIRECT_ORIGINS = Object.keys(REDIRECT_TARGETS);
  */
 export const LOOPBACK_HOSTS = ["127.0.0.1", "[::1]", "localhost"];
 
+/** idPaths の ID（1 つの区切りだけ。"." と ".." は URL の解析で道から消えるので、下の文字列の照らしで断る） */
+const ID_SEGMENT = /^[A-Za-z0-9._~-]+$/;
+
+/** 道（URL の解析で整えたあとのパス）が、表の行の paths か idPaths に合うか */
+function pathAllowed(target, pathname) {
+  if (target.paths?.includes(pathname)) return true;
+  return (target.idPaths ?? []).some((p) => pathname.startsWith(p) && ID_SEGMENT.test(pathname.slice(p.length)));
+}
+
 /**
- * https の戻り先に合う表の行を返す（無ければ null）。path がある行は、パスの完全一致だけを許す。
+ * https の戻り先に合う表の行を返す（無ければ null）。道は完全一致（idPaths は「道 + ID 1 つ」）だけを許す。
  * new URL は ".." や "//" を整えてしまうので、入力の文字列のパスも同じであることを確かめる
- * （"/api/mcp/auth_callback/.."・"/api/mcp/../mcp/auth_callback"・"%2F" などの符号化は許さない）
+ * （"/connector/oauth/.."・"/api/mcp/../mcp/auth_callback"・"%2F" などの符号化・バックスラッシュ・タブや改行の混ぜ込みは許さない）
  */
 function matchTarget(url, raw) {
   if (!Object.hasOwn(REDIRECT_TARGETS, url.origin)) return null;
   const target = REDIRECT_TARGETS[url.origin];
-  if (target.path === undefined) return target;
-  if (url.pathname !== target.path || url.hash) return null;
+  if (!pathAllowed(target, url.pathname) || url.hash) return null;
   const rawPath = raw.replace(/^https:\/\/[^/?#]*/i, "").split(/[?#]/)[0];
-  return rawPath === target.path && !raw.includes("#") ? target : null;
+  return rawPath === url.pathname && !raw.includes("#") ? target : null;
 }
 
 export function isAllowedRedirect(raw) {

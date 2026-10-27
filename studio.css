@@ -22,7 +22,7 @@
   --r-pill: 999px;
   /* 押せる範囲（スマホ 44px・広い幅 40px 以上。ここでは全幅で 44px） */
   --ctl-h: 44px;
-  --font: "IBM Plex Sans JP", "Hiragino Sans", "Hiragino Kaku Gothic ProN", "Noto Sans JP", "Yu Gothic UI", Meiryo, system-ui, sans-serif;
+  --font: "Hiragino Sans", "Yu Gothic UI", "Noto Sans JP", "Hiragino Kaku Gothic ProN", Meiryo, system-ui, sans-serif;
 
   --accent: #26396E; --accent-hover: #1B2B55; --on-accent: #FFFFFF;
   --accent-soft: #EEF1F6; --accent-soft-line: #C8D0DE; --accent-soft-text: #22325E;
@@ -346,3 +346,30 @@ ul.models .name { font-weight: 600; }
   .fold > summary::before, .sub-fold > summary::before, .icon-btn[data-tip]::after { transition: none; }
   .icon-btn.busy svg { animation: none; }
 }
+
+/* Canvas 以外の軽い文字・下側の淡い影。講師ページ用の site-nav.css と共通。
+   後続のページ内 CSS の旧 600/700 より優先し、HTML や CSP は変えない。 */
+body { --block-shadow: 0 8px 24px -12px rgba(15, 23, 42, .22); font-family: "Hiragino Sans", "Yu Gothic UI", "Noto Sans JP", "Hiragino Kaku Gothic ProN", Meiryo, system-ui, sans-serif !important; font-weight: 300 !important; }
+body :where(*) { font-weight: inherit !important; }
+body :is(h1, h2, h3, h4, h5, h6, strong, b, button, summary, th, dt, label, .btn, .field-label, .strong, .value, .ov-value, .stage-name, .now-name, .wk-day-name, .st-name) { font-weight: 500 !important; }
+body :is(.card, .center-card, .fold-group, .panel, .section-card) { box-shadow: var(--block-shadow); }
+body .topbar .brand::before { content: ""; display: block; flex: none; width: 48px; height: 34px; background: url("/img/aiken-logo.png") center / contain no-repeat; }
+body .topbar .brand-sub { display: none; }
+body .topbar .topbar-inner { min-height: 60px; padding-top: 8px; padding-bottom: 8px; }
+body .topbar .brand { flex-direction: row; align-items: center; gap: 12px; }
+body .topbar .brand h1 { font-size: 15px; }
+body .topbar .account .btn { border-color: transparent; background: transparent; box-shadow: none; }
+body .content, body .topbar-inner { max-width: 1040px; }
+body:has(.sticky-top) .content, body:has(.sticky-top) .topbar-inner, body:has(.sticky-top) #notice { max-width: 1120px; }
+body:has(.admin-shell) .content { max-width: none; }
+body:has(.admin-shell) .topbar-inner, body .admin-shell, body .selectbar-inner { max-width: 1440px; }
+@media (prefers-color-scheme: dark) {
+  body { --block-shadow: 0 10px 28px -12px rgba(0, 0, 0, .5); }
+  body .topbar .brand::before { background-image: url("/img/aiken-logo-white.png"); }
+}
+
+/* TASK-0233: 左端の表示名は全ページ共通。元の見出しは読み上げ用に残す。 */
+body .topbar .topbar-inner > .brand { min-width: max-content; }
+body .topbar .brand h1 { position: absolute; width: 1px; height: 1px; padding: 0; margin: -1px; overflow: hidden; clip: rect(0, 0, 0, 0); white-space: nowrap; border: 0; }
+body .topbar .brand::after { content: "A.I.KEN Studio"; display: block; flex: none; color: var(--text); font-size: 15px; font-weight: 500; line-height: 1.5; white-space: nowrap; }
+@media (max-width: 719.98px) { body .topbar .brand::after { font-size: 14px; } }

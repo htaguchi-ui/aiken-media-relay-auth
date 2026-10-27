@@ -7,54 +7,73 @@
 <!-- CSP（SEC-03。2026-10-23）：スクリプトは自分のサイトの JS（redirect-check.js・auth-storage.js）・版を固定した supabase-js・下のインラインのモジュール（hash）だけ。
      通信は Supabase（Auth・RPC）だけ。フォームは送らない。埋め込みの禁止（frame-ancestors）は meta では効かないので vercel.json の全体の見出しで付ける。
      下のインラインのモジュール（type="module" のスクリプト）の中身を 1 文字でも変えたら hash が合わなくなり、この画面が動かなくなる。公開の build（tools/build-site.mjs）が食い違いで止め、正しい hash を知らせるので、ここを直す -->
-<meta http-equiv="Content-Security-Policy" content="default-src 'none'; script-src 'self' https://cdn.jsdelivr.net/npm/@supabase/supabase-js@2.117.2/dist/umd/supabase.js 'sha256-IKG7bpAZBcHazhxXps8KDRo9UjQSgxn+h++0qhzEo/A='; connect-src https://tnzwhwitgnzoehbjrmoy.supabase.co; style-src 'unsafe-inline'; img-src 'self'; object-src 'none'; base-uri 'none'; form-action 'none'">
+<meta http-equiv="Content-Security-Policy" content="default-src 'none'; script-src 'self' https://cdn.jsdelivr.net/npm/@supabase/supabase-js@2.117.2/dist/umd/supabase.js 'sha256-ChfIwUMEdbPmJZ0BPj4ImcYemQ/XZqw5kWtTK0/uiDk='; connect-src https://tnzwhwitgnzoehbjrmoy.supabase.co; style-src 'unsafe-inline'; img-src 'self'; object-src 'none'; base-uri 'none'; form-action 'none'">
 <title>A.I.KEN Studio ログイン</title>
 <!-- supabase-js は版を固定し、改ざんされていないことを integrity（SRI）で確かめてから使う（window.supabase） -->
 <script src="https://cdn.jsdelivr.net/npm/@supabase/supabase-js@2.117.2/dist/umd/supabase.js" integrity="sha384-Rj26LVGvoeRVR6+mwQmFfcR3QOBEwT+ZmuCWpuiqeTzJpCs0ER4ITAWGb4Hiy3Ok" crossorigin="anonymous"></script>
 <style>
+  /* 配色・角丸・ボタンは管理コンソール（studio.css・admin.html）と同じ値（W-GSI。2026-10-25）。配色は OS の設定に従う。
+     この画面は CSP の style-src が 'unsafe-inline' だけなので、CSS はこの <style> の中に置く（外部の CSS ファイルは読めない） */
   :root {
-    --bg: #f5f6f8; --card: #ffffff; --text: #1a1a1c; --muted: #5f6368;
-    --primary: #0b57d0; --primary-text: #ffffff; --border: #dadce0; --danger: #b3261e;
+    --bg: #F4F5F8; --card: #FFFFFF; --card-2: #F6F7F9; --text: #16181D; --text-2: #4A505B; --muted: #4C525F;
+    --primary: #26396E; --primary-hover: #1B2B55; --primary-text: #FFFFFF;
+    --border: #E3E6EB; --border-2: #DDE1E7; --input-line: #C9CED6; --danger: #96413A;
   }
   @media (prefers-color-scheme: dark) {
     :root {
-      --bg: #131314; --card: #1e1f20; --text: #e3e3e3; --muted: #a8abaf;
-      --primary: #a8c7fa; --primary-text: #062e6f; --border: #444746; --danger: #f2b8b5;
+      --bg: #0E1220; --card: #161B2B; --card-2: #1C2234; --text: #E8EAF0; --text-2: #C2C7D2; --muted: #A0A7B6;
+      --primary: #A9B9E9; --primary-hover: #C3CFF2; --primary-text: #0E1322;
+      --border: #283048; --border-2: #323B54; --input-line: #3C4661; --danger: #EE968C;
     }
   }
   * { box-sizing: border-box; }
+  html { -webkit-text-size-adjust: 100%; }
+  /* 文字の折り返し：英単語・メールのアドレスを途中で切らない（どうしても入らない長い文字列だけ break-word で折る）。
+     日本語は、行頭に来てはいけない文字（小さい仮名・伸ばす棒・句読点）を守り（line-break: strict）、
+     対応するブラウザでは言葉のまとまりで折る（word-break: auto-phrase）。決まった文は .nb（途中で折らない句）で区切る */
   body {
-    margin: 0; min-height: 100vh; display: grid; place-items: center; padding: 16px;
+    margin: 0; min-height: 100vh; padding: 12vh 16px 32px;
     background: var(--bg); color: var(--text);
-    font-family: "Hiragino Sans", "Noto Sans JP", "Yu Gothic UI", system-ui, sans-serif;
-    line-height: 1.6;
+    font-family: "Hiragino Sans", "Hiragino Kaku Gothic ProN", "Noto Sans JP", "Yu Gothic UI", Meiryo, system-ui, sans-serif;
+    font-size: 15px; line-height: 1.7;
+    line-break: strict; overflow-wrap: break-word; word-break: normal; text-wrap: pretty;
   }
+  @supports (word-break: auto-phrase) { body { word-break: auto-phrase; } }
+  .nb { white-space: nowrap; }
   main {
-    width: 100%; max-width: 420px; background: var(--card); border: 1px solid var(--border);
+    width: 100%; max-width: 440px; margin: 0 auto; background: var(--card); border: 1px solid var(--border);
     border-radius: 16px; padding: 28px 24px;
   }
-  h1 { font-size: 1.15rem; margin: 0 0 12px; }
+  h1 { font-size: 1.2rem; line-height: 1.4; margin: 0 0 12px; text-wrap: balance; }
   p { margin: 0 0 12px; }
   .muted { color: var(--muted); font-size: 0.9rem; }
   .error { color: var(--danger); }
-  .who { padding: 12px; border: 1px solid var(--border); border-radius: 10px; margin: 12px 0 16px; word-break: break-all; }
-  .who dt { color: var(--muted); font-size: 0.9rem; }
-  .who dd { margin: 0 0 8px; font-weight: 600; }
-  .who dd:last-child { margin-bottom: 0; }
-  .who dd.dest { font-size: 1.15rem; }
-  .who .name-note { color: var(--muted); font-size: 0.8rem; font-weight: 400; }
-  /* 許可の前の注意：赤い太字をやめ、ふつうの文字の色と淡い枠で 1 文にまとめる（2026-10-19 田口さん「赤文字がくどい」） */
-  .warn { border: 1px solid var(--border); border-radius: 10px; padding: 10px 12px; margin: 0 0 16px; font-size: 0.9rem; }
-  .warn p { margin: 0 0 6px; color: var(--text); }
+  .who { margin: 12px 0 16px; padding: 12px 14px; border: 1px solid var(--border); border-radius: 12px; background: var(--card-2); }
+  .who dt { color: var(--muted); font-size: 0.85rem; line-height: 1.5; }
+  .who dt:not(:first-child) { margin-top: 10px; padding-top: 10px; border-top: 1px solid var(--border); }
+  .who dd { margin: 2px 0 0; font-weight: 600; overflow-wrap: break-word; }
+  .who dd.dest { font-size: 1rem; }
+  .who dd.dest-addr { margin-top: 0; color: var(--muted); font-size: 0.8rem; font-weight: 400; font-variant-numeric: tabular-nums; }
+  .who .name-note { display: block; color: var(--muted); font-size: 0.8rem; font-weight: 400; line-height: 1.5; }
+  /* 許可の前の注意：短い文を 1 文ずつ別の行にする。赤い太字は使わない（2026-10-19 田口さん「赤文字がくどい」） */
+  .warn { border: 1px solid var(--border); border-radius: 12px; padding: 10px 14px; margin: 0 0 16px; font-size: 0.9rem; line-height: 1.6; }
+  .warn .warn-title { margin: 0 0 4px; font-size: 0.85rem; font-weight: 700; color: var(--text-2); }
+  .warn p { margin: 0 0 4px; color: var(--text); }
   .warn p:last-child { margin-bottom: 0; }
   .actions { display: flex; gap: 12px; flex-wrap: wrap; }
-  button {
-    font: inherit; font-weight: 600; border-radius: 999px; padding: 10px 20px; cursor: pointer;
-    border: 1px solid var(--border); background: transparent; color: var(--text);
+  .actions button { flex: 1 1 140px; }
+  /* 「Google でログイン」のボタン（.gsi-btn）は Google の決まりの見た目なので、ここの共通のボタンの規則から外す */
+  button:not(.gsi-btn) {
+    font: inherit; font-weight: 700; font-size: 15px; line-height: 1.3; min-height: 44px; border-radius: 12px; padding: 0 20px; cursor: pointer;
+    border: 1px solid var(--border-2); background: var(--card); color: var(--text);
   }
+  button:not(.gsi-btn):hover:not(:disabled) { border-color: var(--input-line); }
   button.primary { background: var(--primary); color: var(--primary-text); border-color: var(--primary); }
-  button:disabled { opacity: 0.5; cursor: default; }
-  .link { background: none; border: none; padding: 0; color: var(--primary); font-weight: 400; text-decoration: underline; }
+  button.primary:hover:not(:disabled) { background: var(--primary-hover); border-color: var(--primary-hover); }
+  button:disabled { opacity: 0.55; cursor: not-allowed; }
+  button:focus-visible, a:focus-visible { outline: 2px solid var(--primary); outline-offset: 2px; }
+  button.link { background: none; border: none; padding: 0; min-height: 0; border-radius: 0; color: var(--primary); font-weight: 400; font-size: inherit; text-decoration: underline; text-underline-offset: 3px; white-space: nowrap; }
+  button.link:hover:not(:disabled) { border: none; }
   [hidden] { display: none !important; }
 
   /* ---- ログイン前（#login が出ているとき）だけの見た目：トップ（studio.css の .welcome）と同じ並び。
@@ -64,18 +83,113 @@
   main:has(> #login:not([hidden])) .brand-logo { display: block; width: 120px; margin: 0 auto 24px; }
   main:has(> #login:not([hidden])) .brand-logo img { display: block; width: 120px; height: auto; }
   main:has(> #login:not([hidden])) h1 { font-size: 1.5rem; margin-bottom: 16px; }
-  /* ボタンはトップと同じ紺（ログイン前のボタンだけ。許可の画面のボタンの色は今のまま） */
-  #login { --brand: #26396E; --on-brand: #FFFFFF; }
-  @media (prefers-color-scheme: dark) { #login { --brand: #A9B9E9; --on-brand: #0E1322; } }
   #login .actions { justify-content: center; }
-  #login .actions .primary {
-    width: 100%; min-height: 52px; border-radius: 14px; font-size: 1rem; font-weight: 700;
-    background: var(--brand); border-color: var(--brand); color: var(--on-brand);
-  }
   #login .links { display: flex; flex-wrap: wrap; justify-content: center; gap: 0 16px; margin-top: 12px; }
-  #login .links a { min-height: 44px; display: inline-flex; align-items: center; font-weight: 600; color: var(--brand); }
+  #login .links a { min-height: 44px; display: inline-flex; align-items: center; font-weight: 600; color: var(--primary); }
   #login .foot { font-size: 13px; letter-spacing: 0.08em; color: var(--muted); margin: 8px 0 0; }
-  @media (max-width: 480px) { main:has(> #login:not([hidden])) { padding-top: 32px; } }
+  @media (max-width: 480px) { body { padding-top: 6vh; } main { padding: 24px 20px; } main:has(> #login:not([hidden])) { padding-top: 32px; } }
+
+  /* GSI_BUTTON_BEGIN（gsi-button.css と同じ規則。scripts/gsi_button_test.ts が一致を確かめる） */
+  .gsi-btn {
+    --gsi-fill: #ffffff;
+    --gsi-stroke: #747775;
+    --gsi-text: #1f1f1f;
+    --gsi-state: #303030;
+    --gsi-focus: #0b57d0;
+    --gsi-logo: url("/img/google-g-light.png");
+    appearance: none;
+    -webkit-appearance: none;
+    box-sizing: border-box;
+    position: relative;
+    overflow: hidden;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    gap: 10px;
+    width: 100%;
+    min-height: 44px;
+    margin: 0;
+    padding: 0 11px;
+    border: 1px solid var(--gsi-stroke);
+    border-radius: 999px;
+    background: var(--gsi-fill);
+    color: var(--gsi-text);
+    font: 500 14px/20px "Google Sans", "Google Sans Text", Roboto, "Hiragino Sans", "Hiragino Kaku Gothic ProN", "Noto Sans JP", "Yu Gothic UI", Meiryo, system-ui, sans-serif;
+    white-space: nowrap;
+    cursor: pointer;
+  }
+  @media (prefers-color-scheme: dark) {
+    .gsi-btn {
+      --gsi-fill: #131314;
+      --gsi-stroke: #8e918f;
+      --gsi-text: #e3e3e3;
+      --gsi-state: #e3e3e3;
+      --gsi-focus: #a8c7fa;
+      --gsi-logo: url("/img/google-g-dark.png");
+    }
+  }
+  .gsi-btn .gsi-g {
+    flex: none;
+    width: 28px;
+    height: 28px;
+    margin: -4px;
+    background: var(--gsi-logo) center / 28px 28px no-repeat;
+  }
+  .gsi-btn .gsi-label {
+    min-width: 0;
+    overflow: hidden;
+    text-overflow: ellipsis;
+  }
+  .gsi-btn::after {
+    content: "";
+    position: absolute;
+    inset: 0;
+    background: var(--gsi-state);
+    opacity: 0;
+    pointer-events: none;
+    transition: opacity 0.2s;
+  }
+  .gsi-btn:hover:not(:disabled)::after {
+    opacity: 0.08;
+  }
+  .gsi-btn:active:not(:disabled)::after,
+  .gsi-btn:focus-visible:not(:disabled)::after {
+    opacity: 0.12;
+  }
+  .gsi-btn:focus-visible {
+    outline: 2px solid var(--gsi-focus);
+    outline-offset: 2px;
+  }
+  .gsi-btn:disabled {
+    opacity: 0.55;
+    cursor: default;
+  }
+  @media (prefers-reduced-motion: reduce) {
+    .gsi-btn::after {
+      transition: none;
+    }
+  }
+  /* GSI_BUTTON_END */
+
+  /* TASK-0233: 既存 style 内だけで共通の帯・細字・下側の影をそろえる。 */
+  :root { --header-card: #ffffff; --header-border: #dadce0; --block-shadow: 0 8px 24px -12px rgba(15, 23, 42, .22); }
+  body { display: block; padding: 92px 20px 48px; font-family: "Hiragino Sans", "Yu Gothic UI", "Noto Sans JP", "Hiragino Kaku Gothic ProN", Meiryo, system-ui, sans-serif; font-weight: 300; line-height: 1.8; }
+  body :where(*) { font-weight: inherit !important; }
+  body :is(h1, h2, h3, h4, h5, h6, strong, b, button, dt, label) { font-weight: 500 !important; }
+  body::before { content: "A.I.KEN Studio"; position: fixed; z-index: 30; top: 0; left: 0; right: 0; box-sizing: border-box; height: 60px; padding: 0 20px 0 80px; display: flex; align-items: center; background: var(--header-card) url("/img/aiken-logo.png") 20px center / 48px 34px no-repeat; border-bottom: 1px solid var(--header-border); color: var(--text); font-size: 15px; font-weight: 500; line-height: 1.5; white-space: nowrap; }
+  main { box-shadow: var(--block-shadow); }
+  @media (prefers-color-scheme: dark) {
+    :root { --header-card: #1e1f20; --header-border: #444746; --block-shadow: 0 10px 28px -12px rgba(0, 0, 0, .5); }
+    body::before { background-image: url("/img/aiken-logo-white.png"); }
+  }
+  @media (max-width: 719.98px) {
+    body { padding-left: 16px; padding-right: 16px; }
+    body::before { padding-left: 72px; padding-right: 16px; background-position-x: 16px; font-size: 14px; }
+  }
+  main { max-width: 480px; margin: 6vh auto 0; }
+  /* 同じブランドの二重表示を避け、元の h1 は文書の見出しとして残す。 */
+  main h1 { position: absolute; width: 1px; height: 1px; padding: 0; margin: -1px; overflow: hidden; clip: rect(0, 0, 0, 0); white-space: nowrap; border: 0; }
+  main:has(> #login:not([hidden])) .brand-logo { display: none; }
 </style>
 </head>
 <body>
@@ -91,7 +205,7 @@
   <!-- ログイン前：トップ（index.html の #login）と同じ並び（ロゴ・名前は上の共通の部分。ここはボタン・方針と規約・小さな A.I.KEN） -->
   <section id="login" hidden>
     <p class="error" id="login-note" role="status" hidden></p>
-    <div class="actions"><button class="primary" id="login-btn">Google でログイン</button></div>
+    <div class="actions"><button type="button" class="gsi-btn" id="login-btn"><span class="gsi-g" aria-hidden="true"></span><span class="gsi-label">Google でログイン</span></button></div>
     <nav class="links" aria-label="方針と規約">
       <a href="https://a-i-ken.com/privacy/">プライバシーポリシー</a>
       <a href="/terms.html">利用規約</a>
@@ -100,29 +214,32 @@
   </section>
 
   <section id="consent" hidden>
-    <p>次のアプリに、あなたのアカウントで動画・画像・音声の生成を使わせます。</p>
+    <p><span class="nb">次のアプリに、</span><span class="nb">あなたのアカウントで、</span><span class="nb">動画・画像・音声の生成を</span><span class="nb">使わせます。</span></p>
     <dl class="who">
-      <dt>戻り先（許可すると、ここに戻ります）</dt>
+      <dt><span class="nb">戻り先</span><span class="nb">（許可すると、ここに戻ります）</span></dt>
       <dd class="dest" id="redirect-desc"></dd>
+      <dd class="dest-addr" id="redirect-addr" hidden></dd>
       <dt>接続しようとしているアプリ</dt>
-      <dd><bdi id="client-name"></bdi> <span class="name-note">（登録された名前。正しいとは限りません）</span></dd>
+      <dd><bdi id="client-name"></bdi> <span class="name-note"><span class="nb">（登録された名前。</span><span class="nb">正しいとは限りません）</span></span></dd>
       <dt>ログイン中のアカウント</dt>
       <dd id="user-email"></dd>
     </dl>
     <div class="warn" role="note">
-      <p>ⓘ 自分で始めた接続のときだけ、許可してください。この画面と、許可したあとの画面の URL は、人に送らないでください。</p>
-      <p id="loopback-warning" hidden>この画面は、この PC であなた自身が Codex・Claude Code などを操作している流れで開いたときだけ許可します。</p>
+      <p class="warn-title">許可の前に</p>
+      <p><span class="nb">自分で始めた接続のときだけ、</span><span class="nb">許可してください。</span></p>
+      <p><span class="nb">この画面の URL と、</span><span class="nb">許可したあとの画面の URL は、</span><span class="nb">人に送らないでください。</span></p>
+      <p id="loopback-warning" hidden><span class="nb">Codex・Claude Code などを、</span><span class="nb">この PC で自分で操作している</span><span class="nb">ときだけ許可します。</span></p>
     </div>
     <div class="actions">
       <button class="primary" id="approve-btn">許可する</button>
       <button id="deny-btn">やめる</button>
     </div>
-    <p class="muted" style="margin-top:16px">アカウントが違う場合は <button class="link" id="switch-btn">別のアカウントでログイン</button></p>
+    <p class="muted" style="margin-top:16px"><span class="nb">アカウントが違う場合は</span> <button class="link" id="switch-btn">別のアカウントでログイン</button></p>
   </section>
 
   <section id="blocked" hidden>
     <p class="error">このアカウント（<span id="blocked-email"></span>）では使えません。</p>
-    <p class="muted">許可された会社の Google アカウント（@a-i-ken.jp / @a-i-ken.com / @orenda.co.jp / @net-fun.co.jp）でログインしてください。</p>
+    <p class="muted"><span class="nb">許可された会社の Google アカウント（</span><span class="nb">@a-i-ken.jp</span> / <span class="nb">@a-i-ken.com</span> / <span class="nb">@orenda.co.jp</span> / <span class="nb">@net-fun.co.jp</span><span class="nb">）でログインしてください。</span></p>
     <div class="actions"><button class="primary" id="relogin-btn">別のアカウントでログイン</button></div>
   </section>
 </main>
@@ -446,7 +563,7 @@
     clearTimeout(expireTimer);
     $("approve-btn").disabled = true;
     $("deny-btn").disabled = true;
-    for (const id of ["user-email", "client-name", "redirect-desc"]) $(id).textContent = "";
+    for (const id of ["user-email", "client-name", "redirect-desc", "redirect-addr"]) $(id).textContent = "";
     fail(message);
   }
 
@@ -589,8 +706,11 @@
     // 種類が分からないときは、決め打ちの名前を出さずホスト名だけを出す
     const KIND_LABELS = { chatgpt: "ChatGPT", claude: "Claude" };
     $("redirect-desc").textContent = decision.kind === "loopback"
-      ? "この PC のアプリ（Codex・Claude Code など）（" + decision.host + "）"
+      ? "この PC のアプリ（Codex・Claude Code など）"
       : KIND_LABELS[decision.kind] ? KIND_LABELS[decision.kind] + "（" + decision.host + "）" : decision.host;
+    // PC 内のアプリは、アドレス（127.0.0.1:ポート）を小さく 2 行目に出す
+    $("redirect-addr").textContent = decision.kind === "loopback" ? decision.host : "";
+    $("redirect-addr").hidden = decision.kind !== "loopback";
     $("loopback-warning").hidden = decision.kind !== "loopback";
     $("user-email").textContent = email;
     show("consent");

@@ -16,13 +16,16 @@
 <!-- ログインの確かめ・RPC の接続先へ先につないでおく（supabase-js の fetch は資格情報なしなので crossorigin） -->
 <link rel="preconnect" href="https://tnzwhwitgnzoehbjrmoy.supabase.co" crossorigin>
 <link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=IBM+Plex+Sans+JP:wght@400;500;600;700&amp;display=swap">
-<link rel="stylesheet" href="/r/fddc64fe78ec/site-nav.css">
-<link rel="modulepreload" href="/r/fddc64fe78ec/admin-lib.js">
-<link rel="modulepreload" href="/r/fddc64fe78ec/auth-storage.js">
-<link rel="modulepreload" href="/r/fddc64fe78ec/cohort-close-lib.js">
-<link rel="modulepreload" href="/r/fddc64fe78ec/mypage-lib.js">
-<link rel="modulepreload" href="/r/fddc64fe78ec/site-nav.js">
-<link rel="modulepreload" href="/r/fddc64fe78ec/stage-lib.js">
+<link rel="stylesheet" href="/r/2acbe1f5e596/site-nav.css">
+<link rel="stylesheet" href="/r/2acbe1f5e596/gsi-button.css">
+<link rel="modulepreload" href="/r/2acbe1f5e596/admin-lib.js">
+<link rel="modulepreload" href="/r/2acbe1f5e596/auth-storage.js">
+<link rel="modulepreload" href="/r/2acbe1f5e596/cohort-close-lib.js">
+<link rel="modulepreload" href="/r/2acbe1f5e596/instructor-list-lib.js">
+<link rel="modulepreload" href="/r/2acbe1f5e596/instructor-list.js">
+<link rel="modulepreload" href="/r/2acbe1f5e596/mypage-lib.js">
+<link rel="modulepreload" href="/r/2acbe1f5e596/site-nav.js">
+<link rel="modulepreload" href="/r/2acbe1f5e596/stage-lib.js">
 <style>
   :root {
     --accent: #26396E; --accent-hover: #1B2B55; --on-accent: #FFFFFF;
@@ -212,6 +215,20 @@
   .now-line .now-credits { margin-left: auto; font-weight: 600; white-space: nowrap; }
   .now-line.quiet { background: var(--line-soft); color: var(--text-2); }
 
+  /* ---- 回の一覧のページ・「← 回の一覧」・開けない回（講師ページを一覧と操作に分けた。設計 docs/design-instructor-split.md。見た目は管理コンソールの回の一覧にそろえる） ---- */
+  ul.cohort-rows { list-style: none; margin: 0; padding: 0; display: flex; flex-direction: column; gap: 8px; }
+  a.cohort-row { display: flex; flex-direction: column; gap: 2px; min-height: 44px; padding: 12px 14px; border: 1px solid var(--line-2); border-radius: 12px; background: var(--surface); color: var(--text); text-decoration: none; }
+  a.cohort-row:hover { border-color: var(--input-line); background: var(--accent-soft); }
+  .cohort-row-head { display: flex; flex-wrap: wrap; align-items: center; gap: 4px 10px; }
+  .cohort-row-title { flex: 1 1 12em; min-width: 0; font-size: 16px; font-weight: 700; line-height: 1.5; overflow-wrap: anywhere; }
+  .cohort-row-meta, .cohort-row-extra { font-size: 13px; color: var(--muted); overflow-wrap: anywhere; }
+  .cohort-row-extra { color: var(--text-2); }
+  details.cohort-ended { border-top: 1px solid var(--line-soft); padding-top: 4px; }
+  details.cohort-ended > ul.cohort-rows { padding: 4px 0 6px 20px; }
+  @media (max-width: 560px) { details.cohort-ended > ul.cohort-rows { padding-left: 0; } }
+  .back-row { margin: -4px 0 -8px; }
+  a.back-link { display: inline-flex; align-items: center; min-height: 44px; padding: 0 4px; color: var(--accent); font-size: 14px; font-weight: 600; text-decoration: underline; text-underline-offset: 3px; }
+
   /* ---- ワークショップ（日ごとのリスト。今の行を強調：背景・左の線・太字・「今」の言葉） ---- */
   .wk-list { display: flex; flex-direction: column; }
   .wk-day { border-top: 1px solid var(--line-soft); }
@@ -321,7 +338,7 @@
     <p class="welcome-sub">講師の画面</p>
   </div>
   <p class="warn-text" id="login-note" role="status" hidden></p>
-  <button type="button" class="btn primary big" id="login-btn">Google でログイン</button>
+  <button type="button" class="gsi-btn" id="login-btn"><span class="gsi-g" aria-hidden="true"></span><span class="gsi-label">Google でログイン</span></button>
   <button type="button" class="alt-login" id="login-other-btn">別のアカウントでログイン</button>
   <button type="button" class="alt-login" id="login-console-btn" hidden>管理コンソールを開く</button>
   <nav class="links" aria-label="方針と規約">
@@ -382,7 +399,7 @@
 </div>
 
 <dialog id="confirm" class="confirm" aria-labelledby="confirm-title"></dialog>
-<script type="module" src="/r/fddc64fe78ec/topbar-height.js"></script>
-<script type="module" src="/r/fddc64fe78ec/instructor.js"></script>
+<script type="module" src="/r/2acbe1f5e596/topbar-height.js"></script>
+<script type="module" src="/r/2acbe1f5e596/instructor.js"></script>
 </body>
 </html>

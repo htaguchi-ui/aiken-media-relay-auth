@@ -6919,7 +6919,9 @@ async function main() {
       // 無視
     }
     fatal("ログインできませんでした。管理者の Google アカウントでログインし直してください。");
-    $("status").append(el("button", { type: "button", className: "btn primary big", text: "Google でログイン", onclick: signIn }));
+    $("status").append(
+      el("button", { type: "button", className: "gsi-btn", onclick: signIn }, el("span", { className: "gsi-g", "aria-hidden": "true" }), el("span", { className: "gsi-label", text: "Google でログイン" })),
+    );
     return;
   }
   if (loginReturn.code) {

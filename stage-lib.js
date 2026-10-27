@@ -317,7 +317,7 @@ export function normalizeStageStatus(raw, receivedAt = Date.now()) {
   };
 }
 
-/** instructor_cohorts() の結果（配列、または { cohorts: [...] }）を、{ id, name, venueName, day1Date, day2Date, creditMode } の配列にする */
+/** instructor_cohorts() の結果（配列、または { cohorts: [...] }）を、{ id, name, venueName, day1Date, day2Date, creditMode, period } の配列にする（period は回の一覧の並べ方に使う） */
 export function normalizeInstructorCohorts(raw) {
   const list = Array.isArray(raw) ? raw : Array.isArray(raw?.cohorts) ? raw.cohorts : [];
   return list
@@ -328,6 +328,7 @@ export function normalizeInstructorCohorts(raw) {
       day1Date: str(c?.day1_date),
       day2Date: str(c?.day2_date),
       creditMode: str(c?.credit_mode),
+      period: str(c?.period),
     }))
     .filter((c) => c.id);
 }

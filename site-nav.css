@@ -1,50 +1,66 @@
-/* 画面の間の移動（site-nav.js）と、ヘッダーの 1 段で共通の部品の見た目。マイページ（index.html）・講師ページ（instructor.html）・
-   管理ページ（admin.html）で共通。色は各ページの変数（--accent・--accent-soft・--text-2 など。3 つのページで同じ名前）。
-   ヘッダーは 1 段（2026-10-23 田口さん「ヘッダーの高さがかさばりすぎる」→ ヘッダーの右に並べる）：左に題名、右に［Canvas］と
-   家・帽子・歯車のアイコン、その右にログアウトなど。帯は .topbar-inner の中で margin-left: auto を持ち、右に寄る。
-   今いる画面は、管理コンソールで選んだ行と同じ組（--accent-soft の淡い地と --accent の下線）で示す。
-   マイページ・講師ページ・管理ページはアイコンだけ（44×36、押せる範囲は 44×44。名前は title と読み上げ用の文字）。
-   Canvas は主ボタン（.btn.primary）と同じ塗り（--accent の地に --on-accent の文字。明るい配色は紺の地に白の文字で約 11:1、
-   暗い配色は淡い青の地に濃紺の文字で約 9.5:1。どちらも 7:1 以上）で、文字の左にノードのアイコン（Lucide の workflow）。
-   スマホの幅（560px 以下）では Canvas もアイコンだけ（名前は aria-label「Canvas（別のタブ）」と title）。
-   アイコンは線だけ・太さ 2（Lucide の既定）。押せる範囲は 44px（見た目は 36px。上下の 4px まで広げる）。 */
+/* Canvas 以外の共通ヘッダー。リンクは文字だけ、選択は色と太さだけ。
+   講師ページは studio.css を読まないため、末尾の共通の文字・影もここで定義する。 */
 .site-nav { flex: none; display: flex; align-items: center; margin-left: auto; }
-.site-nav-list { list-style: none; margin: 0; padding: 0; display: flex; flex-wrap: nowrap; align-items: center; gap: 4px; }
+.site-nav[hidden], .site-nav [hidden] { display: none !important; }
+.site-nav-list { list-style: none; margin: 0; padding: 0; display: flex; flex-wrap: nowrap; align-items: center; gap: 20px; }
 .site-nav-list > li { flex: none; min-width: 0; display: flex; }
-.site-nav-item {
-  position: relative; display: inline-flex; align-items: center; justify-content: center; min-width: 0; min-height: 36px; padding: 0 12px;
-  border-radius: 8px; font-size: 14px; font-weight: 600; line-height: 1.3; color: var(--text-2); text-decoration: none; white-space: nowrap;
-}
-/* 省略（…）は中の文字だけ。リンク自身に overflow を付けると、押せる範囲を広げた ::after が切れて 36px になる */
-.site-nav-label { min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.site-nav-item { display: inline-flex; align-items: center; min-height: 44px; padding: 0; border: 0; border-radius: 0; background: transparent; box-shadow: none; font-size: 14px; font-weight: 300; line-height: 1.5; color: var(--text-2); text-decoration: none; white-space: nowrap; }
+a.site-nav-item:hover { color: var(--accent); text-decoration: none; }
+body .site-nav-item[aria-current="page"] { color: var(--accent); font-weight: 500 !important; background: transparent; box-shadow: none; }
+.site-nav-item:focus-visible, .site-nav-toggle:focus-visible { outline: 2px solid var(--accent); outline-offset: 4px; border-radius: 4px; }
+.site-nav-label { min-width: 0; white-space: nowrap; }
 .site-nav-icon { flex: none; display: block; }
-a.site-nav-item.primary { gap: 6px; padding: 0 12px 0 10px; } /* アイコンと「Canvas」の間 */
-/* アイコンだけ：幅 44px（押せる範囲は上下を 4px 広げて 44×44） */
-.site-nav-item.icon-only { width: 44px; padding: 0; }
-/* 読み上げ用の文字（見えない） */
 .site-nav-sr { position: absolute; width: 1px; height: 1px; padding: 0; margin: -1px; overflow: hidden; clip: rect(0, 0, 0, 0); white-space: nowrap; border: 0; }
-a.site-nav-item::after { content: ""; position: absolute; inset: -4px 0; } /* 見た目は 36px、押せる範囲は 44px */
-a.site-nav-item:hover { background: var(--accent-soft); color: var(--accent-soft-text); }
-a.site-nav-item.primary { background: var(--accent); color: var(--on-accent); font-weight: 700; }
-a.site-nav-item.primary:hover { background: var(--accent-hover); color: var(--on-accent); }
-.site-nav-item[aria-current="page"] { background: var(--accent-soft); color: var(--accent-soft-text); font-weight: 700; box-shadow: inset 0 -2px 0 var(--accent); }
-
-/* ---- ヘッダーの 1 段の共通の部品 ---- */
-/* 1 段に並べる。縮むのは題名の欄（.brand）だけ（帯・ボタンは縮めない）。
-   題名の欄は残りの幅を全部使い（flex: 1 1 0）、その幅を問い合わせの入れ物（container: brand）にする。題名が入りきらない幅では、
-   各ページの CSS の @container brand で題名を読み上げだけに残す（… で切らない。今いる画面は帯の印で分かる）。
-   入れ物の問い合わせに対応していないブラウザでは … で切る */
-.topbar-inner:has(> .site-nav) { flex-wrap: nowrap; }
-.topbar-inner:has(> .site-nav) > .brand { flex: 1 1 0; min-width: 0; flex-direction: row; justify-content: flex-start; align-items: center; container: brand / inline-size; }
-.topbar-inner:has(> .site-nav) > .brand h1 { white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
-.topbar-inner:has(> .site-nav) > .site-nav ~ * { flex: none; }
-/* 文字とアイコンのボタン（［ログアウト］）：広い幅は文字だけ、スマホの幅はアイコンだけ（名前は aria-label・title） */
+.site-nav-toggle { display: none; flex: none; width: 44px; height: 44px; align-items: center; justify-content: center; padding: 0; border: 0; border-radius: 8px; background: transparent; color: var(--text); cursor: pointer; }
+.site-nav-toggle:hover { color: var(--accent); }
+body .topbar .topbar-inner { position: relative; flex-wrap: nowrap; min-height: 60px; padding-top: 8px; padding-bottom: 8px; gap: 16px; }
+body .topbar .topbar-inner > .brand { flex: 1 1 auto; min-width: 0; flex-direction: row; align-items: center; justify-content: flex-start; gap: 12px; container-type: normal; }
+body .topbar .brand h1 { position: static; width: auto; height: auto; padding: 0; margin: 0; clip: auto; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; font-size: 15px; line-height: 1.5; }
+body .topbar .topbar-inner > .site-nav ~ * { flex: none; }
+body .topbar .account { flex-wrap: nowrap; }
+body .topbar .account .btn, body .topbar .avatar, body .topbar .account .icon-btn { border-color: transparent; background: transparent; box-shadow: none; }
+body .topbar .account .btn { font-size: 13px; }
 .hdr-btn .site-nav-icon { display: none; }
-@media (max-width: 560px) {
-  a.site-nav-item.primary { width: 44px; padding: 0; }
-  a.site-nav-item.primary .site-nav-label { position: absolute; width: 1px; height: 1px; padding: 0; margin: -1px; overflow: hidden; clip: rect(0, 0, 0, 0); white-space: nowrap; border: 0; }
-  .site-nav-list { gap: 2px; }
+/* 720px 未満、または JS が実際の横のはみ出しを検出した場合。 */
+.site-nav.is-compact { order: 3; margin-left: 0; }
+.site-nav.is-compact .site-nav-toggle { display: inline-flex; }
+.site-nav.is-compact .site-nav-list { position: absolute; z-index: 25; top: calc(100% + 4px); right: 16px; width: min(304px, calc(100vw - 32px)); display: flex; flex-direction: column; align-items: stretch; gap: 0; padding: 12px 20px; border: 1px solid var(--line); border-radius: 14px; background: var(--surface); box-shadow: var(--block-shadow); }
+.site-nav.is-compact .site-nav-item { width: 100%; min-height: 48px; }
+@media (max-width: 719.98px) {
+  body .topbar .topbar-inner { padding-left: 16px; padding-right: 16px; gap: 8px; }
+  body .topbar .topbar-inner > .brand { gap: 8px; }
+  body .topbar .brand h1 { font-size: 14px; }
+  body .topbar .account .badge, body .topbar .account .who { display: none; }
+  .site-nav { order: 3; margin-left: 0; }
+  .site-nav-toggle { display: inline-flex; }
   .hdr-btn { width: 44px; min-width: 44px; padding: 0 !important; }
   .hdr-btn .site-nav-icon { display: block; }
   .hdr-btn .hdr-label { position: absolute; width: 1px; height: 1px; padding: 0; margin: -1px; overflow: hidden; clip: rect(0, 0, 0, 0); white-space: nowrap; border: 0; }
 }
+
+/* 共通の文字・カード。studio.css だけを読む案内ページにも同じ定義を置く。
+   !important は後から読むページ内 CSS の旧 600/700 に優先するため。
+   システムの細字を使用し、新たな外部フォントの指定・読み込みは足さない。 */
+body { --block-shadow: 0 8px 24px -12px rgba(15, 23, 42, .22); font-family: "Hiragino Sans", "Yu Gothic UI", "Noto Sans JP", "Hiragino Kaku Gothic ProN", Meiryo, system-ui, sans-serif !important; font-weight: 300 !important; }
+body :where(*) { font-weight: inherit !important; }
+body :is(h1, h2, h3, h4, h5, h6, strong, b, button, summary, th, dt, label, .btn, .field-label, .strong, .value, .ov-value, .stage-name, .now-name, .wk-day-name, .st-name) { font-weight: 500 !important; }
+body :is(.card, .center-card, .fold-group, .panel, .section-card) { box-shadow: var(--block-shadow); }
+body .topbar .brand::before { content: ""; display: block; flex: none; width: 48px; height: 34px; background: url("/img/aiken-logo.png") center / contain no-repeat; }
+body .topbar .brand-sub { display: none; }
+body .content, body .topbar-inner { max-width: 1040px; }
+body:has(.sticky-top) .content, body:has(.sticky-top) .topbar-inner, body:has(.sticky-top) #notice { max-width: 1120px; }
+body:has(.admin-shell) .content { max-width: none; }
+body:has(.admin-shell) .topbar-inner, body .admin-shell, body .selectbar-inner { max-width: 1440px; }
+@media (min-width: 900px) {
+  body:has(.admin-shell) .overview .ov-item { background: var(--surface); border: 1px solid var(--line); border-radius: 14px; padding: 14px 16px; box-shadow: var(--block-shadow); }
+}
+@media (prefers-color-scheme: dark) {
+  body { --block-shadow: 0 10px 28px -12px rgba(0, 0, 0, .5); }
+  body .topbar .brand::before { background-image: url("/img/aiken-logo-white.png"); }
+}
+
+/* TASK-0233: 左端の表示名は全ページ共通。元の見出しは読み上げ用に残す。 */
+body .topbar .topbar-inner > .brand { min-width: max-content; }
+body .topbar .brand h1 { position: absolute; width: 1px; height: 1px; padding: 0; margin: -1px; overflow: hidden; clip: rect(0, 0, 0, 0); white-space: nowrap; border: 0; }
+body .topbar .brand::after { content: "A.I.KEN Studio"; display: block; flex: none; color: var(--text); font-size: 15px; font-weight: 500; line-height: 1.5; white-space: nowrap; }
+@media (max-width: 719.98px) { body .topbar .brand::after { font-size: 14px; } }
