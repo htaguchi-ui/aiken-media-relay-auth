@@ -56,6 +56,15 @@ import {
   undoView,
 } from "./stage-lib.js";
 import { fillIcons, renderSiteNav } from "./site-nav.js";
+import {
+  cohortCloseCanAct,
+  cohortCloseError,
+  cohortCloseLines,
+  cohortCloseSameIdentity,
+  cohortCloseSlotVisible,
+  createCohortCloseAction,
+  normalizeCohortCloseStatus,
+} from "./cohort-close-lib.js";
 
 // 他のサイトに埋め込まれて操作させられるのを防ぐ（マイページ・管理コンソールと同じ）
 if (window.top !== window.self) {
@@ -148,6 +157,9 @@ const state = {
   /** cohort_stage_status を読んだもの（normalizeStageStatus）。null は未読込 */
   status: null,
   statusError: "",
+  /** cohort_close_status を読んだもの（normalizeCohortCloseStatus）。null は未読込・読めなかった（221。決定 96） */
+  closeStatus: null,
+  closeStatusError: "",
   /** 操作の通信中（二重に押させない） */
   busy: false,
   /** 追加の相手に選んだ受講者の email */
@@ -199,6 +211,9 @@ function hideContent(message = "ログアウトしています…") {
   $("confirm").replaceChildren();
   stopUndoTimer();
   state.status = null;
+  state.closeStatus = null;
+  state.closeStatusError = "";
+  closeStatusSeq++;
   state.cohorts = [];
   state.cohortId = null;
   state.selected.clear();
@@ -329,6 +344,15 @@ function activeClient() {
   return adminSession?.client ?? supabase;
 }
 
+/** 確認中に同じ人がログインし直した場合も、古い確認を引き継がない（回のクローズ。0179） */
+function closeIdentity() {
+  try {
+    return sessionIdentity(localStore?.getItem(adminSession ? ADMIN_CONSOLE_STORAGE_KEY : STUDIO_STORAGE_KEY) ?? null);
+  } catch {
+    return null;
+  }
+}
+
 /** 画面に出す失敗（読み込みの失敗）：どの画面にするかを決める */
 function loadFailure(error) {
   if (rejectionName(error) === "instructor_only" || String(error?.code) === "42501") return { action: "denied" };
@@ -349,6 +373,39 @@ async function loadCohorts(first = null) {
 
 /** cohort_stage_status の読み込みの通し番号。古い応答（あとから始めた読み込み・操作のあとに返ってきたもの）は捨てる */
 let statusSeq = 0;
+/** cohort_close_status の読み込みの通し番号（段階の読み込みとは別に数える） */
+let closeStatusSeq = 0;
+
+/** 回のクローズの状態は段階とは別に読む。未導入・欠損を 0 人や操作できるとは扱わない（0179） */
+async function loadCloseStatus() {
+  const requested = state.cohortId;
+  const client = activeClient();
+  const identity = closeIdentity();
+  const seq = ++closeStatusSeq;
+  if (!requested) {
+    state.closeStatus = null;
+    state.closeStatusError = "";
+    return false;
+  }
+  let response;
+  try {
+    response = await rpc("cohort_close_status", { p_cohort_id: requested });
+  } catch (error) {
+    response = { data: null, error };
+  }
+  if (ending || requested !== state.cohortId || client !== activeClient() || seq !== closeStatusSeq || !cohortCloseSameIdentity(closeIdentity(), identity)) return false;
+  const { data, error } = response ?? {};
+  const status = error ? null : normalizeCohortCloseStatus(data, requested);
+  state.closeStatus = status;
+  state.closeStatusError = status ? "" : cohortCloseError(error ?? { message: "cohort_close_invalid_response" });
+  return !!status;
+}
+
+/** 段階とクローズの状態を並べて読む（［最新にする］・操作のあと・回の切り替え）。返り値は段階の読み込みの成否 */
+async function loadStatusAndClose() {
+  const [ok] = await Promise.all([loadStatus(), loadCloseStatus()]);
+  return ok;
+}
 
 async function loadStatus() {
   if (!state.cohortId) {
@@ -378,7 +435,7 @@ async function loadStatus() {
 async function loadCohortsAndStatus(first = null) {
   const c = await loadCohorts(first);
   if (ending || c.stale || c.error) return { c, ok: false };
-  return { c, ok: await loadStatus() };
+  return { c, ok: await loadStatusAndClose() };
 }
 
 let loading = false;
@@ -452,7 +509,7 @@ async function load({ fromApp = false, cohorts = null } = {}) {
 
 /** 操作のあと：段階と受講者の最新を読み直して描き直す */
 async function reloadStatus() {
-  const ok = await loadStatus();
+  const ok = await loadStatusAndClose();
   if (ending) return;
   if (!ok) notify(`最新の状態を読み込めませんでした。${state.statusError}`, "error");
   render();
@@ -729,17 +786,20 @@ function cohortCard() {
       (() => {
         const select = el(
           "select",
-          { className: "input tabular", id: "cohort-select" },
+          { className: "input tabular", id: "cohort-select", disabled: state.busy },
           ...state.cohorts.map((x) => el("option", { value: x.id, text: instructorCohortLabel(x), selected: x.id === state.cohortId })),
         );
         select.addEventListener("change", () => {
           state.cohortId = select.value;
           state.status = null;
           state.statusError = "";
+          state.closeStatus = null;
+          state.closeStatusError = "";
+          closeStatusSeq++;
           state.selected.clear();
           ui.openDays.delete(select.value); // 切り替えた回は、その回の初期値（今を含む日）から開く
           render();
-          loadStatus().then(render);
+          loadStatusAndClose().then(render);
         });
         return select;
       })(),
@@ -756,6 +816,7 @@ function cohortCard() {
         "div",
         { className: "row-actions" },
         cs ? el("span", { className: `badge ${cs.kind}`, text: cs.label }) : null,
+        isClosed() ? el("span", { className: "badge ended", id: "cohort-closed-badge", text: "クローズ済み" }) : null,
         el("button", {
           type: "button",
           className: "btn compact",
@@ -801,13 +862,14 @@ function stageCard(s) {
   const cohortId = state.cohortId; // 描いたときの回（toggle が遅れて届いても、この回の記録にだけ書く）
   const opened = openDaysOf(tl, cohortId);
   const move = (direction) => moveStage(direction, mv, s);
-  const why = moveWhy(mv);
+  const closed = isClosed();
+  const why = closed ? MSG_CLOSED_NO_MOVE : moveWhy(mv);
   return el(
     "section",
     { className: "card", "aria-labelledby": "wk-h" },
     el("h2", { id: "wk-h", text: "ワークショップ" }),
     tl.groups.length ? el("div", { className: "wk-list", role: "group", "aria-label": "ワークショップの一覧" }, ...tl.groups.map((g) => dayFold(g, opened, cohortId))) : null,
-    undo.available
+    undo.available && !closed
       ? el(
         "div",
         { className: "undo-box", id: "undo-box" },
@@ -829,8 +891,8 @@ function stageCard(s) {
     el(
       "div",
       { className: "move-row" },
-      el("button", { type: "button", className: "btn big", id: "move-back", text: "前へ戻す", disabled: state.busy || !mv.canPrev, title: mv.canPrev ? null : mv.prevWhy, onclick: () => move("back") }),
-      el("button", { type: "button", className: "btn primary big", id: "move-next", text: "次へ進める", disabled: state.busy || !mv.canNext, title: mv.canNext ? null : mv.nextWhy, onclick: () => move("next") }),
+      el("button", { type: "button", className: "btn big", id: "move-back", text: "前へ戻す", disabled: state.busy || closed || !mv.canPrev, title: closed ? MSG_CLOSED_NO_MOVE : mv.canPrev ? null : mv.prevWhy, onclick: () => move("back") }),
+      el("button", { type: "button", className: "btn primary big", id: "move-next", text: "次へ進める", disabled: state.busy || closed || !mv.canNext, title: closed ? MSG_CLOSED_NO_MOVE : mv.canNext ? null : mv.nextWhy, onclick: () => move("next") }),
     ),
     why ? el("p", { className: "hint", id: "move-why", text: why }) : null,
   );
@@ -906,9 +968,41 @@ function wkRow(r) {
   );
 }
 
-/** 0179（回のクローズ）の枠。v2 では中身を描かない（0179 を載せるとき、Day2 の最後の段階が「今」になってから中身を出す） */
+/** クローズ済みか（読めていないときは偽。操作の可否は DB が決める） */
+function isClosed() {
+  return state.closeStatus?.state === "closed";
+}
+
+const MSG_CLOSED_NO_MOVE = "クローズ済みです。先に開き直してください。";
+
+/**
+ * 回のクローズ（0179。決定 96）の札。出すのは Day2 の最後の段階が今のとき・Day2 のあと・クローズ済みのとき・
+ * Day2 以降でクローズの状態を読めなかったときだけ（設計 2.6。cohortCloseSlotVisible）。それ以外は中身の無い隠した枠。
+ * 読み直しは回の見出しの［最新にする］にまとめた（loadStatusAndClose）
+ */
 function closeSlot() {
-  return el("section", { id: "cohort-close-panel", hidden: true, "aria-label": "回のクローズ" });
+  const status = state.closeStatus;
+  if (!cohortCloseSlotVisible(state.status, status, state.closeStatusError)) {
+    return el("section", { id: "cohort-close-panel", hidden: true, "aria-label": "回のクローズ" });
+  }
+  const lines = state.closeStatusError ? [state.closeStatusError] : cohortCloseLines(status);
+  const kind = status?.state === "closed" ? "reopen" : "close";
+  return el(
+    "section",
+    { className: "card", id: "cohort-close-panel", "aria-labelledby": "cohort-close-h" },
+    el("h2", { id: "cohort-close-h", text: "回のクローズ" }),
+    ...lines.map((text) => el("p", { className: state.closeStatusError ? "warn-text" : "hint", text })),
+    cohortCloseCanAct(status, kind)
+      ? el("button", {
+        type: "button",
+        className: kind === "close" ? "btn danger big" : "btn big",
+        id: "cohort-close-action",
+        text: kind === "close" ? "この回をクローズ" : "回を開き直す",
+        disabled: state.busy,
+        onclick: () => changeCohortClose(kind),
+      })
+      : null,
+  );
 }
 
 /** 取り消しの案内の文（1 行目。残りの秒数を含む） */
@@ -931,7 +1025,7 @@ const UNDO_POLL_SEC = 10;
  */
 function updateUndoTimer() {
   const s = state.status;
-  if (!s || !undoView(s, Date.now()).available) {
+  if (!s || isClosed() || !undoView(s, Date.now()).available) {
     stopUndoTimer();
     return;
   }
@@ -1184,6 +1278,45 @@ function updateGrantButton() {
 
 // ---- 操作 ----
 
+const cohortCloseAction = createCohortCloseAction({
+  rpc,
+  confirm: confirmDialog,
+  canStart: () => !state.busy && !ending,
+  onBusy: (busy) => {
+    state.busy = busy;
+    if (busy) {
+      statusSeq++;
+      closeStatusSeq++;
+    }
+    render();
+  },
+  onStatus: (status) => {
+    state.closeStatus = status;
+    state.closeStatusError = "";
+  },
+  onSuccess: async (_status, raw, kind, isCurrent) => {
+    if (!isCurrent()) return;
+    notify(raw.changed === false
+      ? kind === "close" ? "この回はすでにクローズされています。" : "この回はすでに開き直されています。"
+      : kind === "close" ? "回をクローズしました。停止した受講者と削除予定を確認してください。"
+      : `回を開き直し、${raw.restored_count} 人を有効に戻しました。個別変更などで戻さなかった人は ${raw.skipped_count} 人です。`);
+    state.selected.clear();
+    await loadStatusAndClose();
+  },
+  onError: async (message) => {
+    notify(message, "error");
+    await loadStatusAndClose();
+  },
+});
+
+/** 回のクローズ・開き直し。確認のあいだに回・部品・ログインが変わったら送らない */
+function changeCohortClose(kind) {
+  const id = state.cohortId;
+  const client = activeClient();
+  const identity = closeIdentity();
+  return cohortCloseAction.run(kind, id, () => !ending && id === state.cohortId && client === activeClient() && cohortCloseSameIdentity(closeIdentity(), identity));
+}
+
 /** 操作の通信中は二重に押せないようにして、終わったら描き直す */
 async function withBusy(fn) {
   if (state.busy) return;
@@ -1205,6 +1338,7 @@ async function failWith(error) {
 }
 
 async function moveStage(direction, mv, s) {
+  if (isClosed()) return;
   const to = direction === "back" ? mv.prev : mv.next;
   if (!to || !mv.current) return;
   clearNotice();
@@ -1226,12 +1360,12 @@ async function moveStage(direction, mv, s) {
       return;
     }
     notify(`「${stageName(to)}」へ${direction === "back" ? "戻しました" : "進めました"}。`);
-    await loadStatus();
+    await loadStatusAndClose(); // 最後の段階に入るとクローズの札が出る
   });
 }
 
 async function undoMove(undo, s) {
-  if (!undo.toStage || !s.current) return;
+  if (isClosed() || !undo.toStage || !s.current) return;
   clearNotice();
   await withBusy(async () => {
     const { error } = await rpc("cohort_stage_move", {
@@ -1245,7 +1379,7 @@ async function undoMove(undo, s) {
       return;
     }
     notify(`「${stageName(undo.toStage)}」に戻しました。`);
-    await loadStatus();
+    await loadStatusAndClose();
   });
 }
 

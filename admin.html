@@ -15,12 +15,14 @@
 <!-- ログインの確かめ・RPC の接続先へ先につないでおく（supabase-js の fetch は資格情報なしなので crossorigin） -->
 <link rel="preconnect" href="https://tnzwhwitgnzoehbjrmoy.supabase.co" crossorigin>
 <link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=IBM+Plex+Sans+JP:wght@400;500;600;700&amp;display=swap">
-<link rel="stylesheet" href="/r/95d99f57a94f/studio.css">
-<link rel="stylesheet" href="/r/95d99f57a94f/site-nav.css">
-<link rel="modulepreload" href="/r/95d99f57a94f/admin-lib.js">
-<link rel="modulepreload" href="/r/95d99f57a94f/auth-storage.js">
-<link rel="modulepreload" href="/r/95d99f57a94f/site-nav.js">
-<link rel="modulepreload" href="/r/95d99f57a94f/stage-lib.js">
+<link rel="stylesheet" href="/r/fddc64fe78ec/studio.css">
+<link rel="stylesheet" href="/r/fddc64fe78ec/site-nav.css">
+<link rel="modulepreload" href="/r/fddc64fe78ec/admin-lib.js">
+<link rel="modulepreload" href="/r/fddc64fe78ec/auth-storage.js">
+<link rel="modulepreload" href="/r/fddc64fe78ec/cohort-close-lib.js">
+<link rel="modulepreload" href="/r/fddc64fe78ec/site-nav.js">
+<link rel="modulepreload" href="/r/fddc64fe78ec/stage-lib.js">
+<link rel="modulepreload" href="/r/fddc64fe78ec/storage-usage-lib.js">
 <style>
   /* 色・余白・角丸・ボタン・上部の帯の土台は共通の studio.css（マイページと同じ値。--muted・--low-text は重要な数字が明暗とも 7:1 になる値）。
      ここには管理コンソールだけが使う変数と、一覧・表・シートの形を置く（同じ名前の部品は、ここが後に読まれるので勝つ） */
@@ -397,6 +399,9 @@
      選んだ項目は、広い幅（1,100px 以上。文字を大きくすると em の分だけ早めに狭い形へ）は右の欄、狭い幅は下の帯からシート。
      本文 14px 以上・押せる範囲はスマホ 44px／広い幅 40px 以上 */
   .settings { display: flex; flex-direction: column; gap: var(--s4); padding: 4px 16px 0; font-size: 14px; }
+  .storage-usage-list { list-style: none; margin: 0; padding: 0; }
+  .storage-usage-row { display: flex; flex-wrap: wrap; align-items: baseline; gap: 6px 16px; padding: 10px 0; border-bottom: 1px solid var(--line-soft); overflow-wrap: anywhere; }
+  .storage-usage-label { flex: 1 1 180px; }
   body.setbar .content { padding-bottom: 180px; }
   .set-col { display: flex; flex-direction: column; gap: var(--s4); min-width: 0; }
   .set-col > div:empty { display: none; }
@@ -980,6 +985,7 @@
           <!-- 消費の推移（228：admin_usage_trend）。今月（日ごと）・直近 12 か月（月ごと）を、モデル・区分・回・種類で色分けした積み上げの棒（admin.js の renderTrend） -->
           <section id="settings-trend" class="box trend" aria-labelledby="trend-h" hidden></section>
           <div id="settings-main"></div>
+          <div id="settings-storage"></div>
           <div id="settings-models"></div>
           <div id="settings-templates"></div>
           <div id="settings-history"></div>
@@ -997,7 +1003,7 @@
 
 <dialog id="sheet" class="sheet" aria-labelledby="sheet-title"></dialog>
 <dialog id="ask" class="ask" aria-labelledby="ask-title"></dialog>
-<script type="module" src="/r/95d99f57a94f/topbar-height.js"></script>
-<script type="module" src="/r/95d99f57a94f/admin.js"></script>
+<script type="module" src="/r/fddc64fe78ec/topbar-height.js"></script>
+<script type="module" src="/r/fddc64fe78ec/admin.js"></script>
 </body>
 </html>

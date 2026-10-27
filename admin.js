@@ -175,6 +175,16 @@ import {
   MAX_DAY_STAGE_TOTAL,
   MAX_STAGES_PER_DAY,
 } from "./stage-lib.js";
+import { storageUsageView } from "./storage-usage-lib.js";
+import {
+  cohortCloseCanAct,
+  cohortCloseError,
+  cohortCloseLines,
+  cohortCloseSameIdentity,
+  createCohortCloseAction,
+  normalizeCohortCloseStatus,
+  normalizeCohortCloseSummaries,
+} from "./cohort-close-lib.js";
 import { fillIcons, renderSiteNav } from "./site-nav.js";
 
 // 他のサイトに埋め込まれて操作させられるのを防ぐ（GitHub Pages では frame-ancestors を指定できないため）
@@ -285,6 +295,11 @@ const state = {
   venues: [],
   cohortsStatus: "loading",
   cohortsError: "",
+  cohortCloseStates: new Map(),
+  cohortCloseStatuses: new Map(),
+  cohortCloseErrors: new Map(),
+  cohortCloseListError: "",
+  cohortCloseBusy: false,
   filter: "all",
   query: "",
   selecting: false,
@@ -330,6 +345,10 @@ const state = {
     modelsError: "",
     /** admin-api の GET /models の結果 */
     models: null,
+    storageStatus: "idle",
+    storageError: "",
+    storage: null,
+    storageAt: null,
     /** 画面上のオン・オフ（未保存を含む model_id の集合）。区分ごと：{ all, student, member } */
     drafts: null,
     /** 開いているモデル（モードごとのスイッチを出している）の key。ページを開き直すまで、保存・タブの切り替え・描き直しのあいだ覚えておく */
@@ -392,6 +411,7 @@ const gates = {
   models: createLoadGate(),
   history: createLoadGate(),
   trend: createLoadGate(),
+  storage: createLoadGate(),
 };
 
 function show(id) {
@@ -1015,12 +1035,16 @@ function clearAppView() {
   if (sheet.open) closeSheet();
   clearNotice();
   state.rows = [];
+  state.cohortCloseStates?.clear();
+  state.cohortCloseStatuses?.clear();
+  state.cohortCloseErrors?.clear();
   state.settings.info = null;
   state.settings.models = null;
   state.settings.history = [];
+  state.settings.storage = null;
   state.settings.edit = null;
   state.settings.drafts = null;
-  for (const id of ["settings-summary", "settings-main", "settings-models", "settings-templates", "settings-history", "settings-aside", "settings-bar", "roster-list", "roster-aside", "cohorts-main", "cohort-aside", "overview"]) $(id).replaceChildren();
+  for (const id of ["settings-summary", "settings-main", "settings-storage", "settings-models", "settings-templates", "settings-history", "settings-aside", "settings-bar", "roster-list", "roster-aside", "cohorts-main", "cohort-aside", "overview"]) $(id).replaceChildren();
   // 画面の間の移動の帯も隠す（期限切れなどで、ログインの画面を出す前に endConsoleSession の通信を待つ間も残さない。Codex TASK-0189 F189-03）
   renderSiteNav($("site-nav"), null, "admin");
 }
@@ -1197,6 +1221,7 @@ async function loadCohorts() {
   state.cohortsStatus = "ok";
   state.cohortsError = "";
   state.fresh.cohorts = { at: Date.now(), stale: false };
+  await loadCohortCloseStates();
   return true;
 }
 
@@ -1216,6 +1241,7 @@ async function refresh() {
   setReloadBusy();
   try {
     await Promise.all([loadUsage(), loadCohorts(), loadStageInfo(), state.settings.status !== "idle" ? loadSettingsAll() : null]);
+    if (state.cohortId) await loadCohortCloseStatus(state.cohortId);
   } finally {
     refreshing--;
     setReloadBusy();
@@ -1286,6 +1312,7 @@ function tabParts(tab) {
     { at: S.infoAt, stale: !!S.error },
     { at: S.modelsAt, stale: !!S.modelsError },
     { at: S.historyAt, stale: !!S.historyError },
+    { at: S.storageAt, stale: !!S.storageError },
     ...trend,
     ...stages,
   ];
@@ -2905,11 +2932,28 @@ function extrasForAdd(role) {
   return {};
 }
 
-/** 登録済みは上書きせずにスキップする（on conflict do nothing）。追加できた件数を返す */
+/** 登録済みは送信前に除く。BEFORE INSERT は ON CONFLICT より先に動くため、閉じた回の既存名簿も再挿入しない。 */
 async function insertMembers(rows) {
+  const identity = currentIdentity();
+  const stale = () => appClosed || !cohortCloseSameIdentity(currentIdentity(), identity);
+  const staleError = { message: "ログイン状態が変わりました。読み込み直してから追加してください。" };
+  if (stale()) return { error: staleError };
+  const existing = new Set();
+  for (let i = 0; i < rows.length; i += 50) {
+    const emails = rows.slice(i, i + 50).map((r) => r.email);
+    const { data, error } = await supabase.from("members").select("email").in("email", emails);
+    if (stale()) return { error: staleError };
+    if (error) return { error };
+    if (!Array.isArray(data) || data.some((r) => typeof r?.email !== "string" || !emails.includes(r.email))) {
+      return { error: { message: "登録済みの名簿を確認できませんでした。読み込み直してから追加してください。" } };
+    }
+    for (const row of data) existing.add(row.email);
+  }
+  const pending = rows.filter((r) => !existing.has(r.email));
+  if (!pending.length) return { added: 0 };
   const { data, error } = await supabase
     .from("members")
-    .upsert(rows, { onConflict: "email", ignoreDuplicates: true })
+    .upsert(pending, { onConflict: "email", ignoreDuplicates: true })
     .select("email");
   if (error) return { error };
   return { added: data?.length ?? 0 };
@@ -2976,6 +3020,109 @@ async function addBulk(role, extras) {
 
 // ---- 回 ----
 
+let cohortCloseListSeq = 0;
+let cohortCloseDetailSeq = 0;
+
+/** 回一覧は一括の読取1回。未導入・失敗を「未クローズ」と推定しない。 */
+async function loadCohortCloseStates() {
+  const seq = ++cohortCloseListSeq;
+  const identity = currentIdentity();
+  let response;
+  try {
+    response = await supabase.rpc("admin_cohort_close_states");
+  } catch (error) {
+    response = { data: null, error };
+  }
+  if (appClosed || seq !== cohortCloseListSeq || !cohortCloseSameIdentity(currentIdentity(), identity)) return false;
+  const { data, error } = response ?? {};
+  const summaries = error ? null : normalizeCohortCloseSummaries(data);
+  state.cohortCloseStates = summaries ?? new Map();
+  state.cohortCloseListError = summaries ? "" : cohortCloseError(error ?? { message: "cohort_close_invalid_response" });
+  return !!summaries;
+}
+
+/** 操作の詳細は対象回だけ。別回・古い読み直し・ログアウト後の応答を捨てる。 */
+async function loadCohortCloseStatus(id) {
+  const seq = ++cohortCloseDetailSeq;
+  const identity = currentIdentity();
+  let response;
+  try {
+    response = await supabase.rpc("cohort_close_status", { p_cohort_id: id });
+  } catch (error) {
+    response = { data: null, error };
+  }
+  if (appClosed || id !== state.cohortId || seq !== cohortCloseDetailSeq || !cohortCloseSameIdentity(currentIdentity(), identity)) return false;
+  const { data, error } = response ?? {};
+  const status = error ? null : normalizeCohortCloseStatus(data, id);
+  state.cohortCloseStatuses.set(id, status);
+  state.cohortCloseErrors.set(id, status ? "" : cohortCloseError(error ?? { message: "cohort_close_invalid_response" }));
+  return !!status;
+}
+
+function cohortCloseBadge(id) {
+  const summary = state.cohortCloseStates.get(id);
+  return el("span", {
+    className: `badge ${summary?.state === "closed" ? "stopped" : "default"}`, // 0179 の "off" は CSS に無い。停止の色（stopped）にそろえる
+    text: summary ? summary.state === "closed" ? "クローズ済み" : "未クローズ" : "クローズ未確認",
+  });
+}
+
+function cohortCloseBox(c) {
+  const status = state.cohortCloseStatuses.get(c.id);
+  const error = state.cohortCloseErrors.get(c.id);
+  const kind = status?.state === "closed" ? "reopen" : "close";
+  return el("section", { className: "box tight", "aria-label": "回のクローズ" },
+    el("h3", { text: "回のクローズ" }),
+    ...(error ? [error] : cohortCloseLines(status)).map((text) => el("p", { className: error ? "warn-text small" : "hint", text })),
+    cohortCloseCanAct(status, kind) ? el("button", {
+      type: "button", className: kind === "close" ? "btn danger" : "btn",
+      text: kind === "close" ? "この回をクローズ" : "回を開き直す", disabled: state.cohortCloseBusy,
+      onclick: () => changeAdminCohortClose(kind, c.id),
+    }) : null,
+    el("button", {
+      type: "button", className: "link-btn", text: "クローズの状態を読み直す", disabled: state.cohortCloseBusy,
+      onclick: async () => { await loadCohortCloseStatus(c.id); renderAll(); },
+    }),
+  );
+}
+
+const adminCohortCloseAction = createCohortCloseAction({
+  rpc: (name, args) => supabase.rpc(name, args),
+  canStart: () => !appClosed && !state.cohortCloseBusy,
+  confirm: ({ title, lines, okText }) => ask({ title, lines, buttons: [
+    { label: "やめる", value: false }, { label: okText, value: true, kind: "danger" },
+  ], cancelValue: false, focusValue: false }),
+  onBusy: (busy) => {
+    state.cohortCloseBusy = busy;
+    if (busy) { cohortCloseDetailSeq++; cohortCloseListSeq++; }
+    renderAll();
+  },
+  onStatus: (status) => {
+    cohortCloseListSeq++;
+    state.cohortCloseStatuses.set(status.cohortId, status);
+    state.cohortCloseErrors.set(status.cohortId, "");
+    state.cohortCloseStates.set(status.cohortId, status);
+  },
+  onSuccess: async (_status, raw, kind, isCurrent) => {
+    if (!isCurrent()) return;
+    notify(raw.changed === false
+      ? kind === "close" ? "この回はすでにクローズされています。" : "この回はすでに開き直されています。"
+      : kind === "close" ? "回をクローズしました。最新の名簿と削除予定を確認してください。"
+      : `回を開き直し、${raw.restored_count} 人を有効に戻しました。個別変更などで戻さなかった人は ${raw.skipped_count} 人です。`);
+    await Promise.all([loadCohorts(), loadUsage()]);
+    if (isCurrent()) await loadCohortCloseStatus(state.cohortId);
+  },
+  onError: async (message) => {
+    notify(message, "error");
+    await Promise.all([loadCohortCloseStates(), loadCohortCloseStatus(state.cohortId)]);
+  },
+});
+
+function changeAdminCohortClose(kind, id) {
+  const identity = currentIdentity();
+  return adminCohortCloseAction.run(kind, id, () => !appClosed && id === state.cohortId && cohortCloseSameIdentity(currentIdentity(), identity));
+}
+
 function renderCohorts() {
   const main = $("cohorts-main");
   if (state.tab !== "cohorts") return;
@@ -2987,7 +3134,10 @@ function renderCohorts() {
     main.replaceChildren(errorBox(`回を読み込めませんでした。${state.cohortsError}`));
     return;
   }
-  main.replaceChildren(isDesktop() ? cohortTable() : cohortCards(), venuesSection());
+  main.replaceChildren(...[
+    state.cohortCloseListError ? warnBox(state.cohortCloseListError) : null,
+    isDesktop() ? cohortTable() : cohortCards(), venuesSection(),
+  ].filter(Boolean));
 }
 
 function cohortCards() {
@@ -3008,7 +3158,7 @@ function cohortCards() {
         el(
           "button",
           { type: "button", className: "card", onclick: () => openCohort(c.id) },
-          el("span", { className: "card-top" }, el("span", { className: "cid num", text: c.id }), el("span", { className: "card-name" }), stageBadge(c.id), cohortStatusBadge(c.current_period)),
+          el("span", { className: "card-top" }, el("span", { className: "cid num", text: c.id }), el("span", { className: "card-name" }), stageBadge(c.id), cohortStatusBadge(c.current_period), cohortCloseBadge(c.id)),
           el("span", { className: "small ellipsis", text: [c.name, c.venue_name].filter(Boolean).join(" · ") || "（名前なし）" }),
           el("span", { className: "num", text: `Day1 ${formatDateWithWeekday(c.day1_date)}　→　Day2 ${formatDateWithWeekday(c.day2_date)}` }),
           u && u.limit !== null
@@ -3085,7 +3235,7 @@ function cohortTable() {
           "aria-current": state.cohortId === c.id ? "true" : null,
           onclick: () => openCohort(c.id),
         },
-        el("span", { className: "cell" }, el("span", { className: "num strong", text: c.id }), cohortStatusBadge(c.current_period), stageBadge(c.id)),
+        el("span", { className: "cell" }, el("span", { className: "num strong", text: c.id }), cohortStatusBadge(c.current_period), stageBadge(c.id), cohortCloseBadge(c.id)),
         el(
           "span",
           { className: "cell" },
@@ -3161,6 +3311,7 @@ async function openCohort(id) {
   // 編集の前に読み直す（人数・使用・日付を最新に）
   await Promise.all([loadCohorts(), loadUsage(), loadStageInfo()]);
   if (stagesAvailable()) await Promise.all([loadCohortFlags(id), isStageCohort(id) ? loadCohortStageStatus(id) : null]);
+  await loadCohortCloseStatus(id);
   if (seq !== cohortSeq) return;
   state.cohortLoading = false;
   if (!isDesktop() && sheetKind !== "cohort") return;
@@ -3184,7 +3335,7 @@ function cohortHead(c, titleId) {
     { className: "detail-title" },
     el("h2", { id: titleId, className: "title-lg num cid", text: c.id }),
     el("span", { className: "sub", text: [c.name, `会場 ${c.venue_no} ${c.venue_name ?? ""}`].filter(Boolean).join(" · ") }),
-    el("div", { className: "badges" }, cohortStatusBadge(c.current_period), stageBadge(c.id)),
+    el("div", { className: "badges" }, cohortStatusBadge(c.current_period), stageBadge(c.id), cohortCloseBadge(c.id)),
   );
 }
 
@@ -3222,7 +3373,7 @@ function renderCohortSheet() {
     );
   setSheet({
     head: cohortHead(c, "sheet-title"),
-    body: [schedule, cohortSumBox(c), ...stageBoxes(c), cohortStudentsBox(c, 5), cohortAddButtons(c), ...cohortManage(c)],
+    body: [schedule, cohortSumBox(c), cohortCloseBox(c), ...stageBoxes(c), cohortStudentsBox(c, 5), cohortAddButtons(c), ...cohortManage(c)],
   });
 }
 
@@ -3238,7 +3389,7 @@ function renderCohortAside() {
     aside.replaceChildren(el("p", { className: "side-empty", text: "回を選ぶと、ここで設定できます。" }));
     return;
   }
-  aside.replaceChildren(cohortHead(c, "aside-cohort-title"), cohortEditForm(c), cohortSumBox(c), ...stageBoxes(c), cohortStudentsBox(c, 5), cohortAddButtons(c), ...cohortManage(c));
+  aside.replaceChildren(cohortHead(c, "aside-cohort-title"), cohortEditForm(c), cohortSumBox(c), cohortCloseBox(c), ...stageBoxes(c), cohortStudentsBox(c, 5), cohortAddButtons(c), ...cohortManage(c));
 }
 
 function cohortSumBox(c) {
@@ -3897,27 +4048,62 @@ async function loadModels({ resetDraft = false } = {}) {
   return true;
 }
 
+/** Storage の使用量は読取専用の集計。設定やモデルを読めなくても、この部分だけ再試行できる。 */
+async function loadStorageUsage() {
+  const S = state.settings;
+  const ticket = gates.storage.begin();
+  let status = 0;
+  let body = null;
+  try {
+    const { data } = await supabase.auth.getSession();
+    const res = await fetch(`${ADMIN_API_URL}/storage-usage`, {
+      headers: { Authorization: `Bearer ${data?.session?.access_token ?? ""}`, apikey: SUPABASE_PUBLISHABLE_KEY },
+      cache: "no-store",
+      signal: AbortSignal.timeout(15000),
+    });
+    status = res.status;
+    body = await res.json().catch(() => null);
+  } catch {
+    status = 0;
+  }
+  if (appClosed) return false;
+  if (!gates.storage.accept(ticket)) return true;
+  const view = status === 200 ? storageUsageView(body) : null;
+  if (!view) {
+    const knownError = [0, 401, 403, 404, 503].includes(status);
+    S.storageError = status === 200 ? "Storage の集計の形が正しくありません。" : knownError ? explainApiError(status, body) : `Storage の使用量を読み込めませんでした（HTTP ${status}）。`;
+    if (S.storageStatus !== "ok") S.storageStatus = "error";
+    return false;
+  }
+  S.storage = body;
+  S.storageStatus = "ok";
+  S.storageError = "";
+  S.storageAt = Date.now();
+  return true;
+}
+
 /**
- * 設定の画面の 3 つを読み直す。前に読めていた部分の読み直しに失敗したら知らせる（画面は前の値のまま。その部分に「前に読んだ値」と再試行を出す）。
+ * 設定の画面の各部分を読み直す。前に読めていた部分の読み直しに失敗したら知らせる（画面は前の値のまま。その部分に「前に読んだ値」と再試行を出す）。
  * 返り値：部分ごとに読めたか
  */
 async function loadSettingsAll(options = {}) {
   const S = state.settings;
-  for (const k of ["status", "historyStatus", "modelsStatus"]) if (S[k] === "idle") S[k] = "loading";
+  for (const k of ["status", "historyStatus", "modelsStatus", "storageStatus"]) if (S[k] === "idle") S[k] = "loading";
   if (state.trend.status === "idle") state.trend.status = "loading";
   renderSettings();
   // 消費の推移（228）は待たない（集計が遅くても、上限と枠・保存のあとの読み直し〔S.busy の解除〕を止めない）。届いたら、その面だけ描き直す
   reloadTrendInBackground();
-  const [info, history, models] = await Promise.all([loadSettingsInfo(), loadSettingsHistory(), loadModels(options)]);
-  if (appClosed) return { info: false, history: false, models: false };
+  const [info, history, models, storage] = await Promise.all([loadSettingsInfo(), loadSettingsHistory(), loadModels(options), loadStorageUsage()]);
+  if (appClosed) return { info: false, history: false, models: false, storage: false };
   const stale = [];
   if (!info && S.status === "ok") stale.push(`上限と枠：${S.error}`);
   if (!history && S.historyStatus === "ok") stale.push(`履歴：${S.historyError}`);
   if (!models && S.modelsStatus === "ok") stale.push(`モデル：${S.modelsError}`);
+  if (!storage && S.storageStatus === "ok") stale.push(`Storage：${S.storageError}`);
   if (stale.length) notify("設定の一部を読み直せませんでした（前に読んだ値を出しています）。", "error", stale);
   renderSettings();
   renderHeader();
-  return { info, history, models };
+  return { info, history, models, storage };
 }
 
 /** その部分だけを読み直す（部分の失敗の［再試行］） */
@@ -3933,6 +4119,7 @@ function retryPart(load) {
 const retryInfo = retryPart(loadSettingsInfo);
 const retryModels = retryPart(() => loadModels());
 const retryHistory = retryPart(loadSettingsHistory);
+const retryStorage = retryPart(loadStorageUsage);
 const retryStages = retryPart(async () => {
   await loadStageInfo();
   renderAll();
@@ -4015,6 +4202,7 @@ function renderSettings() {
     $("settings-summary").replaceChildren(...(sub === "usage" ? summaryContent().filter(Boolean) : []));
     renderTrend();
     $("settings-main").replaceChildren(...(sub === "usage" ? [limitsSection()] : []));
+    $("settings-storage").replaceChildren(...(sub === "usage" ? [storageSection()] : []));
     $("settings-models").replaceChildren(...(sub === "models" ? [modelsSection()] : []));
     $("settings-templates").replaceChildren(
       ...(sub !== "templates"
@@ -4805,6 +4993,38 @@ function limitsSection() {
           el("ul", { className: "set-rows", "aria-labelledby": `grp-${g.id}` }, ...g.items.map(limitListRow)),
         )
       ),
+  });
+}
+
+/** Storage と保存期限の集計。削除や設定変更の操作はこの欄には置かない。 */
+function storageSection() {
+  const S = state.settings;
+  return partBox({
+    id: "storage-usage-h",
+    title: "Storage の使用量と保存期限",
+    status: S.storageStatus,
+    error: S.storageError,
+    at: S.storageAt,
+    retry: retryStorage,
+    side: S.storageAt ? el("span", { className: "checked num", text: checkedText(S.storageAt) }) : null,
+    content: () => {
+      const view = storageUsageView(S.storage, formatDateTime);
+      if (!view) return [el("p", { className: "error-text", text: "Storage の集計の形が正しくありません。再度読み込んでください。" })];
+      return [
+        el("p", { className: "hint", text: "保存済みのファイルの容量です。1 GB は 10 億バイト。容量が分からないファイルは、件数を分けて表示します。" }),
+        el("ul", { className: "storage-usage-list", "aria-label": "バケットごとのファイル件数と容量" },
+          ...view.buckets.map((row) => el("li", { className: "storage-usage-row" },
+            el("span", { className: "storage-usage-label", text: row.label }),
+            el("span", { className: "num", text: row.count }),
+            el("span", { className: "num", text: row.capacity }),
+          )),
+        ),
+        el("p", { className: "strong num", text: view.total }),
+        el("p", { className: "num", text: `${view.retention} · ${view.pending}` }),
+        el("p", { className: "num", text: view.earliest }),
+        ...view.cleanup.map((line) => el("p", { className: "hint num", text: line })),
+      ];
+    },
   });
 }
 
