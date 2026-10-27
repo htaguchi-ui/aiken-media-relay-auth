@@ -8,7 +8,7 @@
 // supabase-js は instructor.html で版を固定し、integrity（SRI）を付けて読み込む（window.supabase）
 // ページは 2 つ：回の一覧（/instructor）と、ある回の操作（/instructor/c/<回の ID>）。同じ instructor.html・instructor.js が、道（ROUTE）を見て描き分ける
 // （設計書 docs/design-instructor-split.md）。ログイン・ログアウト・管理者として使う部分は道に関わらず同じ
-import { backToListLink, cohortListView, cohortMissingView } from "./instructor-list.js";
+import { backToListLink, cohortListView, cohortMissingView, submissionsLink } from "./instructor-list.js";
 import { extraTargets, groupCohorts, instructorRoute } from "./instructor-list-lib.js";
 import {
   ADMIN_CONSOLE_STORAGE_KEY,
@@ -26,6 +26,7 @@ import {
   STUDIO_STORAGE_KEY,
   takeStoredSession,
 } from "./auth-storage.js";
+import { discardDlKey } from "./share-lib.js";
 import { MSG_CODE_FAILED, oauthOptions } from "./mypage-lib.js";
 import {
   cohortStatus,
@@ -112,6 +113,8 @@ function sendLocalLogout(token) {
 }
 
 discardOldTabSessions(browserStorage("session"), sendLocalLogout);
+// 保存のページ（/dl）が、このタブの sessionStorage に一時に置いた鍵：開いた時点で消す（前の人の作品が、この画面から［戻る］［進む］で出ないように。docs/design-submissions.md 4.9 の消す条件 (d)）
+discardDlKey(browserStorage("session"));
 
 // 読み込めない（通信の失敗・integrity の不一致）ときは先へ進まない
 if (typeof window.supabase?.createClient !== "function") {
@@ -205,6 +208,7 @@ async function signIn({ selectAccount = false } = {}) {
 /** ログアウトして、この端末の共有のログインを消す（通信できなくても消す。マイページ・Canvas のタブもログインの画面になる） */
 async function endSession() {
   ending = true;
+  discardDlKey(browserStorage("session")); // /dl が置いた鍵は、ログアウトで消す（通信できなくても）
   try {
     // この端末のセッションだけを切る（global だと、本人の ChatGPT・Codex・Claude Code の接続まで切れる）
     await supabase.auth.signOut({ scope: "local" });
@@ -887,7 +891,7 @@ function render() {
   }
   const here = state.cohorts.find((x) => x.id === state.cohortId);
   document.title = `${here?.name ?? here?.id ?? "回の操作"} – A.I.KEN Studio 講師の画面`;
-  const parts = [backToListLink({ el }), cohortCard()];
+  const parts = [backToListLink({ el }), submissionsLink({ el }), cohortCard()];
   const s = state.status;
   if (!s) {
     parts.push(

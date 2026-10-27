@@ -7,7 +7,7 @@
 <!-- CSP（SEC-03。2026-10-23）：スクリプトは自分のサイトの JS（redirect-check.js・auth-storage.js）・版を固定した supabase-js・下のインラインのモジュール（hash）だけ。
      通信は Supabase（Auth・RPC）だけ。フォームは送らない。埋め込みの禁止（frame-ancestors）は meta では効かないので vercel.json の全体の見出しで付ける。
      下のインラインのモジュール（type="module" のスクリプト）の中身を 1 文字でも変えたら hash が合わなくなり、この画面が動かなくなる。公開の build（tools/build-site.mjs）が食い違いで止め、正しい hash を知らせるので、ここを直す -->
-<meta http-equiv="Content-Security-Policy" content="default-src 'none'; script-src 'self' https://cdn.jsdelivr.net/npm/@supabase/supabase-js@2.117.2/dist/umd/supabase.js 'sha256-ChfIwUMEdbPmJZ0BPj4ImcYemQ/XZqw5kWtTK0/uiDk='; connect-src https://tnzwhwitgnzoehbjrmoy.supabase.co; style-src 'unsafe-inline'; img-src 'self'; object-src 'none'; base-uri 'none'; form-action 'none'">
+<meta http-equiv="Content-Security-Policy" content="default-src 'none'; script-src 'self' https://cdn.jsdelivr.net/npm/@supabase/supabase-js@2.117.2/dist/umd/supabase.js 'sha256-UIneAgjT+pc9+LpvFSKWgJPH942qWW8xTNvkogkxw5c='; connect-src https://tnzwhwitgnzoehbjrmoy.supabase.co; style-src 'unsafe-inline'; img-src 'self'; object-src 'none'; base-uri 'none'; form-action 'none'">
 <title>A.I.KEN Studio ログイン</title>
 <!-- supabase-js は版を固定し、改ざんされていないことを integrity（SRI）で確かめてから使う（window.supabase） -->
 <script src="https://cdn.jsdelivr.net/npm/@supabase/supabase-js@2.117.2/dist/umd/supabase.js" integrity="sha384-Rj26LVGvoeRVR6+mwQmFfcR3QOBEwT+ZmuCWpuiqeTzJpCs0ER4ITAWGb4Hiy3Ok" crossorigin="anonymous"></script>
@@ -261,6 +261,13 @@
     STUDIO_STORAGE_KEY,
     takeStoredSession,
   } from "./auth-storage.js";
+  const discardDlKey = (storage) => {
+    try {
+      storage?.removeItem("aiken-dl-key");
+    } catch {
+      // 保存先が使えなくても、接続の画面を止めない。
+    }
+  };
 
   // 許可・拒否などが終わったあとのログアウトの方式（README の「公開の前の注意」）
   // - "signout-local"：サーバーでこのセッションを取り消し（signOut scope local）、タブからも消す（既定）
@@ -298,9 +305,11 @@
   // 表示した人と今のログインの人を結び付けて見張り、替わったら許可の画面を止める。許可・拒否を送る直前にも照らす（F107-01）
   // 以前の版が localStorage（sb-…）・sessionStorage（aiken-consent-auth など）に残したセッションは、開いた時点で捨てる（移さない）
   const sessionStore = browserStorage("session");
+  discardDlKey(sessionStore); // このタブで /dl の用が済んだ。許可の画面を開いた時点で消す
   const localStore = browserStorage("local");
   clearStoredSession(localStore, LEGACY_STORAGE_PREFIX);
   const sendLocalLogout = (token) => {
+    discardDlKey(sessionStore);
     if (!token || CONSENT_END_SESSION !== "signout-local") return;
     try {
       fetch(SUPABASE_URL + "/auth/v1/logout?scope=local", {
@@ -354,6 +363,7 @@
 
   /** ログアウトする（方式は CONSENT_END_SESSION。どちらでも保存先からは消す）。共有のログインを切るので、マイページなどのタブもログインの画面になる */
   const endSession = async () => {
+    discardDlKey(sessionStore);
     if (CONSENT_END_SESSION === "signout-local") {
       try {
         await supabase.auth.signOut({ scope: "local" });
@@ -404,6 +414,7 @@
    * supabase-js の signOut は、通信のあとで、そのときの鍵を無条件に消すので使わない）
    */
   const endOwnedSession = async (target) => {
+    discardDlKey(sessionStore);
     try {
       supabase.auth.stopAutoRefresh?.();
     } catch {
@@ -634,6 +645,7 @@
   });
   // supabase-js の知らせ（ほかのタブの BroadcastChannel・このタブのトークンの更新の失敗）。知らせの中では supabase を待たない
   supabase.auth.onAuthStateChange((event, session) => {
+    if (event === "SIGNED_OUT") discardDlKey(sessionStore);
     if (!shownIdentity) return;
     const next = event === "SIGNED_OUT" ? null : sessionIdentity(session);
     if (event === "SIGNED_OUT" || (next && !sameIdentity(next, shownIdentity))) {

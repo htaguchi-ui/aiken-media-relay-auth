@@ -1,0 +1,369 @@
+<!doctype html>
+<html lang="ja">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+<meta name="robots" content="noindex">
+<meta name="referrer" content="no-referrer">
+<meta name="color-scheme" content="light dark">
+<meta http-equiv="Content-Security-Policy" content="default-src 'self'; script-src 'self' https://cdn.jsdelivr.net/npm/@supabase/supabase-js@2.117.2/dist/umd/supabase.js; connect-src https://tnzwhwitgnzoehbjrmoy.supabase.co; style-src 'self' 'unsafe-inline' https://fonts.googleapis.com; font-src https://fonts.gstatic.com; img-src 'self' data:; media-src https://tnzwhwitgnzoehbjrmoy.supabase.co; object-src 'none'; base-uri 'self'; form-action 'self'">
+<!-- supabase-js は版を固定し、改ざんされていないことを integrity（SRI）で確かめてから使う（window.supabase）。CSP もこのファイルだけを許す -->
+<!-- defer：読み込みの間も HTML の読み進め（CSS・JS の取りに行き）を止めない。実行の順は今と同じ（下の type="module" より先に、文書の順で実行される） -->
+<script src="https://cdn.jsdelivr.net/npm/@supabase/supabase-js@2.117.2/dist/umd/supabase.js" integrity="sha384-Rj26LVGvoeRVR6+mwQmFfcR3QOBEwT+ZmuCWpuiqeTzJpCs0ER4ITAWGb4Hiy3Ok" crossorigin="anonymous" defer></script>
+<title>A.I.KEN Studio 提出の画面</title>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<!-- ログインの確かめ・RPC の接続先へ先につないでおく（supabase-js の fetch は資格情報なしなので crossorigin） -->
+<link rel="preconnect" href="https://tnzwhwitgnzoehbjrmoy.supabase.co" crossorigin>
+<link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=IBM+Plex+Sans+JP:wght@400;500;600;700&amp;display=swap">
+<link rel="stylesheet" href="/r/c1ecf73fd1f5/site-nav.css">
+<link rel="stylesheet" href="/r/c1ecf73fd1f5/gsi-button.css">
+<link rel="modulepreload" href="/r/c1ecf73fd1f5/admin-lib.js">
+<link rel="modulepreload" href="/r/c1ecf73fd1f5/auth-storage.js">
+<link rel="modulepreload" href="/r/c1ecf73fd1f5/mypage-lib.js">
+<link rel="modulepreload" href="/r/c1ecf73fd1f5/share-lib.js">
+<link rel="modulepreload" href="/r/c1ecf73fd1f5/site-nav.js">
+<link rel="modulepreload" href="/r/c1ecf73fd1f5/stage-lib.js">
+<link rel="modulepreload" href="/r/c1ecf73fd1f5/submissions-lib.js">
+<style>
+  :root {
+    --accent: #26396E; --accent-hover: #1B2B55; --on-accent: #FFFFFF;
+    --accent-soft: #EEF1F6; --accent-soft-line: #C8D0DE; --accent-soft-text: #22325E;
+    --bg: #F4F5F8; --surface: #FFFFFF;
+    --text: #16181D; --text-2: #4A505B; --muted: #5B6270;
+    --line: #E3E6EB; --line-2: #DDE1E7; --line-soft: #EEF0F3; --input-line: #C9CED6;
+    --track: #E9ECF1;
+    --student-bg: #E6EAF2; --student-fg: #22325E;
+    --member-bg: #E5ECEA; --member-fg: #355A54;
+    --admin-bg: #ECEDF0; --admin-fg: #30343B;
+    --instructor-bg: #ECE8F2; --instructor-fg: #4A3A66;
+    --ok-bg: #E7EDE8; --ok-fg: #3D5B45;
+    --warn-bg: #F6EEE4; --warn-fg: #74512C;
+    --low: #A0573A; --low-text: #8A4B33;
+    --danger: #96413A; --danger-line: #E2CDC9;
+    --dot: #C4C9D2;
+    --font: "IBM Plex Sans JP", "Hiragino Sans", "Hiragino Kaku Gothic ProN", "Noto Sans JP", "Yu Gothic UI", Meiryo, system-ui, sans-serif;
+  }
+  /* ダーク表示：紺基調のまま明度を反転（マイページ・管理コンソールと同じ） */
+  @media (prefers-color-scheme: dark) {
+    :root {
+      --accent: #A9B9E9; --accent-hover: #C3CFF2; --on-accent: #0E1322;
+      --accent-soft: #1E2741; --accent-soft-line: #34406A; --accent-soft-text: #C7D2F2;
+      --bg: #0E1220; --surface: #161B2B;
+      --text: #E8EAF0; --text-2: #C2C7D2; --muted: #A0A7B6;
+      --line: #283048; --line-2: #323B54; --line-soft: #222A3E; --input-line: #3C4661;
+      --track: #262E44;
+      --student-bg: #243052; --student-fg: #C7D2F2;
+      --member-bg: #1E3532; --member-fg: #A9D0C6;
+      --admin-bg: #2A2E39; --admin-fg: #D0D4DC;
+      --instructor-bg: #2E2640; --instructor-fg: #D2C6EC;
+      --ok-bg: #1F3527; --ok-fg: #A9D4B4;
+      --warn-bg: #3A2E20; --warn-fg: #EBC79C;
+      --low: #D8916F; --low-text: #EBA887;
+      --danger: #EE968C; --danger-line: #5C3631;
+      --dot: #4A5370;
+    }
+  }
+  * { box-sizing: border-box; }
+  /* 縦のスクロールバーの有無で中央の中身が左右にずれないよう、その幅をいつも空けておく */
+  html { -webkit-text-size-adjust: 100%; scrollbar-gutter: stable; }
+  body {
+    margin: 0; min-height: 100vh; background: var(--bg); color: var(--text);
+    font-family: var(--font); font-size: 15px; line-height: 1.7;
+  }
+  [hidden] { display: none !important; }
+  .tabular { font-variant-numeric: tabular-nums; }
+  .muted { color: var(--muted); }
+  .small { font-size: 12px; }
+  .ellipsis { white-space: nowrap; overflow: hidden; text-overflow: ellipsis; min-width: 0; }
+  .error-text { color: var(--danger); }
+  .warn-text { color: var(--warn-fg); font-weight: 600; }
+  h1, h2, h3, p { margin: 0; }
+  button { font: inherit; color: inherit; cursor: pointer; }
+  button:disabled { cursor: not-allowed; }
+  :focus-visible { outline: 2px solid var(--accent); outline-offset: 2px; }
+
+  /* ---- ボタン・入力 ---- */
+  .btn {
+    min-height: 44px; padding: 0 16px; border-radius: 12px; border: 1px solid var(--line-2);
+    background: var(--surface); color: var(--text); font-weight: 700; font-size: 14px;
+    display: inline-flex; align-items: center; justify-content: center; gap: 8px; text-decoration: none;
+  }
+  .btn:hover:not(:disabled) { border-color: var(--input-line); }
+  .btn.primary { background: var(--accent); border-color: var(--accent); color: var(--on-accent); }
+  .btn.primary:hover:not(:disabled) { background: var(--accent-hover); border-color: var(--accent-hover); }
+  .btn.big { min-height: 52px; border-radius: 14px; font-size: 16px; }
+  .btn.compact { min-height: 36px; padding: 0 12px; font-size: 13px; border-radius: 10px; }
+  .btn.danger { color: var(--danger); border-color: var(--danger-line); } /* 0179（回のクローズ）用。管理コンソールと同じ */
+  .btn:disabled { opacity: 0.55; }
+  .input { min-height: 44px; width: 100%; padding: 0 12px; border-radius: 10px; border: 1px solid var(--input-line); background: var(--surface); color: var(--text); font: inherit; }
+  label.field-label { display: block; font-size: 13px; font-weight: 600; margin-bottom: 4px; }
+
+  /* ---- バッジ ---- */
+  .badge { flex: none; display: inline-flex; align-items: center; font-size: 12px; font-weight: 600; padding: 1px 10px; border-radius: 999px; white-space: nowrap; line-height: 1.6; }
+  .badge.student { background: var(--student-bg); color: var(--student-fg); }
+  .badge.member { background: var(--member-bg); color: var(--member-fg); }
+  .badge.admin { background: var(--admin-bg); color: var(--admin-fg); }
+  .badge.instructor { background: var(--instructor-bg); color: var(--instructor-fg); }
+  /* 回の状態・ワークショップの状態（管理コンソールと同じ組）：今＝active、これから＝upcoming、済み＝ended（線だけ） */
+  .badge.active { background: var(--student-bg); color: var(--student-fg); font-weight: 700; padding: 3px 10px; }
+  .badge.upcoming { background: var(--admin-bg); color: var(--admin-fg); font-weight: 700; padding: 3px 10px; }
+  .badge.stopped, .badge.ended { border: 1px solid var(--dot); color: var(--text-2); padding: 1px 8px; }
+  .badge.ended { font-weight: 700; padding: 2px 10px; }
+
+  /* ---- 折りたたみ・注意の箱（管理コンソールと同じ） ---- */
+  details.plain-fold > summary { list-style: none; cursor: pointer; min-height: 44px; display: flex; align-items: center; gap: 10px; font-weight: 700; border-radius: 10px; }
+  details.plain-fold > summary::-webkit-details-marker { display: none; }
+  details.plain-fold > summary::before {
+    content: ""; flex: none; width: 7px; height: 7px; border-right: 2px solid currentColor; border-bottom: 2px solid currentColor;
+    transform: rotate(-45deg); transition: transform 0.15s; margin: 0 3px;
+  }
+  details.plain-fold[open] > summary::before { transform: rotate(45deg); }
+  details.plain-fold > summary .meta { margin-left: auto; font-weight: 500; font-size: 13px; color: var(--text-2); }
+  details.plain-fold.minor > summary { font-weight: 600; color: var(--accent); }
+  .fold-in { display: flex; flex-direction: column; gap: 8px; padding: 2px 0 6px 20px; }
+  @media (prefers-reduced-motion: reduce) { details.plain-fold > summary::before { transition: none; } }
+  .warn-box { display: flex; align-items: flex-start; gap: 8px; background: var(--warn-bg); color: var(--warn-fg); border-radius: 10px; padding: 8px 10px; font-size: 13px; font-weight: 500; }
+  .warn-box svg { flex: none; margin-top: 2px; }
+
+  /* ---- 読み込み・ログイン・エラー ---- */
+  .center-card { max-width: 440px; margin: 14vh auto 0; background: var(--surface); border: 1px solid var(--line); border-radius: 16px; padding: 32px 28px; display: flex; flex-direction: column; gap: 16px; }
+  .center-card h1 { font-size: 22px; }
+  .center-card .row { display: flex; flex-wrap: wrap; gap: 8px; }
+  @media (max-width: 480px) { .center-card { margin: 10vh 16px 0; padding: 24px; } } /* スマホの幅の余白は管理コンソールと同じ */
+
+  /* ---- 上部の帯（画面の上に固定。見た目は管理コンソール admin.html と同じ）---- */
+  /* --topbar-h ＝ 固定したヘッダーの高さ（ノッチ分を含む）。ヘッダーの下に隠れてはいけない部品（お知らせ・移動先）はこの 1 か所の値で下げる */
+  /* 実測は、ヘッダーを 1 段にした（帯を題名の右に並べた）あとの高さ（2026-10-23 測り直し） */
+  :root { --topbar-h: calc(61px + env(safe-area-inset-top)); } /* 561〜899px。実測 61px */
+  html { scroll-padding-top: var(--topbar-h); }
+  .sticky-top { position: sticky; top: 0; z-index: 20; background: var(--bg); } /* お知らせの余白から後ろの本文が透けないよう、背景は画面の地の色 */ /* ヘッダーとお知らせを 1 つの箱にして貼り付ける（お知らせが増えても、ヘッダーの高さの変数に頼らない） */
+  .topbar { background: var(--surface); border-bottom: 1px solid var(--line); padding-top: env(safe-area-inset-top); line-height: 1.5; }
+  /* すりガラス（ヘッダーとお知らせの箱 .sticky-top 全体）：背景を 88% の不透明にして、後ろを blur(16px) saturate(180%) でぼかす（色は --surface から作るので、ライト・ダークとも自動）。
+     88% は、後ろが真っ黒・真っ白でも小さい見出し・メール（--muted）が AA（4.5:1）を割らない最小に近い値（ライト 4.6:1・ダーク 5.0:1）。
+     対応していないブラウザ（backdrop-filter・color-mix が無い）と、透明を減らす設定（prefers-reduced-transparency）のときは、上の不透明な背景のまま。 */
+  @supports ((backdrop-filter: blur(1px)) or (-webkit-backdrop-filter: blur(1px))) and (background: color-mix(in srgb, red 50%, transparent)) {
+    .sticky-top { background: color-mix(in srgb, var(--surface) 88%, transparent); -webkit-backdrop-filter: blur(16px) saturate(180%); backdrop-filter: blur(16px) saturate(180%); }
+    .sticky-top:has(.toast) { border-bottom: 1px solid var(--line); } /* お知らせが出ている間は、箱の下にも境目の線 */
+    .topbar { background: transparent; }
+  }
+  @media (prefers-reduced-transparency: reduce) {
+    .sticky-top { background: var(--bg); -webkit-backdrop-filter: none; backdrop-filter: none; border-bottom: 0; }
+    .topbar { background: var(--surface); }
+  }
+  .topbar-inner { max-width: 960px; margin: 0 auto; display: flex; align-items: center; justify-content: space-between; gap: 12px; padding: 12px 20px; }
+  .brand { display: flex; min-width: 0; }
+  .brand h1 { font-size: 20px; font-weight: 700; letter-spacing: 0.01em; }
+  .account { display: flex; align-items: center; justify-content: flex-end; gap: 12px; min-width: 0; font-size: 13px; color: var(--muted); }
+  .account .who { display: flex; align-items: center; gap: 8px; min-width: 0; }
+  .account .btn { flex: none; white-space: nowrap; }
+  /* メール・管理者として操作中の説明は見せない（読み上げには残す。区分の印の title にも同じ文） */
+  #me-email { position: absolute; width: 1px; height: 1px; padding: 0; margin: -1px; overflow: hidden; clip: rect(0, 0, 0, 0); white-space: nowrap; border: 0; }
+  @media (min-width: 900px) {
+    :root { --topbar-h: calc(65px + env(safe-area-inset-top)); } /* 900px 以上。実測 65px */
+    .account .btn { min-height: 40px; border-radius: 10px; font-weight: 600; }
+  }
+  /* 区分の印は広い幅（900px 以上）だけ。題名「提出の画面」の幅（実測：20px で 101px・18px で 91px）より題名の欄が狭いときは、
+     題名を読み上げだけに残す（site-nav.css の container: brand） */
+  @media (max-width: 899.98px) { .account .who { display: none; } }
+  @media (min-width: 561px) { @container brand (max-width: 102.98px) { .brand h1 { position: absolute; width: 1px; height: 1px; padding: 0; margin: -1px; overflow: hidden; clip: rect(0, 0, 0, 0); white-space: nowrap; border: 0; } } }
+  @media (max-width: 560px) { @container brand (max-width: 92.98px) { .brand h1 { position: absolute; width: 1px; height: 1px; padding: 0; margin: -1px; overflow: hidden; clip: rect(0, 0, 0, 0); white-space: nowrap; border: 0; } } }
+  /* スマホの幅（560px 以下）：1 段に詰める。区分の印は隠し、［ログアウト］はアイコンだけ（site-nav.css の .hdr-btn） */
+  @media (max-width: 560px) {
+    :root { --topbar-h: calc(57px + env(safe-area-inset-top)); } /* 実測 57px */
+    .topbar-inner { padding: 8px 16px; gap: 8px; }
+    .brand h1 { font-size: 18px; }
+    .account { gap: 8px; }
+    .account .btn { min-height: 40px; }
+  }
+  /* 横向きのスマホ（高さが低い）：画面を圧迫するので固定しない */
+  @media (orientation: landscape) and (max-height: 500px) {
+    :root { --topbar-h: 0px; }
+    .sticky-top { position: static; }
+  }
+
+  /* ---- 本体 ---- */
+  .content { max-width: 960px; margin: 0 auto; padding: 24px 20px 96px; display: flex; flex-direction: column; gap: 20px; }
+  @media (max-width: 560px) { .content { padding: 16px 16px 72px; gap: 16px; } }
+  .card { background: var(--surface); border: 1px solid var(--line); border-radius: 16px; padding: 24px; display: flex; flex-direction: column; gap: 16px; }
+  @media (max-width: 560px) { .card { padding: 20px 18px; } }
+  .card-head { display: flex; align-items: center; justify-content: space-between; gap: 12px; flex-wrap: wrap; }
+  .card-head h2 { min-width: 0; overflow-wrap: anywhere; }
+  .card h2 { font-size: 16px; font-weight: 700; }
+  @media (max-width: 560px) { .content .btn.compact { min-height: 44px; } } /* スマホでは押せる所を 44px に */
+  .card h3 { font-size: 14px; font-weight: 700; }
+  .row-actions { display: flex; flex-wrap: wrap; gap: 8px; }
+  .hint { font-size: 13px; color: var(--muted); }
+  .note-box { background: var(--warn-bg); color: var(--warn-fg); border-radius: 12px; padding: 10px 14px; font-size: 14px; }
+
+  /* ---- お知らせ ---- */
+  #notice:has(.toast) { padding-bottom: 12px; }
+  #notice { display: flex; flex-direction: column; gap: 8px; max-width: 960px; margin: 0 auto; padding: 0 20px; }
+  #notice .toast { margin-top: 12px; padding: 12px 16px; border-radius: 12px; border: 1px solid var(--line-2); background: var(--surface); box-shadow: 0 4px 16px rgba(0, 0, 0, 0.12); display: flex; gap: 12px; align-items: flex-start; justify-content: space-between; }
+  #notice .toast.error { border-color: var(--danger); }
+  #notice .toast.ok { border-color: var(--ok-fg); }
+  #notice .toast p { overflow-wrap: anywhere; }
+  #notice .toast ul { margin: 4px 0 0; padding-left: 18px; }
+
+  /* ---- 回の見出し ---- */
+  .card h2.cohort-name { font-size: 20px; line-height: 1.4; }
+  .cohort-meta { font-size: 13px; color: var(--muted); margin-top: -8px; overflow-wrap: anywhere; }
+  .cohort-pick { max-width: 420px; }
+  .now-line { display: flex; flex-wrap: wrap; align-items: center; gap: 4px 12px; padding: 10px 14px; border-radius: 12px; background: var(--accent-soft); color: var(--accent-soft-text); }
+  .now-line .now-name { flex: 1 1 12em; min-width: 0; font-size: 17px; font-weight: 700; overflow-wrap: anywhere; line-height: 1.5; }
+  .now-line .now-credits { margin-left: auto; font-weight: 600; white-space: nowrap; }
+  .now-line.quiet { background: var(--line-soft); color: var(--text-2); }
+
+  /* ---- 段階の一覧（今の段階を強調：背景・左の線・「今」の印） ---- */
+  .stage-list { list-style: none; margin: 0; padding: 0; display: flex; flex-direction: column; gap: 2px; }
+  .stage-row { width: 100%; text-align: left; display: grid; grid-template-columns: minmax(0, 1fr) auto auto; gap: 2px 12px; align-items: center; min-height: 44px; padding: 8px 12px; border-radius: 10px; border: 0; border-left: 4px solid transparent; background: transparent; }
+  .stage-row:hover { background: var(--line-soft); }
+  .stage-row .stage-name { overflow-wrap: anywhere; font-weight: 600; display: flex; flex-wrap: wrap; align-items: center; gap: 4px 8px; }
+  .stage-row .stage-accept { color: var(--text-2); font-size: 13px; }
+  .stage-row .stage-count { color: var(--text-2); text-align: right; white-space: nowrap; }
+  .stage-row.now .stage-name { font-weight: 700; }
+  .stage-row.selected { background: var(--accent-soft); border-left-color: var(--accent); color: var(--accent-soft-text); }
+  .stage-row.selected .stage-accept, .stage-row.selected .stage-count { color: var(--accent-soft-text); }
+  @media (max-width: 560px) {
+    .stage-row { grid-template-columns: minmax(0, 1fr) auto; }
+    .stage-row .stage-accept { grid-column: 1 / -1; }
+  }
+
+  /* ---- 一覧とプレーヤー（広い幅は横に並べ、狭い幅は縦に積む） ---- */
+  .works-layout { display: grid; grid-template-columns: minmax(0, 5fr) minmax(0, 6fr); gap: 16px; align-items: start; }
+  @media (max-width: 760px) { .works-layout { grid-template-columns: minmax(0, 1fr); } }
+  .works-list { display: flex; flex-direction: column; gap: 8px; max-height: 60vh; overflow: auto; min-width: 0; }
+  .person { display: flex; flex-direction: column; gap: 2px; padding: 4px 0; border-top: 1px solid var(--line-soft); }
+  .person:first-child { border-top: 0; }
+  .person-name { font-weight: 700; }
+  .work-row { width: 100%; display: flex; flex-wrap: wrap; align-items: center; gap: 4px 12px; min-height: 44px; padding: 6px 12px; border-radius: 10px; border: 1px solid transparent; background: transparent; text-align: left; white-space: pre; }
+  .work-row:hover { background: var(--line-soft); }
+  .work-row.selected { background: var(--accent-soft); border-color: var(--accent-soft-line); color: var(--accent-soft-text); font-weight: 700; }
+  .work-label { min-width: 5em; }
+  .opus-mark { font-size: 12px; color: var(--warn-fg); background: var(--warn-bg); border-radius: 999px; padding: 0 8px; cursor: help; }
+  .scope-badge { font-size: 12px; font-weight: 600; padding: 1px 10px; border-radius: 999px; background: var(--line-soft); color: var(--text-2); }
+  .scope-badge.public { background: var(--ok-bg); color: var(--ok-fg); }
+  .scope-badge.private { background: var(--danger-line); color: var(--danger); }
+  .work-survey { padding: 0 12px 6px 12px; }
+  .work-title { font-weight: 600; overflow-wrap: anywhere; }
+  .player { display: flex; flex-direction: column; gap: 8px; min-width: 0; }
+  .player-video { width: 100%; aspect-ratio: 16 / 9; background: #000; border-radius: 12px; }
+  .player-caption { font-weight: 600; overflow-wrap: anywhere; }
+  .row-actions .btn:disabled { opacity: 0.45; }
+  @media (max-width: 560px) { .content .btn.compact { min-height: 44px; } }
+
+  /* ---- 上映の画面（全画面。プロジェクターに映す） ---- */
+  /* 上映の間は、ページの縦のスクロールバーと、その幅の空きも無くす（全画面にぴったり） */
+  html:has(dialog.screen[open]) { overflow: hidden; scrollbar-gutter: auto; }
+  dialog.screen { border: 0; margin: 0; inset: 0; padding: 0; width: 100vw; height: 100vh; max-width: none; max-height: none; background: #000; color: #fff; }
+  dialog.screen::backdrop { background: #000; }
+  .screen-body { height: 100%; display: flex; flex-direction: column; justify-content: center; gap: 12px; padding: 16px; }
+  .screen-body .player-video { width: 100%; max-height: calc(100vh - 160px); aspect-ratio: auto; flex: 1 1 auto; min-height: 0; }
+  .screen-caption { font-size: 20px; font-weight: 700; text-align: center; }
+  .screen-body .row-actions { justify-content: center; }
+
+  /* ---- 確認のダイアログ ---- */
+  dialog.confirm { border: 1px solid var(--line-2); border-radius: 16px; padding: 24px; width: min(440px, calc(100vw - 32px)); background: var(--surface); color: var(--text); }
+  dialog.confirm::backdrop { background: rgba(0, 0, 0, 0.5); }
+  dialog.confirm .confirm-body { display: flex; flex-direction: column; gap: 16px; }
+  dialog.confirm h2 { font-size: 17px; }
+  dialog.confirm p { overflow-wrap: anywhere; }
+  dialog.confirm .row { display: flex; flex-wrap: wrap; gap: 8px; justify-content: flex-end; }
+
+  /* ---- ログイン前（#login.welcome）だけの見た目：トップ（studio.css の .welcome）と同じ並び・大きさ。
+     講師の画面は studio.css を読まないので、ここに小さく置く。色はこのファイルの変数。ログイン後の画面には当たらない（.welcome の中だけ） ---- */
+  .center-card.welcome { align-items: center; text-align: center; gap: 16px; padding-top: 40px; }
+  .welcome .brand-logo { display: block; margin-bottom: 8px; }
+  .welcome .brand-logo img { display: block; width: 120px; height: auto; }
+  .welcome .welcome-title { display: flex; flex-direction: column; align-items: center; gap: 2px; }
+  .welcome h1 { font-size: 24px; letter-spacing: 0.01em; }
+  .welcome .welcome-sub { font-size: 14px; color: var(--muted); }
+  .welcome .btn { align-self: stretch; }
+  .welcome .links { display: flex; flex-wrap: wrap; justify-content: center; gap: 0 16px; }
+  .welcome .alt-login { min-height: 44px; margin-top: -8px; padding: 0 8px; border: 0; background: none; color: var(--accent); font-size: 14px; font-weight: 600; text-decoration: underline; text-underline-offset: 3px; }
+  .welcome .alt-login:disabled { opacity: 0.55; }
+  .welcome .links a { min-height: 44px; display: inline-flex; align-items: center; font-weight: 600; color: var(--accent); }
+  .welcome .foot { font-size: 13px; letter-spacing: 0.08em; color: var(--muted); margin-top: 8px; }
+  @media (max-width: 480px) { .center-card.welcome { padding-top: 32px; } }
+</style>
+</head>
+<body>
+<div id="status" class="center-card" role="status"><p class="muted">読み込み中…</p></div>
+
+<!-- ログイン前：トップ（index.html の #login）と同じ並び。名前の下に小さく「講師の画面」とだけ添える（どの画面か分かるように） -->
+<section id="login" class="center-card welcome" hidden aria-labelledby="login-title">
+  <picture class="brand-logo">
+    <source srcset="/img/aiken-logo-white.png" media="(prefers-color-scheme: dark)">
+    <img src="/img/aiken-logo.png" alt="A.I.KEN" width="120" height="84">
+  </picture>
+  <div class="welcome-title">
+    <h1 id="login-title">A.I.KEN Studio</h1>
+    <p class="welcome-sub">提出の画面</p>
+  </div>
+  <p class="warn-text" id="login-note" role="status" hidden></p>
+  <button type="button" class="gsi-btn" id="login-btn"><span class="gsi-g" aria-hidden="true"></span><span class="gsi-label">Google でログイン</span></button>
+  <button type="button" class="alt-login" id="login-other-btn">別のアカウントでログイン</button>
+  <button type="button" class="alt-login" id="login-console-btn" hidden>管理コンソールを開く</button>
+  <nav class="links" aria-label="方針と規約">
+    <a href="https://a-i-ken.com/privacy/">プライバシーポリシー</a>
+    <a href="/terms.html">利用規約</a>
+  </nav>
+  <p class="foot">A.I.KEN</p>
+</section>
+
+<section id="denied" class="center-card" hidden aria-labelledby="denied-title">
+  <span class="brand-sub">A.I.KEN Studio</span>
+  <h1 id="denied-title">提出の画面</h1>
+  <p class="error-text" id="denied-message">この画面は担当の講師と管理者だけが使えます。<br>担当の登録は管理者に確かめてください。</p>
+  <p class="muted small"><span id="denied-email" class="tabular"></span></p>
+  <p class="warn-text" id="admin-guide" role="status" hidden></p>
+  <div class="row">
+    <button type="button" class="btn primary" id="admin-console-btn" hidden>管理コンソールを開く</button>
+    <button type="button" class="btn" id="denied-logout-btn">ログアウト</button>
+  </div>
+</section>
+
+<section id="failed" class="center-card" hidden aria-labelledby="failed-title">
+  <span class="brand-sub">A.I.KEN Studio</span>
+  <h1 id="failed-title">提出の画面</h1>
+  <p class="error-text" id="failed-message">読み込めませんでした。</p>
+  <div class="row">
+    <button type="button" class="btn primary" id="retry-btn">もう一度試す</button>
+    <button type="button" class="btn" id="failed-logout-btn">ログアウト</button>
+  </div>
+</section>
+
+<div id="app" hidden>
+  <div class="sticky-top">
+  <header class="topbar">
+    <!-- ヘッダーは 1 段（2026-10-23 田口さん）：左に題名、右に 画面の間の移動（共通の部品 site-nav.js・site-nav.css）→ 区分の印 →［ログアウト］。
+         帯は、講師は Canvas・マイページ・講師ページ、管理者として動いているときは管理ページも（is_admin() の答えで決める。案内だけ。
+         守りは各画面と DB）。読み込みが済むまでは隠す。説明の文字（「A.I.KEN Studio」・メール・管理者として操作中の説明）は見せない：
+         メールと管理者の期限の説明は、読み上げ用の文字（#me-email）と区分の印の title に残す。スマホの幅では区分の印を隠し、
+         ［ログアウト］はアイコンだけ（名前は title と読み上げ。管理者として動いているときは title・読み上げの名前で「管理コンソールのログインを終える」と伝える） -->
+    <div class="topbar-inner">
+      <div class="brand">
+        <h1>提出の画面</h1>
+      </div>
+      <nav class="site-nav" id="site-nav" aria-label="ページの移動" hidden></nav>
+      <div class="account">
+        <!-- 読み上げ用の文字（メール・管理者の期限の説明）は、区分の印（.who。狭い幅で隠す）の外に置き、どの幅でも読み上げに残す -->
+        <span id="me-email" class="tabular"></span>
+        <div class="who">
+          <span id="me-role" class="badge"></span>
+        </div>
+        <button type="button" class="btn compact hdr-btn" id="logout-btn" data-icon="log-out" title="ログアウト"><span class="hdr-label">ログアウト</span></button>
+      </div>
+    </div>
+  </header>
+  <div id="notice" role="region" aria-label="お知らせ" aria-live="polite"></div>
+  </div>
+  <main class="content" id="view"></main>
+</div>
+
+<dialog id="confirm" class="confirm" aria-labelledby="confirm-title"></dialog>
+<dialog id="screen" class="screen" aria-label="上映の画面"></dialog>
+<script type="module" src="/r/c1ecf73fd1f5/topbar-height.js"></script>
+<script type="module" src="/r/c1ecf73fd1f5/submissions.js"></script>
+</body>
+</html>

@@ -3,6 +3,9 @@
 // リンクの href は cohortPath()・LIST_PATH の定数だけで作る（回の ID は符号化する）。書き込みの RPC は 1 つも呼ばない。
 import { cohortPath, cohortRowView, LIST_PATH } from "./instructor-list-lib.js";
 
+/** 提出の講師の画面の道（site-nav.js の「提出ページ」と同じ） */
+const SUBMISSIONS_PATH = "/submissions";
+
 /** 一覧の 1 行（1 つの回が 1 つのリンク。新しいタブで開くこともできる） */
 function cohortRow(el, c, extras) {
   const closed = extras?.closed?.has?.(c.id) === true;
@@ -75,6 +78,15 @@ export function cohortMissingView({ el, cohortId = null, onRefresh }) {
       el("button", { type: "button", className: "btn", id: "missing-refresh", text: "最新にする", onclick: () => onRefresh?.() }),
     ),
   );
+}
+
+/**
+ * 操作のページの「提出された作品（別のページ）」へのリンク（提出の講師の画面 /submissions へ。設計 docs/design-instructor-split.md の M-SP4）。
+ * 提出の画面（submissions.html）と同じ公開にだけ入れる（提出が出ていない間にこのリンクだけ出すと、行き先が無い）。
+ * 分割を外すときは、分割の一部としてこのリンクも一緒に消える。href は定数だけ
+ */
+export function submissionsLink({ el }) {
+  return el("nav", { className: "back-row", id: "submissions-row", "aria-label": "提出された作品" }, el("a", { className: "back-link", id: "to-submissions", href: SUBMISSIONS_PATH, text: "提出された作品（別のページ）" }));
 }
 
 /** 操作のページの先頭の「← 回の一覧」 */

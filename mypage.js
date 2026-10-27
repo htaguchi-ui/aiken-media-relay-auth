@@ -36,6 +36,9 @@ import {
   shouldReloadOnReturn,
 } from "./mypage-lib.js";
 import { fillIcons, renderSiteNav } from "./site-nav.js";
+import { createMySubmissions } from "./mypage-submissions.js";
+import { createMyShare } from "./mypage-share.js";
+import { closedNote, discardDlKey } from "./share-lib.js";
 
 // 他のサイトに埋め込まれて操作させられるのを防ぐ（GitHub Pages では frame-ancestors を指定できないため。admin.js と同じ）
 if (window.top !== window.self) {
@@ -47,9 +50,10 @@ const SUPABASE_URL = "https://tnzwhwitgnzoehbjrmoy.supabase.co";
 // 公開用のキー（ブラウザに置く前提のもの）。秘密鍵ではない。consent.html・admin.js と同じ値
 const SUPABASE_PUBLISHABLE_KEY = "sb_publishable_KRY7iSTi9d_z9EwW0KuDwg_ooUqGvDN";
 const USER_API_URL = `${SUPABASE_URL}/functions/v1/user-api`;
+const SUBMISSIONS_API_URL = `${SUPABASE_URL}/functions/v1/submissions`;
 
 const $ = (id) => document.getElementById(id);
-const SECTIONS = ["status", "login", "denied", "failed", "app"];
+const SECTIONS = ["status", "login", "denied", "closed", "failed", "app"];
 /** 今出している画面（SECTIONS のどれか） */
 let current = "status";
 
@@ -80,6 +84,8 @@ function sendLocalLogout(token) {
 
 // 前の版の sessionStorage のセッションは、supabase-js が読めるかの確認より前に（fetch と storage だけで）捨てる
 discardOldTabSessions(browserStorage("session"), sendLocalLogout);
+// 保存のページ（/dl）が、このタブの sessionStorage に一時に置いた鍵：マイページを開いた時点で消す（/dl から戻った＝その鍵の用は済んだ。ログアウトのあとに［進む］で前の人の保存のページに戻らない）
+discardDlKey(browserStorage("session"));
 
 // 読み込めない（通信の失敗・integrity の不一致）ときは先へ進まない。
 // トップの役目（サービスの説明・方針と規約へのリンク）は残すため、ログイン前の画面をボタンを押せない形で出す
@@ -124,6 +130,7 @@ function el(tag, { className, text, attrs } = {}, ...children) {
  * 「別のアカウントでログイン」（selectAccount）のときだけ選ぶ画面を出す（決定 70）
  */
 async function signIn({ selectAccount = false } = {}) {
+  discardDlKey(browserStorage("session")); // 別のアカウントで入り直すときも、前の鍵は残さない
   await supabase.auth.signInWithOAuth({ provider: "google", options: oauthOptions(returnUrl(), selectAccount) });
 }
 
@@ -133,6 +140,7 @@ let ending = false;
 /** ログアウトして、この端末の共有のログインを消す（通信できなくても消す。講師の画面・Canvas のタブもログインの画面になる） */
 async function endSession() {
   ending = true;
+  discardDlKey(browserStorage("session")); // /dl が置いた鍵は、ログアウトで消す（同じタブで［進む］や /dl を開いても、前の人の作品が出ない）
   try {
     // この端末のセッションだけを切る（global だと、本人の ChatGPT・Codex・Claude Code の接続まで切れる）
     await supabase.auth.signOut({ scope: "local" });
@@ -188,6 +196,10 @@ function hideContent(message = "ログアウトしています…") {
   $("models").replaceChildren();
   $("models-meta").textContent = "";
   $("models-empty").hidden = true;
+  // 提出した作品（出ている要求の応答も捨てる）
+  mySubmissions.clear();
+  myShare.clear();
+  closedShare.clear();
   $("live").textContent = "";
   // 開閉の状態は保存しない。次に入った人は、どれも閉じた状態から始める
   for (const d of document.querySelectorAll("#app details")) d.open = false;
@@ -291,6 +303,50 @@ async function currentSession() {
   }
 }
 
+/** 提出した作品（受講者だけ。docs/design-submissions.md 4.5・4.11）。本体は mypage-submissions.js。ログアウトで clear() し、出ている要求の応答は捨てる */
+const mySubmissions = createMySubmissions({
+  group: $("submissions-group"),
+  listEl: $("submissions-list"),
+  statusEl: $("submissions-status"),
+  metaEl: $("submissions-meta"),
+  dialog: $("my-dialog"),
+  apiBase: SUBMISSIONS_API_URL,
+  apiKey: SUPABASE_PUBLISHABLE_KEY,
+  getSession: async () => {
+    const s = await currentSession();
+    return s?.user?.id && s.access_token ? { accountId: s.user.id, token: s.access_token } : null;
+  },
+});
+
+/** 作品をスマホに保存する QR の欄（受講者だけ。docs/design-submissions.md 4.9・段 1D）。本体は mypage-share.js。ログアウトで clear() し、QR と鍵つきの URL も捨てる */
+const myShare = createMyShare({
+  group: $("share-group"),
+  host: $("share-host"),
+  statusEl: $("share-status"),
+  dialog: $("my-dialog"),
+  apiBase: SUBMISSIONS_API_URL,
+  apiKey: SUPABASE_PUBLISHABLE_KEY,
+  getSession: async () => {
+    const s = await currentSession();
+    return s?.user?.id && s.access_token ? { accountId: s.user.id, token: s.access_token } : null;
+  },
+});
+
+/** 回が終わったあとの限られた利用（設計 4.10）：GET /me が「登録されていない」（403）のときだけ、保存の状態を読み、通れば［この端末で保存する］［スマホに保存する］だけを出す。本体は mypage-share.js（closedMode） */
+const closedShare = createMyShare({
+  group: $("closed-share-group"),
+  host: $("closed-share-host"),
+  statusEl: $("closed-share-status"),
+  dialog: $("my-dialog"),
+  apiBase: SUBMISSIONS_API_URL,
+  apiKey: SUPABASE_PUBLISHABLE_KEY,
+  closedMode: true,
+  getSession: async () => {
+    const s = await currentSession();
+    return s?.user?.id && s.access_token ? { accountId: s.user.id, token: s.access_token } : null;
+  },
+});
+
 let loading = false;
 
 /** 更新のボタンを「更新中」にする・戻す（disabled にはしない：押したボタンからフォーカスが外れないように aria-disabled で止める） */
@@ -352,8 +408,17 @@ async function load({ mode = "initial" } = {}) {
       // 登録されていないときだけ、ログインしたアカウントのメールアドレスを出す（違うアカウントで入ったと気づけるように。2026-10-19 main の決定）。
       // メールは user-api の応答ではなく、今のセッションのものを使う
       hideContent("読み込み中…");
-      $("denied-message").textContent = deniedMessage(now?.user?.email ?? null);
-      show("denied");
+      // 回が終わったあとの 7 日は、名簿が「止まった」受講者でも、提出した作品の保存だけはできる（設計 4.10）。通らなければ、これまでどおり「登録されていない」
+      const epochBefore = closedShare._state().epoch;
+      const closedOk = await closedShare.refresh();
+      if (closedShare._state().epoch !== epochBefore) return; // 待っている間にログアウトした
+      if (closedOk) {
+        $("closed-message").textContent = closedNote(closedShare.issueUntil());
+        show("closed");
+      } else {
+        $("denied-message").textContent = deniedMessage(now?.user?.email ?? null);
+        show("denied");
+      }
     } else if (inApp) {
       showRefreshError(outcome.message);
     } else {
@@ -411,6 +476,12 @@ function render(me) {
   renderSiteNav($("site-nav"), me.role, "mypage");
   renderCredits(me.credits, me.role);
   renderModels(me.models);
+  // 提出した作品は受講者だけ（本体は mypage-submissions.js。失敗しても、この画面の残りは変えない）
+  if (me.role === "student") void mySubmissions.refresh();
+  else mySubmissions.clear();
+  // 作品をスマホに保存する QR の欄も受講者だけ（本体は mypage-share.js。失敗しても、この画面の残りは変えない）
+  if (me.role === "student") void myShare.refresh();
+  else myShare.clear();
 }
 
 /** 文字を入れて、空なら隠す */
@@ -568,6 +639,7 @@ $("login-other-btn").addEventListener("click", () => signIn({ selectAccount: tru
 fillIcons();
 $("logout-btn").addEventListener("click", signOut);
 $("denied-logout-btn").addEventListener("click", signOut);
+$("closed-logout-btn").addEventListener("click", signOut);
 $("failed-logout-btn").addEventListener("click", signOut);
 // 更新中は aria-disabled（押しても何もしない）。手動の更新と、更新の失敗からの［もう一度試す］は本人の画面のまま読み直す
 $("reload-btn").addEventListener("click", () => {

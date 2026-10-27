@@ -2,7 +2,7 @@
 //
 // しくみ：
 //   - 版 = 直下の *.js・*.css（git で管理しているもの）の名前と中身（改行は LF にそろえる）から作る SHA-256 の頭 12 桁。
-//   - 版の住所で読む画面（PAGES：index・instructor・admin・about と、試しのページ probe/background.html）は、直下の JS・CSS を /r/<版>/<名前> で読む。モジュールの中の import は
+//   - 版の住所で読む画面（PAGES：index・instructor・admin・about・submissions・dl と、試しのページ probe/background.html）は、直下の JS・CSS を /r/<版>/<名前> で読む。モジュールの中の import は
 //     相対（"./auth-storage.js"）なので、同じ /r/<版>/ の下を読む。各画面の <head> には、その画面が import でたどるファイルの modulepreload。
 //   - vercel.json：/r/<今の版>/<直下の JS・CSS の名前のどれか> だけを直下のファイルに書き換え、1 年・immutable を付ける。
 //     ほかの /r/…（前の版・無い名前）は書き換えず（404）、no-cache。版と名前の並びは、この道具が vercel.json に書く。
@@ -21,7 +21,7 @@ import { execFileSync } from "node:child_process";
 import { fileURLToPath } from "node:url";
 
 /** 版の住所で読む画面（auth-page の直下からの住所。probe/background.html は裏に回った画面の試し〔2026-10-24〕。JS・CSS は直下のものを読む） */
-export const PAGES = ["index.html", "instructor.html", "admin.html", "about.html", "probe/background.html"];
+export const PAGES = ["index.html", "instructor.html", "admin.html", "about.html", "submissions.html", "dl.html", "probe/background.html"];
 const ASSET_RE = /^[a-z0-9-]+\.(js|css)$/;
 const TOKEN = "[0-9a-f]{12}";
 

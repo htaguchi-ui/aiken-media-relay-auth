@@ -21,6 +21,7 @@ import {
   storedAccessToken,
   takeStoredSession,
 } from "./auth-storage.js";
+import { discardDlKey } from "./share-lib.js";
 import {
   accessText,
   adminLoginErrorText,
@@ -231,6 +232,8 @@ function sendLocalLogout(token) {
 clearStoredSession(localStore, LEGACY_STORAGE_PREFIX);
 discardOldTabSessions(sessionStore, sendLocalLogout);
 discardOldTabSessions(localStore, sendLocalLogout, OLD_ADMIN_STORAGE_PREFIXES);
+// 保存のページ（/dl）が、このタブの sessionStorage に一時に置いた鍵：開いた時点で消す（設計 4.9 の消す条件 (d)）
+discardDlKey(sessionStore);
 
 /**
  * Google から戻った認証コード（?code）と失敗の印。supabase-js の部品を作る前に URL から取り出し、すぐ消す
@@ -287,6 +290,8 @@ let appClosed = false;
 /** 画面の状態 */
 const state = {
   tab: "roster",
+  /** 提出の受け付けの終わりの部品（admin-submissions.js。入口は loadDeadlines。ログアウトで null） */
+  deadlines: null,
   rows: [],
   /** loading | ok | error（一度も読めていないときだけ error） */
   rowsStatus: "loading",
@@ -961,6 +966,7 @@ async function endConsoleToken(token) {
 }
 
 async function signOut() {
+  discardDlKey(sessionStore); // /dl が置いた鍵は、ログアウトで消す（通信を待つ前に）
   // この管理コンソールのセッションだけを終わらせる（マイページなどの共有のログインは別の鍵なので、そのまま。本人の ChatGPT・Codex・
   // Claude Code の接続も切らない）。通信を待つ前に、本人の値・編集中の内容を消して操作を止める（F107-04）
   stopExpireWatch();
@@ -1031,6 +1037,8 @@ async function consoleStatus() {
 /** 本人の値・編集中の内容を画面から消す（前の人の値を残さない） */
 function clearAppView() {
   appClosed = true;
+  state.deadlines?.view?.clear(); // 提出の受け付けの終わり（出ている要求の応答も捨てる）
+  state.deadlines = null;
   askDone?.(undefined);
   if (sheet.open) closeSheet();
   clearNotice();
@@ -1057,6 +1065,7 @@ let expiring = false;
  * ここで保存先を読み直さない（その間にほかのタブで入った新しいログインは消さない。F112-03・TASK-0142 F142-01）
  */
 async function closeConsole(note, target) {
+  discardDlKey(sessionStore); // 期限切れ・再確認・起動時の終了でも、通信を待つ前に /dl の鍵を消す
   stopExpireWatch();
   clearAppView();
   await endConsoleSession(target);
@@ -3327,6 +3336,44 @@ async function openCohort(id) {
   }
   if (!isDesktop()) openSheet("cohort", renderCohortSheet);
   renderAll();
+}
+
+// ---- 提出の「受け付けの終わり」（本体は admin-submissions.js。docs/design-submissions.md 6.3。入口はここだけ） ----
+// 動的に読み込む：読み込めない・失敗しても、この画面の残り（admin.js 全体）は止めない。回を開くたびに読み、同じ回の描き直しでは読み直さない。
+// 状態は state.deadlines（ログアウトで clearAppView が捨てる）。
+const deadlinesHost = el("div", { id: "cohort-submissions" });
+const loadAdminSubmissions = () => import("./admin-submissions.js");
+async function loadDeadlines(cohortId) {
+  const d = (state.deadlines ??= { view: null, cohortId: null });
+  d.cohortId = cohortId;
+  try {
+    if (!d.view) {
+      const mod = await loadAdminSubmissions();
+      if (state.deadlines !== d) return; // 待っている間にログアウトした
+      d.view ??= mod.createAdminDeadlines({
+        container: deadlinesHost,
+        rpc: async (name, args) => {
+          try {
+            return await supabase.rpc(name, args);
+          } catch (error) {
+            return { data: null, error };
+          }
+        },
+        confirm: ({ title, lines, okText }) => ask({ title, lines, buttons: [{ label: "やめる", value: false }, { label: okText, value: true, kind: "primary" }], cancelValue: false }),
+        notify: (message, kind) => notify(message, kind),
+        explain: explainError,
+      });
+    }
+    if (state.deadlines === d && d.cohortId === cohortId) await d.view.load(cohortId);
+  } catch {
+    if (state.deadlines !== d || d.cohortId !== cohortId) return;
+    d.cohortId = null; // 次の描き直しで、もう一度読む
+    deadlinesHost.replaceChildren(el("p", { className: "muted small", text: "提出の受け付けの設定を読み込めませんでした。" }));
+  }
+}
+function submissionDeadlinesBox(c) {
+  if (state.deadlines?.cohortId !== c.id) void loadDeadlines(c.id);
+  return el("section", { className: "box", id: "cohort-submissions-box" }, el("h3", { className: "minor", text: "提出の受け付けの終わり" }), deadlinesHost);
 }
 
 function cohortHead(c, titleId) {
@@ -6244,8 +6291,9 @@ async function loadCohortStageStatus(id) {
 
 /** 回の詳細に足す箱（016 が当たっているときだけ） */
 function stageBoxes(c) {
-  if (!stagesAvailable() || !cohortInfoOf(c.id)) return [];
-  return [stagesSection(c), instructorsSection(c)];
+  // 段階ごとの受け付けの終わり（提出。本体は admin-submissions.js）は、段階の設定が使えない回にも出す
+  if (!stagesAvailable() || !cohortInfoOf(c.id)) return [submissionDeadlinesBox(c)];
+  return [stagesSection(c), instructorsSection(c), submissionDeadlinesBox(c)];
 }
 
 function templateItemsOf(id) {
