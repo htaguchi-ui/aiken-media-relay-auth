@@ -61,6 +61,7 @@ import {
   undoView,
 } from "./stage-lib.js";
 import { fillIcons, renderSiteNav } from "./site-nav.js";
+import { createStageTimer } from "./stage-timer.js";
 import {
   cohortCloseCanAct,
   cohortCloseError,
@@ -198,6 +199,26 @@ const state = {
  */
 const ui = { openDays: new Map(), folds: new Set() };
 
+/** 制作時間のタイマー（KT。束 K の stage_timer_* を呼ぶ）。壊れても札を隠すだけで、ほかの操作は止めない（stage-timer.js） */
+const stageTimer = createStageTimer({
+  rpc: (name, args) => rpc(name, args),
+  el: (...a) => el(...a),
+  getCohortId: () => state.cohortId,
+  getClient: () => activeClient(),
+  isClosed: () => isClosed(),
+  isBusy: () => state.busy,
+  withBusy: (fn) => withBusy(fn),
+  confirm: (o) => confirmDialog(o),
+  notify: (m, kind) => notify(m, kind),
+  render: () => render(),
+  // 段階が変わったと分かったとき・「つながりません」の［最新にする］：講師ページの［最新にする］と同じ読み直し
+  reload: () => reloadStatus(),
+  byId: (id) => document.getElementById(id),
+  // 時計はこの画面の setInterval（取り消しの 60 秒の箱と同じ）
+  setInterval: (fn, ms) => setInterval(fn, ms),
+  clearInterval: (id) => clearInterval(id),
+});
+
 // ---- ログイン・ログアウト ----
 
 /** Google のログインへ移る。ふつうはアカウントを選ぶ画面を出さず、「別のアカウントでログイン」のときだけ出す（決定 70） */
@@ -220,6 +241,7 @@ async function endSession() {
 
 /** 本人のデータを画面から消して、読み込み中の表示にする（ログアウトの通信を待つ間・画面を離れるときに、前の人の画面を残さない） */
 function hideContent(message = "ログアウトしています…") {
+  stageTimer.reset();
   $("me-email").textContent = "";
   $("me-email").removeAttribute("title");
   $("me-role").textContent = "";
@@ -424,7 +446,7 @@ async function loadCloseStatus() {
 
 /** 段階とクローズの状態を並べて読む（［最新にする］・操作のあと・回の切り替え）。返り値は段階の読み込みの成否 */
 async function loadStatusAndClose() {
-  const [ok] = await Promise.all([loadStatus(), loadCloseStatus()]);
+  const [ok] = await Promise.all([loadStatus(), loadCloseStatus(), stageTimer.load()]);
   return ok;
 }
 
@@ -1038,6 +1060,7 @@ function stageCard(s) {
       el("button", { type: "button", className: "btn primary big", id: "move-next", text: "次へ進める", disabled: state.busy || closed || !mv.canNext, title: closed ? MSG_CLOSED_NO_MOVE : mv.canNext ? null : mv.nextWhy, onclick: () => move("next") }),
     ),
     why ? el("p", { className: "hint", id: "move-why", text: why }) : null,
+    stageTimer.card(),
   );
 }
 

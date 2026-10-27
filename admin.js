@@ -7054,10 +7054,24 @@ async function main() {
 
   // 画面の間の移動：is_admin() が true のときだけここに来るので、管理者の並び（案内だけ）
   renderSiteNav($("site-nav"), "admin", "admin");
+  // ［ワークショップの案内］（docs/design-workshop-guide.md 4.6。束 K の K3。G の独立の差分）：左のメニューに［案内］を足す。
+  // 動的な import にして待たないので、読み込めない・失敗しても［案内］が出ないだけで、admin.js のほかの画面は止まらない。
+  // 管理コンソールを閉じたら（clearAppView の appClosed）、部品が自分で窓とボタンと読んだ中身を消す
+  import("./admin-workshop.js")
+    .then(({ mountWorkshopGuide }) => mountWorkshopGuide({ supabase, menu: $("side-menu"), isClosed: () => appClosed }))
+    .catch((e) => console.error("ワークショップの案内を読み込めませんでした", e));
   // ヘッダーにメールは出さない（2026-10-23 田口さん：説明の文字は消す）。アカウントのボタンの読み上げの名前とシートにある
   $("account-btn").setAttribute("aria-label", `アカウントと更新（${myEmail}）`);
   show("app");
   renderAll();
+  // ［fal の確かめ］（docs/design-fal-price-watch.md 3.7。P の独立の差分）：管理者の確認のあとに、画面の上に常設の 1 行と帯を差し込む。
+  // 動的な import にして待たないので、読み込めない・失敗しても fal の画面が出ないだけで、admin.js のほかの画面は止まらない。
+  // 管理コンソールを閉じたら（clearAppView の appClosed）、部品が自分で窓と読んだ中身を消す
+  import("./admin-fal-watch.js")
+    .then(({ mountFalWatch }) =>
+      mountFalWatch({ supabase, host: document.querySelector("main.content"), isClosed: () => appClosed })
+    )
+    .catch((e) => console.error("fal の確かめを読み込めませんでした", e));
   await Promise.all([loadUsage(), loadCohorts(), loadStageInfo()]);
   if (appClosed) return;
   renderAll();

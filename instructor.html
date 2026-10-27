@@ -16,18 +16,20 @@
 <!-- ログインの確かめ・RPC の接続先へ先につないでおく（supabase-js の fetch は資格情報なしなので crossorigin） -->
 <link rel="preconnect" href="https://tnzwhwitgnzoehbjrmoy.supabase.co" crossorigin>
 <link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=IBM+Plex+Sans+JP:wght@400;500;600;700&amp;display=swap">
-<link rel="stylesheet" href="/r/c1ecf73fd1f5/site-nav.css">
-<link rel="stylesheet" href="/r/c1ecf73fd1f5/gsi-button.css">
-<link rel="modulepreload" href="/r/c1ecf73fd1f5/admin-lib.js">
-<link rel="modulepreload" href="/r/c1ecf73fd1f5/auth-storage.js">
-<link rel="modulepreload" href="/r/c1ecf73fd1f5/cohort-close-lib.js">
-<link rel="modulepreload" href="/r/c1ecf73fd1f5/instructor-list-lib.js">
-<link rel="modulepreload" href="/r/c1ecf73fd1f5/instructor-list.js">
-<link rel="modulepreload" href="/r/c1ecf73fd1f5/mypage-lib.js">
-<link rel="modulepreload" href="/r/c1ecf73fd1f5/share-lib.js">
-<link rel="modulepreload" href="/r/c1ecf73fd1f5/site-nav.js">
-<link rel="modulepreload" href="/r/c1ecf73fd1f5/stage-lib.js">
-<link rel="modulepreload" href="/r/c1ecf73fd1f5/submissions-lib.js">
+<link rel="stylesheet" href="/r/6a9503d2c032/site-nav.css">
+<link rel="stylesheet" href="/r/6a9503d2c032/gsi-button.css">
+<link rel="modulepreload" href="/r/6a9503d2c032/admin-lib.js">
+<link rel="modulepreload" href="/r/6a9503d2c032/auth-storage.js">
+<link rel="modulepreload" href="/r/6a9503d2c032/cohort-close-lib.js">
+<link rel="modulepreload" href="/r/6a9503d2c032/instructor-list-lib.js">
+<link rel="modulepreload" href="/r/6a9503d2c032/instructor-list.js">
+<link rel="modulepreload" href="/r/6a9503d2c032/mypage-lib.js">
+<link rel="modulepreload" href="/r/6a9503d2c032/share-lib.js">
+<link rel="modulepreload" href="/r/6a9503d2c032/site-nav.js">
+<link rel="modulepreload" href="/r/6a9503d2c032/stage-lib.js">
+<link rel="modulepreload" href="/r/6a9503d2c032/stage-timer-lib.js">
+<link rel="modulepreload" href="/r/6a9503d2c032/stage-timer.js">
+<link rel="modulepreload" href="/r/6a9503d2c032/submissions-lib.js">
 <style>
   :root {
     --accent: #26396E; --accent-hover: #1B2B55; --on-accent: #FFFFFF;
@@ -250,6 +252,17 @@
   .move-row { display: grid; grid-template-columns: 1fr 1fr; gap: 12px; } /* スマホでも横に 2 つ（リストとボタンを同じ画面に収める） */
   .undo-box { background: var(--accent-soft); border: 1px solid var(--accent-soft-line); color: var(--accent-soft-text); border-radius: 12px; padding: 12px 14px; display: flex; flex-wrap: wrap; gap: 8px 16px; align-items: center; justify-content: space-between; }
   .undo-lines { display: flex; flex-direction: column; gap: 2px; min-width: 0; flex: 1 1 16em; }
+  /* 制作時間のタイマー（KT）：ワークショップの札の中。ボタンは折り返す（スマホでも押せる大きさのまま） */
+  .timer-box { border-top: 1px solid var(--line-soft); padding-top: 12px; display: flex; flex-direction: column; gap: 8px; }
+  .timer-box h3 { margin: 0; font-size: 15px; }
+  .timer-line { margin: 0; font-variant-numeric: tabular-nums; overflow-wrap: anywhere; }
+  .timer-line.running { font-weight: 700; }
+  .timer-line.ended { color: var(--warn-fg); font-weight: 700; }
+  .timer-row { display: flex; flex-wrap: wrap; gap: 8px; align-items: center; }
+  .timer-row .btn { min-height: 44px; }
+  .timer-row .input { width: 6em; min-height: 44px; }
+  .timer-stage, .timer-warn { margin: 0; overflow-wrap: anywhere; }
+  .timer-warn { flex: 1 1 16em; }
 
   /* ---- 受講者（広い幅は列の見出しつきの 1 行・狭い幅は 1 人 2 行） ---- */
   .students { list-style: none; margin: 0; padding: 0; }
@@ -401,7 +414,7 @@
 </div>
 
 <dialog id="confirm" class="confirm" aria-labelledby="confirm-title"></dialog>
-<script type="module" src="/r/c1ecf73fd1f5/topbar-height.js"></script>
-<script type="module" src="/r/c1ecf73fd1f5/instructor.js"></script>
+<script type="module" src="/r/6a9503d2c032/topbar-height.js"></script>
+<script type="module" src="/r/6a9503d2c032/instructor.js"></script>
 </body>
 </html>
