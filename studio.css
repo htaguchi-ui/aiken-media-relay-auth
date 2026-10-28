@@ -226,6 +226,9 @@ html { scroll-padding-top: var(--topbar-h); }
 .stage-name .label { font-size: 13px; font-weight: 600; color: var(--text-2); margin-right: 8px; }
 .slot-line { color: var(--text-2); overflow-wrap: anywhere; }
 .stage-summary { color: var(--text-2); font-size: 14px; }
+/* 持ち越しの表記は出さない（田口さんの指示 2026-10-28）：主カードの「段階ごとの枠・持ち越しなし」と「今日の段階」の中の持ち越しの注。
+   文を出す JS と要素は次の公開（組 8）で消し、この規則も消す。それまでは要素を CSS で隠す（読み上げにも出ない） */
+#stage-summary, #stage-note { display: none; }
 .inline-alert { display: flex; flex-wrap: wrap; align-items: center; gap: var(--s2) var(--s3); padding: 12px 14px; border-radius: var(--r-m); border: 1px solid var(--danger-line); background: var(--surface-2); }
 .inline-alert p { flex: 1 1 220px; color: var(--danger); font-weight: 600; overflow-wrap: anywhere; }
 @media (min-width: 880px) {
@@ -301,6 +304,21 @@ ol.steps { margin: 0; padding-left: 1.4em; display: flex; flex-direction: column
 .copy-status.warn { color: var(--warn-fg); }
 .copy-wrap-note { font-size: 14px; color: var(--text-2); }
 .notice-box { border: 1px solid var(--warn-line); background: var(--warn-bg); border-radius: var(--r-m); padding: 12px 14px; display: flex; flex-direction: column; gap: 6px; color: var(--text); }
+/* ？（詳しい説明）：details と summary（JS なし・キーボードで開ける・ホバーだけにしない）。文の右端に ？ を置き、開くと文の下に説明が出る。
+   見た目は consent.html の <style> の .help と同じ（許可の画面は外部の CSS を読めないので、同じ規則を向こうにも置く）。文字の太さは本文 400・？ は 600 */
+.help > summary { list-style: none; cursor: pointer; min-height: var(--ctl-h); display: flex; align-items: center; justify-content: space-between; gap: var(--s3); border-radius: var(--r-s); }
+.help > summary::-webkit-details-marker { display: none; }
+.help-text { min-width: 0; font-weight: 400; }
+.help-q {
+  flex: none; width: 24px; height: 24px; display: inline-flex; align-items: center; justify-content: center;
+  border: 1px solid var(--input-line); border-radius: var(--r-pill); color: var(--accent); font-size: 13px; font-weight: 600; line-height: 1;
+}
+.help > summary:hover .help-q { background: var(--surface-2); }
+.help[open] > summary .help-q { background: var(--accent); border-color: var(--accent); color: var(--on-accent); }
+.help-body { margin: 0 0 var(--s2); padding: 10px 12px; border: 1px solid var(--line); border-radius: var(--r-s); background: var(--surface-2); color: var(--text); font-size: 14px; line-height: 1.7; overflow-wrap: anywhere; }
+/* 本人の画面のいちばん下の「プライバシーポリシー」「利用規約」（ログイン前と同じ .links の見た目で、小さく中央に） */
+.links.page-links { justify-content: center; margin-top: var(--s2); }
+.links.page-links a { font-size: 13px; }
 
 /* ---- 今日の段階・使えるモデルの一覧 ---- */
 ul.stages, ul.models { list-style: none; margin: 0; padding: 0; }

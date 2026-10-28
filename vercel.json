@@ -51,7 +51,7 @@
       "headers": [{ "key": "Cache-Control", "value": "no-cache" }]
     },
     {
-      "source": "/r/675aa7e5cc2b/:file(admin-fal-watch-lib\\.js|admin-fal-watch\\.js|admin-lib\\.js|admin-submissions\\.js|admin-workshop-lib\\.js|admin-workshop\\.js|admin\\.js|auth-storage\\.js|cohort-close-lib\\.js|dl-lib\\.js|dl\\.css|dl\\.js|gsi-button\\.css|instructor-list-lib\\.js|instructor-list\\.js|instructor\\.js|mypage-lib\\.js|mypage-share\\.js|mypage-submissions\\.js|mypage\\.js|probe-background-worker\\.js|probe-background\\.css|probe-background\\.js|qr-code\\.js|redirect-check\\.js|share-lib\\.js|site-nav\\.css|site-nav\\.js|stage-lib\\.js|stage-timer-lib\\.js|stage-timer\\.js|storage-usage-lib\\.js|studio\\.css|submissions-lib\\.js|submissions\\.js|topbar-height\\.js)",
+      "source": "/r/ffc62eb7b060/:file(admin-fal-watch-lib\\.js|admin-fal-watch\\.js|admin-lib\\.js|admin-submissions\\.js|admin-workshop-lib\\.js|admin-workshop\\.js|admin\\.js|auth-storage\\.js|cohort-close-lib\\.js|dl-lib\\.js|dl\\.css|dl\\.js|gsi-button\\.css|instructor-list-lib\\.js|instructor-list\\.js|instructor\\.js|mypage-lib\\.js|mypage-share\\.js|mypage-submissions\\.js|mypage\\.js|probe-background-worker\\.js|probe-background\\.css|probe-background\\.js|qr-code\\.js|redirect-check\\.js|share-lib\\.js|site-nav\\.css|site-nav\\.js|stage-lib\\.js|stage-timer-lib\\.js|stage-timer\\.js|storage-usage-lib\\.js|studio\\.css|submissions-lib\\.js|submissions\\.js|topbar-height\\.js)",
       "headers": [{ "key": "Cache-Control", "value": "public, max-age=31536000, immutable" }]
     },
     {
@@ -68,7 +68,7 @@
     }
   ],
   "rewrites": [
-    { "source": "/r/675aa7e5cc2b/:file(admin-fal-watch-lib\\.js|admin-fal-watch\\.js|admin-lib\\.js|admin-submissions\\.js|admin-workshop-lib\\.js|admin-workshop\\.js|admin\\.js|auth-storage\\.js|cohort-close-lib\\.js|dl-lib\\.js|dl\\.css|dl\\.js|gsi-button\\.css|instructor-list-lib\\.js|instructor-list\\.js|instructor\\.js|mypage-lib\\.js|mypage-share\\.js|mypage-submissions\\.js|mypage\\.js|probe-background-worker\\.js|probe-background\\.css|probe-background\\.js|qr-code\\.js|redirect-check\\.js|share-lib\\.js|site-nav\\.css|site-nav\\.js|stage-lib\\.js|stage-timer-lib\\.js|stage-timer\\.js|storage-usage-lib\\.js|studio\\.css|submissions-lib\\.js|submissions\\.js|topbar-height\\.js)", "destination": "/:file" },
+    { "source": "/r/ffc62eb7b060/:file(admin-fal-watch-lib\\.js|admin-fal-watch\\.js|admin-lib\\.js|admin-submissions\\.js|admin-workshop-lib\\.js|admin-workshop\\.js|admin\\.js|auth-storage\\.js|cohort-close-lib\\.js|dl-lib\\.js|dl\\.css|dl\\.js|gsi-button\\.css|instructor-list-lib\\.js|instructor-list\\.js|instructor\\.js|mypage-lib\\.js|mypage-share\\.js|mypage-submissions\\.js|mypage\\.js|probe-background-worker\\.js|probe-background\\.css|probe-background\\.js|qr-code\\.js|redirect-check\\.js|share-lib\\.js|site-nav\\.css|site-nav\\.js|stage-lib\\.js|stage-timer-lib\\.js|stage-timer\\.js|storage-usage-lib\\.js|studio\\.css|submissions-lib\\.js|submissions\\.js|topbar-height\\.js)", "destination": "/:file" },
     { "source": "/admin", "destination": "/admin.html" },
     { "source": "/mypage", "destination": "/index.html" },
     { "source": "/mypage.html", "destination": "/index.html" },

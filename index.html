@@ -17,17 +17,17 @@
 <!-- ログインの確かめ・RPC の接続先へ先につないでおく（supabase-js の fetch は資格情報なしなので crossorigin） -->
 <link rel="preconnect" href="https://tnzwhwitgnzoehbjrmoy.supabase.co" crossorigin>
 <link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=IBM+Plex+Sans+JP:wght@400;500;600;700&amp;display=swap">
-<link rel="stylesheet" href="/r/675aa7e5cc2b/studio.css">
-<link rel="stylesheet" href="/r/675aa7e5cc2b/gsi-button.css">
-<link rel="stylesheet" href="/r/675aa7e5cc2b/site-nav.css">
-<link rel="modulepreload" href="/r/675aa7e5cc2b/auth-storage.js">
-<link rel="modulepreload" href="/r/675aa7e5cc2b/mypage-lib.js">
-<link rel="modulepreload" href="/r/675aa7e5cc2b/mypage-share.js">
-<link rel="modulepreload" href="/r/675aa7e5cc2b/mypage-submissions.js">
-<link rel="modulepreload" href="/r/675aa7e5cc2b/qr-code.js">
-<link rel="modulepreload" href="/r/675aa7e5cc2b/share-lib.js">
-<link rel="modulepreload" href="/r/675aa7e5cc2b/site-nav.js">
-<link rel="modulepreload" href="/r/675aa7e5cc2b/submissions-lib.js">
+<link rel="stylesheet" href="/r/ffc62eb7b060/studio.css">
+<link rel="stylesheet" href="/r/ffc62eb7b060/gsi-button.css">
+<link rel="stylesheet" href="/r/ffc62eb7b060/site-nav.css">
+<link rel="modulepreload" href="/r/ffc62eb7b060/auth-storage.js">
+<link rel="modulepreload" href="/r/ffc62eb7b060/mypage-lib.js">
+<link rel="modulepreload" href="/r/ffc62eb7b060/mypage-share.js">
+<link rel="modulepreload" href="/r/ffc62eb7b060/mypage-submissions.js">
+<link rel="modulepreload" href="/r/ffc62eb7b060/qr-code.js">
+<link rel="modulepreload" href="/r/ffc62eb7b060/share-lib.js">
+<link rel="modulepreload" href="/r/ffc62eb7b060/site-nav.js">
+<link rel="modulepreload" href="/r/ffc62eb7b060/submissions-lib.js">
 <style>
   /* 固定したヘッダーの高さの初期値（--topbar-h）：ヘッダーを 1 段にした（帯を題名の右に並べた）あとの実測（2026-10-23）。
      studio.css の値は、帯の無い案内のページ（about.html）・管理コンソールと共通なので、このページの中だけで上書きする。
@@ -178,7 +178,7 @@
     <!-- 残りの主カード：残り → 段階・期間。読み上げ・Tab の順もこのとおり（Canvas への入口はヘッダーの上の帯） -->
     <section class="card hero" id="hero" aria-labelledby="credits-title">
       <div class="card-head">
-        <h2 id="credits-title" tabindex="-1">残りクレジット</h2>
+        <h2 id="credits-title" tabindex="-1">いま使える残りクレジット</h2>
         <div class="refresh">
           <span class="checked tabular" id="checked-at" hidden></span>
           <button type="button" class="icon-btn" id="reload-btn" aria-label="最新の状態を読み込む" data-tip="最新にする">
@@ -224,7 +224,7 @@
         <details class="fold" id="models-fold">
           <summary><span>使えるモデル</span><span class="meta tabular" id="models-meta"></span></summary>
           <div class="fold-body">
-            <p class="small muted">目安はクレジット</p>
+            <p class="small muted">数字は、使うクレジットの目安です。</p>
             <div id="models"></div>
           </div>
         </details>
@@ -307,7 +307,7 @@
                手順 6 の OAuth client は Register automatically（Dynamic Client Registration）。claude.com/docs/connectors/custom/add-unlisted によると、Use Claude's published identity は Client ID Metadata Document にサーバーが対応しているときだけ使える。本番の認可サーバーの公開のメタデータ（auth/v1/.well-known/oauth-authorization-server）には registration_endpoint があり、client_id_metadata_document_supported は無い（2026-10-28 に読んで確かめた）。2026-10-22 の claude.ai の接続も dynamic で登録されている。
                並びは ChatGPT（App）→ Claude（App）→ その他（CLI：Codex CLI・Claude Code）→ うまくいかないとき -->
           <div class="fold-body connect-guide">
-            <p>ChatGPT・Claude のアプリや、Codex・Claude Code などのターミナル（CLI）から使うときの手順です。ログインは、許可された会社の Google アカウント（@a-i-ken.jp / @a-i-ken.com / @orenda.co.jp / @net-fun.co.jp）で行います。</p>
+            <p>ログインには、研修で案内された Google アカウントを使います（AIKENメンバーは会社のアカウント）。</p>
 
             <div class="copy-box">
               <span class="copy-label">つなぐ先（MCP の URL）</span>
@@ -317,10 +317,9 @@
               </div>
               <p class="copy-status" role="status"></p>
             </div>
-            <p class="copy-wrap-note" id="copy-wrap-note">長い URL やコマンドは、画面では折り返して見えます。右上のコピーのボタンを使うと、1 行のままコピーできます。</p>
 
             <div class="notice-box">
-              <p>自分で始めた接続のときだけ、許可してください。</p>
+              <p>途中で出る許可の画面では、自分でつなぎ始めたときだけ「許可する」を押します。覚えのない許可の画面が出たら、「許可しない」を押してください。</p>
             </div>
 
             <div class="guide-apps">
@@ -353,8 +352,9 @@
                     </li>
                     <li><strong>「保存」</strong>を押します。</li>
                     <li><strong>「認証する」</strong>を押します。</li>
-                    <li>Google のログイン画面で、<strong>研修で案内された Google アカウント</strong>を選びます。</li>
-                    <li><strong>「許可する」</strong>を押します。</li>
+                    <li>A.I.KEN Studio の画面に<strong>「Google でログイン」</strong>が出たら、押します。</li>
+                    <li>Google の画面で、<strong>研修で案内された Google アカウント</strong>を選びます（出ないこともあります）。</li>
+                    <li>許可の画面で、ログイン中のアカウントを確かめて<strong>「許可する」</strong>を押します。</li>
                   </ol>
 
                   <h3 class="guide-h">つながったか確かめる</h3>
@@ -372,7 +372,7 @@
               <details class="sub-fold" id="guide-claude-app">
                 <summary>Claude（App）</summary>
                 <div class="sub-body">
-                  <p>Claude のデスクトップアプリと、Web 版（claude.ai）は、この手順でつなぎます。画面の名前は英語の表記のまま書いています。日本語の画面では表記が違う場合があります。</p>
+                  <p>デスクトップと Web 版（claude.ai）の手順です。画面の名前は英語の表記です（日本語の画面では違う場合があります）。</p>
                   <h3 class="guide-h">初めてつなぐ（個人の Pro・Max）</h3>
                   <ol class="steps">
                     <li>Claude を開き、<strong>Customize</strong> &gt; <strong>Connectors</strong> を開きます。</li>
@@ -399,16 +399,17 @@
                     <li>次の画面で、<strong>Authentication</strong> は <strong>Sign in now</strong> を選びます（<strong>No sign in</strong> は選びません）。<strong>OAuth client</strong> は <strong>Register automatically</strong> を選びます（<strong>Use Claude's published identity (Recommended)</strong> は選びません）。</li>
                     <li><strong>Add</strong> を押します。</li>
                     <li>コネクタの一覧で、<strong>aiken_studio</strong> の <strong>Connect</strong> を押します。</li>
-                    <li>Google のログイン画面で、<strong>研修で案内された Google アカウント</strong>を選びます。</li>
-                    <li><strong>「許可する」</strong>を押します。</li>
+                    <li>A.I.KEN Studio の画面に<strong>「Google でログイン」</strong>が出たら、押します。</li>
+                    <li>Google の画面で、<strong>研修で案内された Google アカウント</strong>を選びます（出ないこともあります）。</li>
+                    <li>許可の画面で、ログイン中のアカウントを確かめて<strong>「許可する」</strong>を押します。</li>
                   </ol>
-                  <ul class="guide-list">
-                    <li><strong>会社の Team の場合</strong>：コネクタを足せるのは、Owner と Primary Owner だけです（メンバー個人は足せません）。Owner は <strong>Organization settings</strong> &gt; <strong>Connectors</strong> で <strong>Add</strong> を押し、<strong>Custom</strong> &gt; <strong>Web</strong> を選びます。そのあとは上の手順 3〜7 と同じです（Name は <strong>aiken_studio</strong>、URL は手順 4 と同じ URL、<strong>Authentication</strong> は <strong>Sign in now</strong>、<strong>OAuth client</strong> は <strong>Register automatically</strong> を選びます。<strong>Use Claude's published identity (Recommended)</strong> は選びません）。足されたあと、各メンバーは <strong>Customize</strong> &gt; <strong>Connectors</strong> で <strong>Custom</strong> と出ている <strong>aiken_studio</strong> の <strong>Connect</strong> を押し、自分のアカウントで許可します（上の手順 8 から）。</li>
-                    <li><strong>Free プランの場合</strong>：カスタムコネクタは 1 つまでです。</li>
-                  </ul>
+                  <details class="help">
+                    <summary><span class="help-text">会社の Team・Free プランでは、違いがあります。</span><span class="help-q" aria-hidden="true">？</span></summary>
+                    <div class="help-body">会社の Team では、コネクタを足せるのは Owner と Primary Owner だけです。Owner は <strong>Organization settings</strong> &gt; <strong>Connectors</strong> で <strong>Add</strong> を押し、<strong>Custom</strong> &gt; <strong>Web</strong> を選びます。そのあとは上の手順 3〜7 と同じです（Name は <strong>aiken_studio</strong>、URL は手順 4 と同じ URL、<strong>Authentication</strong> は <strong>Sign in now</strong>、<strong>OAuth client</strong> は <strong>Register automatically</strong> を選びます。<strong>Use Claude's published identity (Recommended)</strong> は選びません）。足したあと、各メンバーが <strong>Customize</strong> &gt; <strong>Connectors</strong> で <strong>aiken_studio</strong> の <strong>Connect</strong> を押し、自分のアカウントで許可します。Free プランでは、カスタムコネクタは 1 つまでです。</div>
+                  </details>
 
                   <h3 class="guide-h">つながったか確かめる</h3>
-                  <p>新しい会話の入力欄の左下の <strong>＋</strong> &gt; <strong>Connectors</strong> で <strong>aiken_studio</strong> をオンにして（会話ごとにオン・オフします）、次の文を送ります。ツールを使うときに許可の確認が出たら、許可します。残りクレジットが返れば成功です。</p>
+                  <p>新しい会話の入力欄の左下の<strong>「＋」</strong> &gt; <strong>Connectors</strong> で <strong>aiken_studio</strong> をオンにし、次の文を送ります。ツールの許可の確認が出たら、許可します。</p>
                   <div class="copy-box">
                     <div class="copy-wrap">
                       <pre class="copy-code"><code id="cg-claudeapp-check">A.I.KEN Studio のツールで、今の残りクレジットを確認してください。生成はしないでください。</code></pre>
@@ -418,7 +419,7 @@
                   </div>
 
                   <h3 class="guide-h">Claude（App）でできないこと</h3>
-                  <p>claude.ai では、手元の画像を添付もアップロードもできません。文章からの生成、このサーバーで作った画像、Canvas の操作は使えます。</p>
+                  <p>手元の画像は使えません（このサーバーで作った画像は使えます）。</p>
                 </div>
               </details>
 
@@ -428,7 +429,7 @@
                   <h4 class="guide-h guide-tool" id="guide-cli-codex">Codex CLI（ターミナル）</h4>
                   <h5 class="guide-h">初めてつなぐ</h5>
                   <ol class="steps">
-                    <li>ターミナルで、接続先を登録します。
+                    <li>ターミナルで、A.I.KEN Studio を登録します。
                       <div class="copy-box">
                         <div class="copy-wrap">
                           <pre class="copy-code"><code id="cg-codex-add">codex mcp add aiken_studio --url https://tnzwhwitgnzoehbjrmoy.supabase.co/functions/v1/mcp</code></pre>
@@ -446,8 +447,9 @@
                         <p class="copy-status" role="status"></p>
                       </div>
                     </li>
-                    <li>Google のログイン画面で、<strong>研修で案内された Google アカウント</strong>を選びます。</li>
-                    <li><strong>「許可する」</strong>を押します。</li>
+                    <li>A.I.KEN Studio の画面に<strong>「Google でログイン」</strong>が出たら、押します。</li>
+                    <li>Google の画面で、<strong>研修で案内された Google アカウント</strong>を選びます（出ないこともあります）。</li>
+                    <li>許可の画面で、ログイン中のアカウントを確かめて<strong>「許可する」</strong>を押します。</li>
                   </ol>
 
                   <h5 class="guide-h">つながったか確かめる</h5>
@@ -462,16 +464,16 @@
                   <h4 class="guide-h guide-tool" id="guide-cli-claude-code">Claude Code</h4>
                   <h5 class="guide-h">初めてつなぐ</h5>
                   <ol class="steps">
-                    <li>ターミナルで、Claude Code の版を確かめます（<strong>2.1.231 以上</strong>が必要です）。
+                    <li>ターミナルで、Claude Code のバージョンを確かめます（<strong>2.1.231 以上</strong>が必要です。古いときは、講師・スタッフに知らせてください）。
                       <div class="copy-box">
                         <div class="copy-wrap">
                           <pre class="copy-code"><code id="cg-claude-version">claude --version</code></pre>
-                          <button type="button" class="copy-btn" data-copy="cg-claude-version" aria-label="Claude Code の版を調べるコマンドをコピー" title="Claude Code の版を調べるコマンドをコピー"><svg class="ic-copy" width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true" focusable="false"><rect width="14" height="14" x="8" y="8" rx="2" ry="2"/><path d="M4 16c-1.1 0-2-.9-2-2V4c0-1.1.9-2 2-2h10c1.1 0 2 .9 2 2"/></svg><svg class="ic-check" width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true" focusable="false"><path d="M20 6 9 17l-5-5"/></svg></button>
+                          <button type="button" class="copy-btn" data-copy="cg-claude-version" aria-label="Claude Code のバージョンを調べるコマンドをコピー" title="Claude Code のバージョンを調べるコマンドをコピー"><svg class="ic-copy" width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true" focusable="false"><rect width="14" height="14" x="8" y="8" rx="2" ry="2"/><path d="M4 16c-1.1 0-2-.9-2-2V4c0-1.1.9-2 2-2h10c1.1 0 2 .9 2 2"/></svg><svg class="ic-check" width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true" focusable="false"><path d="M20 6 9 17l-5-5"/></svg></button>
                         </div>
                         <p class="copy-status" role="status"></p>
                       </div>
                     </li>
-                    <li>ターミナルで、接続先を登録します。
+                    <li>ターミナルで、A.I.KEN Studio を登録します。
                       <div class="copy-box">
                         <div class="copy-wrap">
                           <pre class="copy-code"><code id="cg-claude-add">claude mcp add --transport http --scope user aiken_studio https://tnzwhwitgnzoehbjrmoy.supabase.co/functions/v1/mcp</code></pre>
@@ -489,8 +491,9 @@
                         <p class="copy-status" role="status"></p>
                       </div>
                     </li>
-                    <li>Google のログイン画面で、<strong>研修で案内された Google アカウント</strong>を選びます。</li>
-                    <li><strong>「許可する」</strong>を押します。</li>
+                    <li>A.I.KEN Studio の画面に<strong>「Google でログイン」</strong>が出たら、押します。</li>
+                    <li>Google の画面で、<strong>研修で案内された Google アカウント</strong>を選びます（出ないこともあります）。</li>
+                    <li>許可の画面で、ログイン中のアカウントを確かめて<strong>「許可する」</strong>を押します。</li>
                   </ol>
 
                   <h5 class="guide-h">つながったか確かめる</h5>
@@ -509,10 +512,11 @@
                 <summary>うまくいかないとき</summary>
                 <div class="sub-body">
                   <ul class="guide-list">
-                    <li><strong>違うアカウントでログインした</strong>：許可する前なら、画面の<strong>「別のアカウントでログイン」</strong>で、研修で案内された Google アカウントに替えてつなぎ直します。</li>
-                    <li><strong>Claude Code で見えない</strong>：<code>--scope user</code> 付きで登録し直します（その他（CLI）の Claude Code の手順 2 のコマンド）。</li>
+                    <li><strong>ログインの途中で止まった・閉じた・5 分を過ぎた</strong>：アプリから、つなぎ直します。Codex CLI は Control＋C のあと <code>codex mcp login aiken_studio</code> をもう一度。Claude Code は <code>/mcp</code> で aiken_studio を選び直します。ChatGPT・Claude・Codex のアプリは、接続の画面からもう一度つなぎます。</li>
+                    <li><strong>違うアカウントでログインした</strong>：「許可する」を押す前なら、許可の画面のいちばん下の「別のアカウントでログイン」で、研修で案内されたアカウントを選び直します。押したあとなら、講師・スタッフに知らせてください。</li>
+                    <li><strong>Claude Code の <code>/mcp</code> に aiken_studio が出ない</strong>：その他（CLI）の Claude Code の手順 2 のコマンド（<code>--scope user</code> 付き）で、登録し直します。</li>
                     <li><strong>Claude（App）の会話でツールが出てこない</strong>：入力欄の左下の<strong>「＋」</strong> &gt; <strong>Connectors</strong> で、<strong>aiken_studio</strong> がオンになっているか確かめます。</li>
-                    <li><strong>Claude（App）でつながらない</strong>：<strong>Customize</strong> &gt; <strong>Connectors</strong> で <strong>aiken_studio</strong> を削除し（<strong>Remove</strong>、または横の「…」のメニュー）、Claude（App）の手順 1 から足し直します。手順 6 で <strong>Sign in now</strong> と <strong>Register automatically</strong> を選んだかを確かめます。会社の Team のメンバーは自分では足し直せないので、Owner に、<strong>Organization settings</strong> &gt; <strong>Connectors</strong> で同じ選び方で足し直してもらうよう頼みます。</li>
+                    <li><strong>Claude（App）でつながらない</strong>：<strong>Customize</strong> &gt; <strong>Connectors</strong> で <strong>aiken_studio</strong> を削除し、Claude（App）の手順 1 から足し直します（会社の Team のメンバーは、Owner に頼みます）。</li>
                   </ul>
                 </div>
               </details>
@@ -521,12 +525,16 @@
         </details>
       </div>
     </div>
+    <nav class="links page-links" aria-label="方針と規約">
+      <a href="https://a-i-ken.com/privacy/" target="_blank" rel="noopener noreferrer">プライバシーポリシー</a>
+      <a href="/terms.html" target="_blank" rel="noopener noreferrer">利用規約</a>
+    </nav>
   </main>
   <!-- 読み上げだけに知らせる（手動の更新の結果など。数字の更新は必要なときだけ） -->
   <p class="sr-only" id="live" role="status" aria-live="polite"></p>
 </div>
 <dialog id="my-dialog" class="my-dialog" aria-label="確認"></dialog>
-<script type="module" src="/r/675aa7e5cc2b/topbar-height.js"></script>
-<script type="module" src="/r/675aa7e5cc2b/mypage.js"></script>
+<script type="module" src="/r/ffc62eb7b060/topbar-height.js"></script>
+<script type="module" src="/r/ffc62eb7b060/mypage.js"></script>
 </body>
 </html>

@@ -57,9 +57,24 @@
   .who .name-note { display: block; color: var(--muted); font-size: 0.8rem; font-weight: 400; line-height: 1.5; }
   /* 許可の前の注意：短い文を 1 文ずつ別の行にする。赤い太字は使わない（2026-10-19 田口さん「赤文字がくどい」） */
   .warn { border: 1px solid var(--border); border-radius: 12px; padding: 10px 14px; margin: 0 0 16px; font-size: 0.9rem; line-height: 1.6; }
-  .warn .warn-title { margin: 0 0 4px; font-size: 0.85rem; font-weight: 700; color: var(--text-2); }
   .warn p { margin: 0 0 4px; color: var(--text); }
   .warn p:last-child { margin-bottom: 0; }
+  /* PC のアプリから開いたとき（#loopback-warning が出ているとき）は、1 行目の代わりにその文を出す。:has が効かない古いブラウザでは 2 つとも出るが、どちらも正しい文 */
+  .warn:has(#loopback-warning:not([hidden])) #warn-default { display: none; }
+  /* ？（詳しい説明）：details と summary（JS なし・キーボードで開ける・ホバーだけにしない）。文の右端に ？ を置き、開くと文の下に説明が出る。
+     見た目は studio.css の .help と同じ（この画面は外部の CSS を読めないので、同じ規則をここにも置く）。文字の太さは本文 400・？ は 600 */
+  .help > summary { list-style: none; cursor: pointer; min-height: 44px; display: flex; align-items: center; justify-content: space-between; gap: 12px; border-radius: 10px; }
+  .help > summary::-webkit-details-marker { display: none; }
+  .help > summary:focus-visible { outline: 2px solid var(--primary); outline-offset: 2px; }
+  .help-text { min-width: 0; font-weight: 400; }
+  .help-q {
+    flex: none; width: 24px; height: 24px; display: inline-flex; align-items: center; justify-content: center;
+    border: 1px solid var(--input-line); border-radius: 999px; color: var(--primary); font-size: 13px; font-weight: 600; line-height: 1;
+  }
+  .help > summary:hover .help-q { background: var(--card-2); }
+  .help[open] > summary .help-q { background: var(--primary); border-color: var(--primary); color: var(--primary-text); }
+  .help-body { margin: 0 0 8px; padding: 10px 12px; border: 1px solid var(--border); border-radius: 10px; background: var(--card-2); color: var(--text); font-size: 0.85rem; line-height: 1.7; }
+  .switch-note { margin: 4px 0 0; }
   .actions { display: flex; gap: 12px; flex-wrap: wrap; }
   .actions button { flex: 1 1 140px; }
   /* 「Google でログイン」のボタン（.gsi-btn）は Google の決まりの見た目なので、ここの共通のボタンの規則から外す */
@@ -208,34 +223,36 @@
     <p class="error" id="login-note" role="status" hidden></p>
     <div class="actions"><button type="button" class="gsi-btn" id="login-btn"><span class="gsi-g" aria-hidden="true"></span><span class="gsi-label">Google でログイン</span></button></div>
     <nav class="links" aria-label="方針と規約">
-      <a href="https://a-i-ken.com/privacy/">プライバシーポリシー</a>
-      <a href="/terms.html">利用規約</a>
+      <a href="https://a-i-ken.com/privacy/" target="_blank" rel="noopener">プライバシーポリシー</a>
+      <a href="/terms.html" target="_blank" rel="noopener">利用規約</a>
     </nav>
     <p class="foot">A.I.KEN</p>
   </section>
 
   <section id="consent" hidden>
-    <p><span class="nb">次のアプリに、</span><span class="nb">あなたのアカウントで、</span><span class="nb">動画・画像・音声の生成を</span><span class="nb">使わせます。</span></p>
+    <p><span class="nb">許可すると、</span><span class="nb">次のアプリが、</span><span class="nb">あなたのアカウントで</span> <span class="nb">A.I.KEN Studio を</span><span class="nb">使えるようになります。</span></p>
     <dl class="who">
-      <dt><span class="nb">戻り先</span><span class="nb">（許可すると、ここに戻ります）</span></dt>
+      <dt>許可したあとに戻るアプリ</dt>
       <dd class="dest" id="redirect-desc"></dd>
       <dd class="dest-addr" id="redirect-addr" hidden></dd>
       <dt>接続しようとしているアプリ</dt>
-      <dd><bdi id="client-name"></bdi> <span class="name-note"><span class="nb">（登録された名前。</span><span class="nb">正しいとは限りません）</span></span></dd>
+      <dd><bdi id="client-name"></bdi> <span class="name-note"><span class="nb">（アプリが名乗っている名前です。</span><span class="nb">本物とは限りません）</span></span></dd>
       <dt>ログイン中のアカウント</dt>
       <dd id="user-email"></dd>
     </dl>
     <div class="warn" role="note">
-      <p class="warn-title">許可の前に</p>
-      <p><span class="nb">自分で始めた接続のときだけ、</span><span class="nb">許可してください。</span></p>
-      <p><span class="nb">この画面の URL と、</span><span class="nb">許可したあとの画面の URL は、</span><span class="nb">人に送らないでください。</span></p>
-      <p id="loopback-warning" hidden><span class="nb">Codex・Claude Code などを、</span><span class="nb">この PC で自分で操作している</span><span class="nb">ときだけ許可します。</span></p>
+      <details class="help">
+        <summary><span class="help-text"><span id="warn-default"><span class="nb">自分で始めた接続のときだけ、</span><span class="nb">許可してください。</span></span><span id="loopback-warning" hidden><span class="nb">この PC で自分が始めた</span><span class="nb">接続のときだけ、</span><span class="nb">許可してください。</span></span></span><span class="help-q" aria-hidden="true">？</span></summary>
+        <div class="help-body">あなた自身がアプリでつなぐ操作をして、その流れでこの画面が開いたときだけ、許可してください。人から送られたリンクで開いたときは、「許可しない」を押してください。許可したあとの画面の URL も、人に送らないでください。</div>
+      </details>
+      <p><span class="nb">この画面の URL は、</span><span class="nb">人に送らないでください。</span></p>
     </div>
     <div class="actions">
       <button class="primary" id="approve-btn">許可する</button>
-      <button id="deny-btn">やめる</button>
+      <button id="deny-btn">許可しない</button>
     </div>
     <p class="muted" style="margin-top:16px"><span class="nb">アカウントが違う場合は</span> <button class="link" id="switch-btn">別のアカウントでログイン</button></p>
+    <p class="muted switch-note"><span class="nb">ほかのタブの A.I.KEN Studio も</span><span class="nb">ログアウトします。</span></p>
   </section>
 
   <section id="blocked" hidden>
