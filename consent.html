@@ -171,12 +171,13 @@
   }
   /* GSI_BUTTON_END */
 
-  /* TASK-0233: 既存 style 内だけで共通の帯・細字・下側の影をそろえる。 */
+  /* TASK-0233: 既存 style 内だけで共通の帯・文字の太さ・下側の影をそろえる。 */
   :root { --header-card: #ffffff; --header-border: #dadce0; --block-shadow: 0 8px 24px -12px rgba(15, 23, 42, .22); }
-  body { display: block; padding: 92px 20px 48px; font-family: "Hiragino Sans", "Yu Gothic UI", "Noto Sans JP", "Hiragino Kaku Gothic ProN", Meiryo, system-ui, sans-serif; font-weight: 300; line-height: 1.8; }
-  body :where(*) { font-weight: inherit !important; }
-  body :is(h1, h2, h3, h4, h5, h6, strong, b, button, dt, label) { font-weight: 500 !important; }
-  body::before { content: "A.I.KEN Studio"; position: fixed; z-index: 30; top: 0; left: 0; right: 0; box-sizing: border-box; height: 60px; padding: 0 20px 0 80px; display: flex; align-items: center; background: var(--header-card) url("/img/aiken-logo.png") 20px center / 48px 34px no-repeat; border-bottom: 1px solid var(--header-border); color: var(--text); font-size: 15px; font-weight: 500; line-height: 1.5; white-space: nowrap; }
+  body { display: block; padding: 92px 20px 48px; font-family: "Hiragino Sans", "Yu Gothic UI", "Noto Sans JP", "Hiragino Kaku Gothic ProN", Meiryo, system-ui, sans-serif; font-weight: 400; line-height: 1.8; }
+  body :is(h1, h2, h3, h4, h5, h6, strong, b, button, dt, label) { font-weight: 600 !important; }
+  /* 「Google でログイン」のボタン（.gsi-btn）は Google のブランドの決まりの Medium（500。上の GSI_BUTTON の区間）を保つため、上の 600 から外す */
+  body button.gsi-btn { font-weight: 500 !important; }
+  body::before { content: "A.I.KEN Studio"; position: fixed; z-index: 30; top: 0; left: 0; right: 0; box-sizing: border-box; height: 60px; padding: 0 20px 0 80px; display: flex; align-items: center; background: var(--header-card) url("/img/aiken-logo.png") 20px center / 48px 34px no-repeat; border-bottom: 1px solid var(--header-border); color: var(--text); font-size: 15px; font-weight: 600; line-height: 1.5; white-space: nowrap; }
   main { box-shadow: var(--block-shadow); }
   @media (prefers-color-scheme: dark) {
     :root { --header-card: #1e1f20; --header-border: #444746; --block-shadow: 0 10px 28px -12px rgba(0, 0, 0, .5); }

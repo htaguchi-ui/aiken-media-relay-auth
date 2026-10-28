@@ -4,9 +4,9 @@
 .site-nav[hidden], .site-nav [hidden] { display: none !important; }
 .site-nav-list { list-style: none; margin: 0; padding: 0; display: flex; flex-wrap: nowrap; align-items: center; gap: 20px; }
 .site-nav-list > li { flex: none; min-width: 0; display: flex; }
-.site-nav-item { display: inline-flex; align-items: center; min-height: 44px; padding: 0; border: 0; border-radius: 0; background: transparent; box-shadow: none; font-size: 14px; font-weight: 300; line-height: 1.5; color: var(--text-2); text-decoration: none; white-space: nowrap; }
+.site-nav-item { display: inline-flex; align-items: center; min-height: 44px; padding: 0; border: 0; border-radius: 0; background: transparent; box-shadow: none; font-size: 14px; font-weight: 400; line-height: 1.5; color: var(--text-2); text-decoration: none; white-space: nowrap; }
 a.site-nav-item:hover { color: var(--accent); text-decoration: none; }
-body .site-nav-item[aria-current="page"] { color: var(--accent); font-weight: 500 !important; background: transparent; box-shadow: none; }
+body .site-nav-item[aria-current="page"] { color: var(--accent); font-weight: 600 !important; background: transparent; box-shadow: none; }
 .site-nav-item:focus-visible, .site-nav-toggle:focus-visible { outline: 2px solid var(--accent); outline-offset: 4px; border-radius: 4px; }
 .site-nav-label { min-width: 0; white-space: nowrap; }
 .site-nav-icon { flex: none; display: block; }
@@ -39,11 +39,14 @@ body .topbar .account .btn { font-size: 13px; }
 }
 
 /* 共通の文字・カード。studio.css だけを読む案内ページにも同じ定義を置く。
-   !important は後から読むページ内 CSS の旧 600/700 に優先するため。
-   システムの細字を使用し、新たな外部フォントの指定・読み込みは足さない。 */
-body { --block-shadow: 0 8px 24px -12px rgba(15, 23, 42, .22); font-family: "Hiragino Sans", "Yu Gothic UI", "Noto Sans JP", "Hiragino Kaku Gothic ProN", Meiryo, system-ui, sans-serif !important; font-weight: 300 !important; }
-body :where(*) { font-weight: inherit !important; }
-body :is(h1, h2, h3, h4, h5, h6, strong, b, button, summary, th, dt, label, .btn, .field-label, .strong, .value, .ov-value, .stage-name, .now-name, .wk-day-name, .st-name) { font-weight: 500 !important; }
+   本文は 400、見出し・ボタン・強調は 600（!important は後から読むページ内 CSS の 700 を 600 にそろえるため）。
+   ページ内 CSS が決めた 500〜700（エラー・注意の文字・バッジなど）はそのまま効かせる。300 以下は使わない。
+   システムの字体を使用し、新たな外部フォントの指定・読み込みは足さない。 */
+body { --block-shadow: 0 8px 24px -12px rgba(15, 23, 42, .22); font-family: "Hiragino Sans", "Yu Gothic UI", "Noto Sans JP", "Hiragino Kaku Gothic ProN", Meiryo, system-ui, sans-serif !important; font-weight: 400; }
+body :is(h1, h2, h3, h4, h5, h6, strong, b, button, summary, th, dt, label, .btn, .field-label, .strong, .value, .ov-value, .stage-name, .now-name, .wk-day-name, .st-name) { font-weight: 600 !important; }
+/* 「Google でログイン」のボタン（.gsi-btn）は Google のブランドの決まりの Medium（500。gsi-button.css）を保つため、上の 600 から外す。
+   詳しさ (0,1,2) で上の (0,1,1) に読み込みの順と関係なく勝つ。 */
+body button.gsi-btn { font-weight: 500 !important; }
 body :is(.card, .center-card, .fold-group, .panel, .section-card) { box-shadow: var(--block-shadow); }
 body .topbar .brand::before { content: ""; display: block; flex: none; width: 48px; height: 34px; background: url("/img/aiken-logo.png") center / contain no-repeat; }
 body .topbar .brand-sub { display: none; }
@@ -62,5 +65,5 @@ body:has(.admin-shell) .topbar-inner, body .admin-shell, body .selectbar-inner {
 /* TASK-0233: 左端の表示名は全ページ共通。元の見出しは読み上げ用に残す。 */
 body .topbar .topbar-inner > .brand { min-width: max-content; }
 body .topbar .brand h1 { position: absolute; width: 1px; height: 1px; padding: 0; margin: -1px; overflow: hidden; clip: rect(0, 0, 0, 0); white-space: nowrap; border: 0; }
-body .topbar .brand::after { content: "A.I.KEN Studio"; display: block; flex: none; color: var(--text); font-size: 15px; font-weight: 500; line-height: 1.5; white-space: nowrap; }
+body .topbar .brand::after { content: "A.I.KEN Studio"; display: block; flex: none; color: var(--text); font-size: 15px; font-weight: 600; line-height: 1.5; white-space: nowrap; }
 @media (max-width: 719.98px) { body .topbar .brand::after { font-size: 14px; } }

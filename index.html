@@ -17,17 +17,17 @@
 <!-- ログインの確かめ・RPC の接続先へ先につないでおく（supabase-js の fetch は資格情報なしなので crossorigin） -->
 <link rel="preconnect" href="https://tnzwhwitgnzoehbjrmoy.supabase.co" crossorigin>
 <link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=IBM+Plex+Sans+JP:wght@400;500;600;700&amp;display=swap">
-<link rel="stylesheet" href="/r/6a9503d2c032/studio.css">
-<link rel="stylesheet" href="/r/6a9503d2c032/gsi-button.css">
-<link rel="stylesheet" href="/r/6a9503d2c032/site-nav.css">
-<link rel="modulepreload" href="/r/6a9503d2c032/auth-storage.js">
-<link rel="modulepreload" href="/r/6a9503d2c032/mypage-lib.js">
-<link rel="modulepreload" href="/r/6a9503d2c032/mypage-share.js">
-<link rel="modulepreload" href="/r/6a9503d2c032/mypage-submissions.js">
-<link rel="modulepreload" href="/r/6a9503d2c032/qr-code.js">
-<link rel="modulepreload" href="/r/6a9503d2c032/share-lib.js">
-<link rel="modulepreload" href="/r/6a9503d2c032/site-nav.js">
-<link rel="modulepreload" href="/r/6a9503d2c032/submissions-lib.js">
+<link rel="stylesheet" href="/r/675aa7e5cc2b/studio.css">
+<link rel="stylesheet" href="/r/675aa7e5cc2b/gsi-button.css">
+<link rel="stylesheet" href="/r/675aa7e5cc2b/site-nav.css">
+<link rel="modulepreload" href="/r/675aa7e5cc2b/auth-storage.js">
+<link rel="modulepreload" href="/r/675aa7e5cc2b/mypage-lib.js">
+<link rel="modulepreload" href="/r/675aa7e5cc2b/mypage-share.js">
+<link rel="modulepreload" href="/r/675aa7e5cc2b/mypage-submissions.js">
+<link rel="modulepreload" href="/r/675aa7e5cc2b/qr-code.js">
+<link rel="modulepreload" href="/r/675aa7e5cc2b/share-lib.js">
+<link rel="modulepreload" href="/r/675aa7e5cc2b/site-nav.js">
+<link rel="modulepreload" href="/r/675aa7e5cc2b/submissions-lib.js">
 <style>
   /* 固定したヘッダーの高さの初期値（--topbar-h）：ヘッダーを 1 段にした（帯を題名の右に並べた）あとの実測（2026-10-23）。
      studio.css の値は、帯の無い案内のページ（about.html）・管理コンソールと共通なので、このページの中だけで上書きする。
@@ -81,6 +81,10 @@
     /* QR が無いとき（開き直したあと・終了の画面）は 1 列：左の列に細い文だけが残らないように */
     .share-card.no-qr { display: flex; flex-direction: column; }
   }
+  /* つなぎ方「その他（CLI）」の中の道具の名前（Codex CLI・Claude Code。h4）：手順の小見出し（h5。.guide-h）より少し大きく、2 つ目からは上に区切りの線。文字の太さ・色は .guide-h のまま */
+  .guide-tool, h5.guide-h { margin-bottom: 0; } /* h4・h5 の初めの余白を、h3 と同じ 0 にそろえる（studio.css の初期化は h1〜h3 だけ） */
+  .guide-tool { font-size: 17px; }
+  .guide-tool:not(:first-child) { margin-top: var(--s3); padding-top: var(--s3); border-top: 1px solid var(--line-soft); }
 </style>
 </head>
 <body>
@@ -298,9 +302,12 @@
                OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE
                SOFTWARE.
 
-               ChatGPT の手順は 2026-10-19 に田口さんが実際の画面で確かめた順。Codex・Claude Code の画面の名前・操作名は、公式の資料と調査のメモ（findings.md）にもとづき、実機では確かめていない -->
+               ChatGPT の手順は 2026-10-19 に田口さんが実際の画面で確かめた順。Codex・Claude Code の画面の名前・操作名は、公式の資料と調査のメモ（findings.md）にもとづき、実機では確かめていない。
+               Claude（App）の手順は 2026-10-28 に書いた。公式の記事（support.claude.com の get-started-with-custom-connectors-using-remote-mcp）にもとづき、英語の画面の名前だけを確認した（日本語の画面の表記は未確認）。
+               手順 6 の OAuth client は Register automatically（Dynamic Client Registration）。claude.com/docs/connectors/custom/add-unlisted によると、Use Claude's published identity は Client ID Metadata Document にサーバーが対応しているときだけ使える。本番の認可サーバーの公開のメタデータ（auth/v1/.well-known/oauth-authorization-server）には registration_endpoint があり、client_id_metadata_document_supported は無い（2026-10-28 に読んで確かめた）。2026-10-22 の claude.ai の接続も dynamic で登録されている。
+               並びは ChatGPT（App）→ Claude（App）→ その他（CLI：Codex CLI・Claude Code）→ うまくいかないとき -->
           <div class="fold-body connect-guide">
-            <p>ChatGPT・Codex・Claude Code から使うときの手順です。ログインは、許可された会社の Google アカウント（@a-i-ken.jp / @a-i-ken.com / @orenda.co.jp / @net-fun.co.jp）で行います。</p>
+            <p>ChatGPT・Claude のアプリや、Codex・Claude Code などのターミナル（CLI）から使うときの手順です。ログインは、許可された会社の Google アカウント（@a-i-ken.jp / @a-i-ken.com / @orenda.co.jp / @net-fun.co.jp）で行います。</p>
 
             <div class="copy-box">
               <span class="copy-label">つなぐ先（MCP の URL）</span>
@@ -318,7 +325,7 @@
 
             <div class="guide-apps">
               <details class="sub-fold" id="guide-chatgpt">
-                <summary>ChatGPT アプリ（Codex アプリも同じ）</summary>
+                <summary>ChatGPT（App）</summary>
                 <div class="sub-body">
                   <p>ChatGPT のアプリ・Web 版と、アプリの中の Codex は、この手順でつなぎます。</p>
                   <h3 class="guide-h">初めてつなぐ</h3>
@@ -362,10 +369,64 @@
                 </div>
               </details>
 
-              <details class="sub-fold" id="guide-codex">
-                <summary>Codex CLI（ターミナル）</summary>
+              <details class="sub-fold" id="guide-claude-app">
+                <summary>Claude（App）</summary>
                 <div class="sub-body">
-                  <h3 class="guide-h">初めてつなぐ</h3>
+                  <p>Claude のデスクトップアプリと、Web 版（claude.ai）は、この手順でつなぎます。画面の名前は英語の表記のまま書いています。日本語の画面では表記が違う場合があります。</p>
+                  <h3 class="guide-h">初めてつなぐ（個人の Pro・Max）</h3>
+                  <ol class="steps">
+                    <li>Claude を開き、<strong>Customize</strong> &gt; <strong>Connectors</strong> を開きます。</li>
+                    <li><strong>＋ Add</strong> を押し、<strong>Add custom connector</strong> を選びます。</li>
+                    <li><strong>Name</strong> の欄に、次の名前を入れます。
+                      <div class="copy-box">
+                        <div class="copy-wrap">
+                          <pre class="copy-code"><code id="cg-claudeapp-name">aiken_studio</code></pre>
+                          <button type="button" class="copy-btn" data-copy="cg-claudeapp-name" aria-label="Claude の名前の欄に入れる名前をコピー" title="Claude の名前の欄に入れる名前をコピー"><svg class="ic-copy" width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true" focusable="false"><rect width="14" height="14" x="8" y="8" rx="2" ry="2"/><path d="M4 16c-1.1 0-2-.9-2-2V4c0-1.1.9-2 2-2h10c1.1 0 2 .9 2 2"/></svg><svg class="ic-check" width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true" focusable="false"><path d="M20 6 9 17l-5-5"/></svg></button>
+                        </div>
+                        <p class="copy-status" role="status"></p>
+                      </div>
+                    </li>
+                    <li><strong>Remote MCP server URL</strong> の欄に、次の URL を入れて、<strong>Continue</strong> を押します。
+                      <div class="copy-box">
+                        <div class="copy-wrap">
+                          <pre class="copy-code"><code id="cg-claudeapp-url">https://tnzwhwitgnzoehbjrmoy.supabase.co/functions/v1/mcp</code></pre>
+                          <button type="button" class="copy-btn" data-copy="cg-claudeapp-url" aria-label="Claude の URL の欄に入れる URL をコピー" title="Claude の URL の欄に入れる URL をコピー"><svg class="ic-copy" width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true" focusable="false"><rect width="14" height="14" x="8" y="8" rx="2" ry="2"/><path d="M4 16c-1.1 0-2-.9-2-2V4c0-1.1.9-2 2-2h10c1.1 0 2 .9 2 2"/></svg><svg class="ic-check" width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true" focusable="false"><path d="M20 6 9 17l-5-5"/></svg></button>
+                        </div>
+                        <p class="copy-status" role="status"></p>
+                      </div>
+                    </li>
+                    <li>検出された認証の設定が出たら、<strong>Continue</strong> を押します。</li>
+                    <li>次の画面で、<strong>Authentication</strong> は <strong>Sign in now</strong> を選びます（<strong>No sign in</strong> は選びません）。<strong>OAuth client</strong> は <strong>Register automatically</strong> を選びます（<strong>Use Claude's published identity (Recommended)</strong> は選びません）。</li>
+                    <li><strong>Add</strong> を押します。</li>
+                    <li>コネクタの一覧で、<strong>aiken_studio</strong> の <strong>Connect</strong> を押します。</li>
+                    <li>Google のログイン画面で、<strong>研修で案内された Google アカウント</strong>を選びます。</li>
+                    <li><strong>「許可する」</strong>を押します。</li>
+                  </ol>
+                  <ul class="guide-list">
+                    <li><strong>会社の Team の場合</strong>：コネクタを足せるのは、Owner と Primary Owner だけです（メンバー個人は足せません）。Owner は <strong>Organization settings</strong> &gt; <strong>Connectors</strong> で <strong>Add</strong> を押し、<strong>Custom</strong> &gt; <strong>Web</strong> を選びます。そのあとは上の手順 3〜7 と同じです（Name は <strong>aiken_studio</strong>、URL は手順 4 と同じ URL、<strong>Authentication</strong> は <strong>Sign in now</strong>、<strong>OAuth client</strong> は <strong>Register automatically</strong> を選びます。<strong>Use Claude's published identity (Recommended)</strong> は選びません）。足されたあと、各メンバーは <strong>Customize</strong> &gt; <strong>Connectors</strong> で <strong>Custom</strong> と出ている <strong>aiken_studio</strong> の <strong>Connect</strong> を押し、自分のアカウントで許可します（上の手順 8 から）。</li>
+                    <li><strong>Free プランの場合</strong>：カスタムコネクタは 1 つまでです。</li>
+                  </ul>
+
+                  <h3 class="guide-h">つながったか確かめる</h3>
+                  <p>新しい会話の入力欄の左下の <strong>＋</strong> &gt; <strong>Connectors</strong> で <strong>aiken_studio</strong> をオンにして（会話ごとにオン・オフします）、次の文を送ります。ツールを使うときに許可の確認が出たら、許可します。残りクレジットが返れば成功です。</p>
+                  <div class="copy-box">
+                    <div class="copy-wrap">
+                      <pre class="copy-code"><code id="cg-claudeapp-check">A.I.KEN Studio のツールで、今の残りクレジットを確認してください。生成はしないでください。</code></pre>
+                      <button type="button" class="copy-btn" data-copy="cg-claudeapp-check" aria-label="Claude に送る確認用の文をコピー" title="Claude に送る確認用の文をコピー"><svg class="ic-copy" width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true" focusable="false"><rect width="14" height="14" x="8" y="8" rx="2" ry="2"/><path d="M4 16c-1.1 0-2-.9-2-2V4c0-1.1.9-2 2-2h10c1.1 0 2 .9 2 2"/></svg><svg class="ic-check" width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true" focusable="false"><path d="M20 6 9 17l-5-5"/></svg></button>
+                    </div>
+                    <p class="copy-status" role="status"></p>
+                  </div>
+
+                  <h3 class="guide-h">Claude（App）でできないこと</h3>
+                  <p>claude.ai では、手元の画像を添付もアップロードもできません。文章からの生成、このサーバーで作った画像、Canvas の操作は使えます。</p>
+                </div>
+              </details>
+
+              <details class="sub-fold" id="guide-cli">
+                <summary>その他（CLI）</summary>
+                <div class="sub-body">
+                  <h4 class="guide-h guide-tool" id="guide-cli-codex">Codex CLI（ターミナル）</h4>
+                  <h5 class="guide-h">初めてつなぐ</h5>
                   <ol class="steps">
                     <li>ターミナルで、接続先を登録します。
                       <div class="copy-box">
@@ -389,7 +450,7 @@
                     <li><strong>「許可する」</strong>を押します。</li>
                   </ol>
 
-                  <h3 class="guide-h">つながったか確かめる</h3>
+                  <h5 class="guide-h">つながったか確かめる</h5>
                   <p>Codex の会話に次の文を送ります。残りクレジットが返れば成功です。</p>
                   <div class="copy-box">
                     <div class="copy-wrap">
@@ -398,13 +459,8 @@
                     </div>
                     <p class="copy-status" role="status"></p>
                   </div>
-                </div>
-              </details>
-
-              <details class="sub-fold" id="guide-claude">
-                <summary>Claude Code</summary>
-                <div class="sub-body">
-                  <h3 class="guide-h">初めてつなぐ</h3>
+                  <h4 class="guide-h guide-tool" id="guide-cli-claude-code">Claude Code</h4>
+                  <h5 class="guide-h">初めてつなぐ</h5>
                   <ol class="steps">
                     <li>ターミナルで、Claude Code の版を確かめます（<strong>2.1.231 以上</strong>が必要です）。
                       <div class="copy-box">
@@ -437,7 +493,7 @@
                     <li><strong>「許可する」</strong>を押します。</li>
                   </ol>
 
-                  <h3 class="guide-h">つながったか確かめる</h3>
+                  <h5 class="guide-h">つながったか確かめる</h5>
                   <p>Claude Code の会話に次の文を送ります。残りクレジットが返れば成功です。</p>
                   <div class="copy-box">
                     <div class="copy-wrap">
@@ -454,7 +510,9 @@
                 <div class="sub-body">
                   <ul class="guide-list">
                     <li><strong>違うアカウントでログインした</strong>：許可する前なら、画面の<strong>「別のアカウントでログイン」</strong>で、研修で案内された Google アカウントに替えてつなぎ直します。</li>
-                    <li><strong>Claude Code で見えない</strong>：<code>--scope user</code> 付きで登録し直します（上の Claude Code の手順 2 のコマンド）。</li>
+                    <li><strong>Claude Code で見えない</strong>：<code>--scope user</code> 付きで登録し直します（その他（CLI）の Claude Code の手順 2 のコマンド）。</li>
+                    <li><strong>Claude（App）の会話でツールが出てこない</strong>：入力欄の左下の<strong>「＋」</strong> &gt; <strong>Connectors</strong> で、<strong>aiken_studio</strong> がオンになっているか確かめます。</li>
+                    <li><strong>Claude（App）でつながらない</strong>：<strong>Customize</strong> &gt; <strong>Connectors</strong> で <strong>aiken_studio</strong> を削除し（<strong>Remove</strong>、または横の「…」のメニュー）、Claude（App）の手順 1 から足し直します。手順 6 で <strong>Sign in now</strong> と <strong>Register automatically</strong> を選んだかを確かめます。会社の Team のメンバーは自分では足し直せないので、Owner に、<strong>Organization settings</strong> &gt; <strong>Connectors</strong> で同じ選び方で足し直してもらうよう頼みます。</li>
                   </ul>
                 </div>
               </details>
@@ -468,7 +526,7 @@
   <p class="sr-only" id="live" role="status" aria-live="polite"></p>
 </div>
 <dialog id="my-dialog" class="my-dialog" aria-label="確認"></dialog>
-<script type="module" src="/r/6a9503d2c032/topbar-height.js"></script>
-<script type="module" src="/r/6a9503d2c032/mypage.js"></script>
+<script type="module" src="/r/675aa7e5cc2b/topbar-height.js"></script>
+<script type="module" src="/r/675aa7e5cc2b/mypage.js"></script>
 </body>
 </html>
