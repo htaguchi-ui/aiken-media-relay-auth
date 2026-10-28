@@ -119,6 +119,7 @@ import {
   resetCarry,
   effectiveDrafts,
   isMissingSchemaError,
+  isMissingFunctionError,
   setStageDbReady,
   isMonthlyRole,
   isWindowRole,
@@ -6214,7 +6215,7 @@ async function openHistory() {
 }
 
 // ---- 段階（016：セミナーの段階）----
-// 回の枠を、Day ごとではなく「ワークショップごとの段階」にする。テンプレートを回に当て、講師を担当にする。
+// 回の枠を、Day ごとではなく「ワークショップごとの段階」にする。テンプレートを回に適用し、講師を担当にする。
 // 段階を進める・戻すのは講師の画面（instructor.html）。ここの書き込みはすべて DB の RPC（守りは DB が入れる）。
 // DB が 016 を当てていない間（state.stages.available が false）は、このブロックの欄・操作を出さない。
 
@@ -6452,7 +6453,7 @@ function stagesSection(c) {
   const out = [];
   if (stageMode) {
     out.push(
-      el("p", { className: "small", text: `テンプレート：${templateName(info.stage_template_id) ?? "（当てたテンプレートは削除されました）"}。当てたあとに変えた分は、テンプレートには戻りません。` }),
+      el("p", { className: "small", text: `テンプレート：${templateName(info.stage_template_id) ?? "（適用したテンプレートは削除されました）"}。適用したあとに変えた分は、テンプレートには戻りません。` }),
     );
     const status = S.status.get(c.id);
     if (status?.current) {
@@ -6490,19 +6491,19 @@ function stagesSection(c) {
       el("button", { type: "button", className: "btn", text: "段階を編集", onclick: () => openStageEditor(c.id) }),
       el("p", {
         className: "hint",
-        text: "段階の名前・題名・クレジットは、授業の途中でも変えられます。順番と数は、その日が始まる前だけ変えられます。段階を進める・戻すのは、講師の画面で行います。",
+        text: "名前・題名・クレジットはいつでも変えられます。順番と数は、その日が始まる前だけ変えられます（消した段階に付けた案内は外れます）。",
       }),
       el("a", { className: "link-btn", href: "instructor", target: "_blank", rel: "noopener", text: "講師の画面を開く（別のタブ）" }),
     );
   } else {
     out.push(el("p", { className: "small", text: "今は Day ごとの枠です（Day1・ブリッジワーク・Day2 の 1 人あたりの上限）。" }));
   }
-  // テンプレートを当てる・枠の種類を戻す（Day1 が始まる前だけ）
+  // テンプレートを適用する・枠の種類を戻す（Day1 が始まる前だけ）
   if (!rule.modeEditable) {
     out.push(
       el("p", {
         className: "hint",
-        text: stageMode ? "Day1 が始まったため、テンプレートの当て直し・Day ごとの枠に戻すことはできません。" : "Day1 が始まったため、段階ごとの枠にはできません。",
+        text: stageMode ? "Day1 が始まったため、テンプレートの適用し直し・Day ごとの枠に戻すことはできません。" : "Day1 が始まったため、段階ごとの枠にはできません。",
       }),
     );
   } else {
@@ -6513,16 +6514,16 @@ function stagesSection(c) {
       const choices = active.length ? active : S.templates;
       const select = el(
         "select",
-        { className: "input", "aria-label": "当てるテンプレート" },
+        { className: "input", "aria-label": "適用するテンプレート" },
         ...choices.map((t) => el("option", { value: t.id, text: t.name, selected: t.id === (S.pick.get(c.id) ?? info.stage_template_id) })),
       );
       select.addEventListener("change", () => S.pick.set(c.id, select.value));
       out.push(
-        field(stageMode ? "テンプレートを当て直す" : "テンプレートを当てる", select),
+        field(stageMode ? "テンプレートを適用し直す" : "テンプレートを適用", select),
         el("button", {
           type: "button",
           className: "btn primary",
-          text: stageMode ? "当て直す（段階を全部入れ替える）" : "当てて、段階ごとの枠にする",
+          text: stageMode ? "適用し直す（段階を全部入れ替える）" : "適用して、段階ごとの枠にする",
           onclick: () => applyTemplate(c, select.value),
         }),
       );
@@ -6536,25 +6537,74 @@ function stagesSection(c) {
   return el("section", { className: "box" }, el("div", { className: "box-head" }, el("h3", { text: "段階（ワークショップごとの上限）" }), stageMode ? el("span", { className: "badge stage", text: "段階ごと" }) : null), ...out);
 }
 
+/** 案内の部品（純粋な関数。admin-workshop.js も読む）。動的な import にして、admin.js の静的な import の関係は変えない */
+const workshopLib = () => import("./admin-workshop-lib.js");
+
+/** 適用の前に、この回の案内の割り当てを読めなかったときの文（読めなければ適用を止める。workshop-ui 組 8 の 3.5） */
+const APPLY_READ_FAILED = "この回の案内の割り当てを読めませんでした。外れる案内を数えられないので、適用を止めました。［最新にする］のあと、もう一度押してください。";
+
+/**
+ * 回の今の段階と、案内の割り当て（admin_cohort_stage_guides）を読む。返り：{ stages } か null（読めなかった）。
+ * 関数が無い DB（案内の 250 を戻したあと）なら割り当ては無いので、画面が持つ段階を割り当て無しで返す（外れる案内 0 として適用できる）。
+ * 段階テンプレートの適用（016）は 250 を戻しても使える必要があるため。250 の戻しは表を残すが関数を全部消すので、残った割り当ては
+ * 受講者に届かず、画面からも読めない。ほかの読みの失敗（通信・権限など）は null を返し、適用を止める
+ */
+async function readCohortStageGuides(cid) {
+  const { data, error } = await supabase.rpc("admin_cohort_stage_guides", { p_cohort_id: cid });
+  if (!error) return { stages: data?.stages ?? [] };
+  if (isMissingFunctionError(error, "admin_cohort_stage_guides")) {
+    return { stages: stagesOfCohort(cid).map((s) => ({ stage_id: s.id, day_kind: s.day_kind, seq: s.seq, label: s.label, title: s.title, guide_id: null })) };
+  }
+  return null;
+}
+
 async function applyTemplate(c, templateId) {
   clearNotice();
   const full = cohortFull(c);
   const items = templateItemsOf(templateId);
   const problem = templateApplyProblem(items, full);
   if (problem) {
-    notify(`当てられません。${problem}`, "error");
+    notify(`適用できません。${problem}`, "error");
     return;
   }
   const t = templateName(templateId);
   const already = isStageCohort(c.id);
-  const lines = [`${c.id} に、テンプレート「${t}」を当てますか？`];
-  lines.push(already ? "・いまの段階を全部、テンプレートの内容に入れ替えます（段階の名前・クレジットを変えていた分は消えます）。" : "・この回の枠が、Day ごとではなく、ワークショップごとの段階になります。");
-  lines.push("・Day1 が始まる前なら、「Day ごとの枠に戻す」で戻せます。始まったあとは戻せません。");
-  if (Number(c.member_count ?? 0) > 0) lines.push(`・所属している受講者 ${c.member_count} 人全員に効きます。`);
-  if (!confirm(lines.join(String.fromCharCode(10)))) return;
+  // 確かめを出す前に、この回の割り当てを読み、外れる案内を数える（枠の種類や already に依らず毎回。黙って 0 にしない）
+  let lib = null;
+  try {
+    lib = await workshopLib();
+  } catch {
+    lib = null;
+  }
+  const read = lib ? await readCohortStageGuides(c.id) : null;
+  if (appClosed) return;
+  if (!read) {
+    notify(APPLY_READ_FAILED, "error");
+    return;
+  }
+  const loss = lib.planApplyLoss(read.stages);
+  const cohortName = lib.cohortShort(c);
+  const spec = lib.applyAsk({
+    cohortName,
+    templateName: t,
+    memberCount: Number(c.member_count ?? 0),
+    already,
+    hasStages: read.stages.length > 0 || stagesOfCohort(c.id).length > 0,
+    loss,
+  });
+  const ok = await ask({
+    title: spec.title,
+    lines: spec.lines,
+    warnings: spec.warnings,
+    detail: spec.detail,
+    note: spec.note,
+    buttons: [{ label: "やめる", value: false }, { label: spec.okLabel, value: true, kind: "primary" }],
+  });
+  if (!ok || appClosed) return;
+  // 適用は 016 の RPC を 1 回だけ呼ぶ（画面で付け直さない。D3）
   const { error } = await supabase.rpc("admin_apply_stage_template", { p_cohort_id: c.id, p_template_id: templateId });
   if (error) notify(explainError(error), "error");
-  else notify(`${c.id} にテンプレート「${t}」を当てました。`);
+  else notify(lib.applyResultText({ cohortName, templateName: t, lost: loss.count }));
   await refresh();
   if (!error && isStageCohort(c.id)) {
     await loadCohortStageStatus(c.id);
@@ -6645,7 +6695,29 @@ async function saveStages(cid, groups, editors) {
     notify("変更はありません。");
     return;
   }
-  if (!confirm(`${cid} の段階を保存しますか？${String.fromCharCode(10)}（所属している受講者全員の上限が変わります）`)) return;
+  // 消す段階に案内が付いていれば、確かめに 1 行（並べ替え・名前の変更では外れないので出さない）
+  const kept = new Set(plans.filter((p) => p.kind === "replace").flatMap((p) => p.stages.map((x) => x.id).filter(Boolean)));
+  const removed = plans.filter((p) => p.kind === "replace").flatMap((p) => (groups[p.day] ?? []).map((x) => x.id).filter((id) => id && !kept.has(id)));
+  const warnings = [];
+  if (removed.length) {
+    let lib = null;
+    try {
+      lib = await workshopLib();
+    } catch {
+      lib = null;
+    }
+    const read = lib ? await readCohortStageGuides(cid) : null;
+    if (appClosed) return;
+    const line = read ? lib.stageRemovalLine(removed, read.stages) : "消す段階に案内が付いているかを読めませんでした（付いていれば外れます）。";
+    if (line) warnings.push(line);
+  }
+  const ok = await ask({
+    title: `${cid} の段階を保存しますか？`,
+    lines: ["所属している受講者全員の上限が変わります。"],
+    warnings,
+    buttons: [{ label: "やめる", value: false }, { label: "保存する", value: true, kind: "primary" }],
+  });
+  if (!ok || appClosed) return;
   // 1 日の合計が途中で 10,000 を超えないよう、クレジットを下げる更新を先に行う
   plans.sort((a, b) => (a.kind === "update" ? a.delta : -Infinity) - (b.kind === "update" ? b.delta : -Infinity));
   for (const p of plans) {
@@ -6799,7 +6871,7 @@ function templatePanel(id) {
           )
         ),
       ),
-      el("p", { className: "hint", text: "テンプレートは、回の「段階」から当てます。変えても削除しても、すでに当てた回の段階は変わりません。" }),
+      el("p", { className: "hint", text: "テンプレートは、回の「段階」から適用します。変更・削除は、すでに適用した回には影響しません。" }),
       el(
         "details",
         { className: "plain-fold minor" },
@@ -6820,7 +6892,7 @@ function templatePanel(id) {
       el(
         "div",
         { className: "danger-zone" },
-        el("p", { className: "hint", text: "削除は取り消せません。すでに当てた回は変わりません。" }),
+        el("p", { className: "hint", text: "削除は取り消せません。" }),
         el("button", { type: "button", className: "btn danger", text: "このテンプレートを削除", disabled: busy, onclick: () => deleteTemplate(t) }),
       ),
     ],
@@ -6867,7 +6939,7 @@ function openTemplateEditor(t) {
       body: [
         field("テンプレートの名前", name),
         field("メモ（任意）", note),
-        el("label", { className: "check" }, active, "回に当てるテンプレートの候補に出す"),
+        el("label", { className: "check" }, active, "回に適用するテンプレートの候補に出す"),
         ...DAY_KINDS.map((kind) =>
           el(
             "section",
@@ -6877,7 +6949,7 @@ function openTemplateEditor(t) {
             editors[kind].node,
           )
         ),
-        el("p", { className: "hint", text: "1 つの段階の上限は 0〜10,000、1 日の合計は 10,000 までです。保存しても、すでに当てた回は変わりません。" }),
+        el("p", { className: "hint", text: "1 つの段階の上限は 0〜10,000、1 日の合計は 10,000 までです。" }),
       ],
       foot: [saveBtn, cancelButton("やめる")],
     })
@@ -6932,7 +7004,7 @@ async function deleteTemplate(t) {
   if (state.settings.busy) return;
   const ok = await ask({
     title: `テンプレート「${t.name}」を削除しますか？`,
-    lines: ["削除は取り消せません。", "すでに当てた回は、段階の内容を持っているので変わりません。"],
+    lines: ["削除は取り消せません。"],
     buttons: [{ label: "やめる", value: false }, { label: "削除する", value: true, kind: "danger" }],
   });
   if (!ok || appClosed) return;
@@ -7102,10 +7174,11 @@ async function main() {
   // 画面の間の移動：is_admin() が true のときだけここに来るので、管理者の並び（案内だけ）
   renderSiteNav($("site-nav"), "admin", "admin");
   // ［ワークショップの案内］（docs/design-workshop-guide.md 4.6。束 K の K3。G の独立の差分）：左のメニューに［案内］を足す。
+  // 確かめは管理コンソールの ask()・askDiscard() を渡す（画面の真ん中に出す。workshop-ui 組 8 の 3.9）。
   // 動的な import にして待たないので、読み込めない・失敗しても［案内］が出ないだけで、admin.js のほかの画面は止まらない。
   // 管理コンソールを閉じたら（clearAppView の appClosed）、部品が自分で窓とボタンと読んだ中身を消す
   import("./admin-workshop.js")
-    .then(({ mountWorkshopGuide }) => mountWorkshopGuide({ supabase, menu: $("side-menu"), isClosed: () => appClosed }))
+    .then(({ mountWorkshopGuide }) => mountWorkshopGuide({ supabase, menu: $("side-menu"), isClosed: () => appClosed, ask, askDiscard }))
     .catch((e) => console.error("ワークショップの案内を読み込めませんでした", e));
   // ヘッダーにメールは出さない（2026-10-23 田口さん：説明の文字は消す）。アカウントのボタンの読み上げの名前とシートにある
   $("account-btn").setAttribute("aria-label", `アカウントと更新（${myEmail}）`);
