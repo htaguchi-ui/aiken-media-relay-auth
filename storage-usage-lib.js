@@ -44,7 +44,7 @@ export function storageUsageView(value, dateText = (s) => s) {
   return {
     buckets: value.buckets.map((row) => ({ label: Object.hasOwn(labels, row.bucket_id) ? labels[row.bucket_id] : row.bucket_id, count: `${countText(row.object_count)} 件`, capacity: capacityText(row) })),
     total: `合計 ${countText(value.total.object_count)} 件 · ${capacityText(value.total)}`,
-    retention: `保存期限の猶予：${countText(r.days)} 日`,
+    retention: `利用できなくなってから削除までの日数：${countText(r.days)} 日`,
     pending: `削除予定の受講者：${countText(r.pending_students)} 人`,
     earliest: r.earliest_purge_at ? `一番早い削除予定：${dateText(r.earliest_purge_at)}` : "削除予定日はありません。",
     cleanup: c ? [

@@ -71,7 +71,7 @@ export const LOW_RATIO = 0.2;
  */
 export function creditsView(credits, role) {
   const c = credits && typeof credits === "object" ? credits : {};
-  const base = { value: "—", limitText: null, slotLine: null, notice: null, ratio: null, low: false, stageName: null, stages: [], stageNote: null };
+  const base = { value: "—", limitText: null, slotLine: null, notice: null, ratio: null, low: false, stageName: null, stages: [] };
   if (c.applies !== true) {
     if (role === "admin") return { ...base, mode: "unlimited", value: "上限なし" };
     // 管理者以外で枠の対象外：見出しだけの空にならないよう、1 行の案内を出す
@@ -99,7 +99,7 @@ export function creditsView(credits, role) {
 
 /** 残りが少ない・無いときの 1 行（色だけで伝えないための文。どちらでもないときは null） */
 export const MSG_LOW = "残りが少なくなっています";
-export const MSG_EMPTY = "残りがありません";
+export const MSG_EMPTY = "残りがありません。追加が必要なときは、講師・スタッフに知らせてください。";
 
 /**
  * 残りの主カードに添える注意の 1 行。view は creditsView の結果、credits は user-api の credits。
@@ -112,11 +112,8 @@ export function lowNotice(view, credits) {
   return view.low ? MSG_LOW : null;
 }
 
-/** 主カードに添える段階の決まりの要約（今日の段階の一覧があるときだけ。全文は折りたたみの中の MSG_STAGE_NO_CARRY） */
-export const MSG_STAGE_SUMMARY = "段階ごとの枠・持ち越しなし";
-
 /**
- * 最後に読み込みに成功した時刻の表示（日本時間の「確認 13:42」）。ms はミリ秒の時刻。
+ * 最後に読み込みに成功した時刻の表示（日本時間の「13:42 時点」）。ms はミリ秒の時刻。
  * 値が無い・不正なら null（表示しない。失敗や読み込み中を成功の時刻として出さないため、呼び出し側は成功したときだけ時刻を渡す）
  */
 export function checkedAtText(ms) {
@@ -128,7 +125,7 @@ export function checkedAtText(ms) {
       .formatToParts(d)
       .map((p) => [p.type, p.value]),
   );
-  return `確認 ${parts.hour}:${parts.minute}`;
+  return `${parts.hour}:${parts.minute} 時点`;
 }
 
 /** Canvas から戻ったとき（タブがまた見えたとき）に読み直すまでの最短の間（ミリ秒）。前回の成功からこれ未満なら読み直さない */
@@ -204,18 +201,15 @@ export function createRequestCounter() {
   };
 }
 
-/** 段階の回で、段階の使い切らなかった分は次に持ち越せないことの 1 行（段階の回だけに出す） */
-export const MSG_STAGE_NO_CARRY = "ワークショップごとに上限があり、使い切らなかった分は次に持ち越せません。";
-
 /**
  * 段階の回（016）の表示。user-api の credits に `stage`（今の段階の名前の文字列）と
  * `stages_today`（[{ name, limit, used, current }]）があるときだけ。Day ごとの回・メンバー・講師にはどちらも無く、空になる。
- * 返り値：{ stageName, stages: [{ name, limitText, usedText, current }], stageNote }
+ * 返り値：{ stageName, stages: [{ name, limitText, usedText, current }] }
  */
 export function stageView(credits) {
   const c = credits && typeof credits === "object" ? credits : {};
   const stageName = typeof c.stage === "string" && c.stage ? c.stage : null;
-  if (!stageName) return { stageName: null, stages: [], stageNote: null };
+  if (!stageName) return { stageName: null, stages: [] };
   const list = Array.isArray(c.stages_today) ? c.stages_today : [];
   const stages = list
     .filter((s) => s && typeof s.name === "string" && s.name)
@@ -225,7 +219,7 @@ export function stageView(credits) {
       usedText: isNumber(s.used) ? `使用 ${formatCredits(s.used)}` : "—",
       current: s.current === true,
     }));
-  return { stageName, stages, stageNote: MSG_STAGE_NO_CARRY };
+  return { stageName, stages };
 }
 
 /** 「使えるモデル」の小見出し（user-api の kind_label ではなく、この画面の呼び方） */
@@ -269,7 +263,7 @@ export function formatApprox(n) {
 
 /**
  * 目安の表示（単位つき。「クレジット」は画面の見出しに 1 回だけ書く）。既定の解像度の単価から：
- * 動画「5 秒 約 63」・画像「1 枚 8」・読み上げ「1,000 文字 10」・音楽「1 分 80」「1 曲 15」
+ * 動画「5 秒で約 63」・画像「1 枚で 8」・読み上げ「1,000 文字で 10」・音楽「1 分で 80」「1 曲で 15」
  */
 export function priceText(model) {
   // 数字のときだけ出す（null・"" を 0 として「約 0」と出さない）
@@ -277,33 +271,37 @@ export function priceText(model) {
   if (!isNumber(credits)) return "—";
   switch (model.price.unit) {
     case "second":
-      return `5 秒 約 ${formatApprox(credits * 5)}`;
+      return `5 秒で約 ${formatApprox(credits * 5)}`;
     case "image":
-      return `1 枚 ${formatApprox(credits)}`;
+      return `1 枚で ${formatApprox(credits)}`;
     case "1000_chars":
-      return `1,000 文字 ${formatApprox(credits)}`;
+      return `1,000 文字で ${formatApprox(credits)}`;
     case "minute":
-      return `1 分 ${formatApprox(credits)}`;
+      return `1 分で ${formatApprox(credits)}`;
     case "song":
-      return `1 曲 ${formatApprox(credits)}`;
+      return `1 曲で ${formatApprox(credits)}`;
     default:
       return formatApprox(credits);
   }
 }
 
 export const MSG_CODE_FAILED = "ログインを完了できませんでした。もう一度ログインしてください。";
-export const MSG_DENIED = "利用登録が確認できません。管理者にお問い合わせください。";
+/** 「登録されていない」画面の 3 つの文（C-1）。1 文ずつ改行して出す（画面の側は white-space: pre-line）。2 文目は講師の画面の拒否の画面（instructor.html）と同じ */
+const MSG_DENIED_FIRST = "利用の登録を確認できませんでした。";
+const MSG_DENIED_NEXT = "［ログアウト］を押し、次の画面の「別のアカウントでログイン」で、研修で案内されたアカウントを選んでください。";
+const MSG_DENIED_HELP = "入れないときは、講師・スタッフに知らせてください。";
+export const MSG_DENIED = [MSG_DENIED_FIRST, MSG_DENIED_NEXT, MSG_DENIED_HELP].join("\n");
 
 /**
- * 「登録されていない」画面の文。ログインしたメールアドレスが分かれば「このアカウント（…）は登録されていません。」の形にする
+ * 「登録されていない」画面の文。ログインしたメールアドレスが分かれば 1 文目を「このアカウント（…）は登録されていません。」の形にする
  * （違うアカウントで入ったと気づけるように。メールを出すのはこの画面だけ）。分からなければ MSG_DENIED
  */
 export function deniedMessage(email) {
   if (typeof email !== "string" || !email.trim()) return MSG_DENIED;
-  return `このアカウント（${email.trim()}）は登録されていません。管理者にお問い合わせください。`;
+  return [`このアカウント（${email.trim()}）は登録されていません。`, MSG_DENIED_NEXT, MSG_DENIED_HELP].join("\n");
 }
 export const MSG_EXPIRED = "ログインの有効期限が切れました。もう一度ログインしてください。";
-export const MSG_FAILED = "読み込めませんでした。通信の状態を確認して、もう一度試してください。";
+export const MSG_FAILED = "読み込めませんでした。インターネットの接続を確かめて、もう一度試してください。";
 
 /**
  * user-api の応答（HTTP の状態と JSON）から、画面の進め方を決める
@@ -316,7 +314,7 @@ export function decideApiOutcome(status, body) {
       body.credits && typeof body.credits === "object" && Array.isArray(body.models);
     return ok
       ? { action: "ok", body }
-      : { action: "failed", message: "応答の形が正しくありません。もう一度試してください。" };
+      : { action: "failed", message: "情報を読み込めませんでした。続くときは、講師・スタッフに知らせてください。" };
   }
   if (status === 401) return { action: "unauthorized", message: MSG_EXPIRED };
   // 名簿に無い・停止中・本人確認の不備（user-api の 403 not_registered）。許可していない接続元などの 403 は通信の失敗として扱う

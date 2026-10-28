@@ -29,7 +29,6 @@ import {
   lowNotice,
   MSG_CODE_FAILED,
   MSG_DENIED,
-  MSG_STAGE_SUMMARY,
   oauthOptions,
   priceText,
   roleBadgeClass,
@@ -90,7 +89,7 @@ discardDlKey(browserStorage("session"));
 // 読み込めない（通信の失敗・integrity の不一致）ときは先へ進まない。
 // トップの役目（サービスの説明・方針と規約へのリンク）は残すため、ログイン前の画面をボタンを押せない形で出す
 if (typeof window.supabase?.createClient !== "function") {
-  $("login-note").textContent = "画面の部品を読み込めませんでした。通信状態を確認して、ページを開き直してください。";
+  $("login-note").textContent = "画面を表示できませんでした。インターネットの接続を確かめて、ページを開き直してください。";
   $("login-note").hidden = false;
   document.getElementById("login-btn").disabled = true; // 末尾のボタンの登録とは書き方を分ける（試験が末尾の登録の位置で区切って読むため）
   document.getElementById("login-other-btn").disabled = true;
@@ -181,11 +180,8 @@ function hideContent(message = "ログアウトしています…") {
   $("slot-line").hidden = true;
   $("stage-name").replaceChildren();
   $("stage-name").hidden = true;
-  $("stage-summary").textContent = "";
-  $("stage-summary").hidden = true;
   $("hero-body").classList.remove("has-context");
   $("stages").replaceChildren();
-  $("stage-note").textContent = "";
   $("stages-meta").textContent = "";
   $("stages-group").hidden = true;
   $("folds").classList.remove("has-stages");
@@ -253,9 +249,12 @@ function startWatch(userId) {
   document.addEventListener("visibilitychange", () => {
     if (document.visibilityState === "visible") onVisible();
   });
+  // タブが「見えた」知らせが届かない画面（Codex の内蔵ブラウザなど）でも、ウィンドウに戻ったときの focus で、同じ条件で 1 回読み直す（U1-6）。
+  // 一定間隔の読み直しはしない。両方が続けて届いても、読み込み中は読まないので 1 回になる
+  window.addEventListener("focus", () => onVisible());
 }
 
-/** タブがまた見えたとき：条件を満たすときだけ 1 回読み直す（Canvas から戻ったときの残りの確認） */
+/** タブがまた見えたとき・ウィンドウに戻ったとき：条件を満たすときだけ 1 回読み直す（Canvas から戻ったときの残りの確認） */
 async function onVisible() {
   if (ending) return;
   let signedIn = false;
@@ -518,7 +517,6 @@ function renderStages(v) {
   name.hidden = !v.stageName;
   if (v.stageName) name.append(el("span", { className: "label", text: "今の段階" }), document.createTextNode(v.stageName));
   const hasList = v.stages.length > 0;
-  setLine("stage-summary", hasList ? MSG_STAGE_SUMMARY : null);
   // 一覧が無くなるとき、フォーカスがその中にあったら、主カードの見出しへ移して理由を知らせる（行き場の無いフォーカスにしない）
   const group = $("stages-group");
   if (!hasList && !group.hidden && group.contains(document.activeElement)) {
@@ -529,7 +527,6 @@ function renderStages(v) {
   $("folds").classList.toggle("has-stages", hasList);
   if (!hasList) $("stages-fold").open = false;
   $("stages-meta").textContent = hasList ? `${v.stages.length} 段階` : "";
-  $("stage-note").textContent = hasList ? v.stageNote ?? "" : "";
   $("stages").replaceChildren(
     ...v.stages.map((s) =>
       el(
@@ -554,7 +551,7 @@ function renderModels(models) {
   $("models-empty").hidden = count > 0;
   $("models-meta").textContent = count > 0 ? `${count} 件` : "";
   if (!groups.length) {
-    $("models").replaceChildren(el("p", { className: "muted", text: "現在使えるモデルはありません。" }));
+    $("models").replaceChildren(el("p", { className: "muted", text: "今は、使えるモデルがありません。講師・スタッフに知らせてください。" }));
     return;
   }
   $("models").replaceChildren(
@@ -575,7 +572,7 @@ function renderModels(models) {
                 { className: "name" },
                 el("span", { text: m.label }),
                 m.is_default ? el("span", { className: "tag tone-ok", text: "既定" }) : null,
-                m.image_only ? el("span", { className: "tag image-only", text: "画像から" }) : null,
+                m.image_only ? el("span", { className: "tag image-only", text: "画像が必要" }) : null,
               ),
               el("span", { className: "price", text: priceText(m) }),
             )

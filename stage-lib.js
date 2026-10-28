@@ -424,7 +424,7 @@ export function stageMoveView(status) {
       after: "Day2 が終わったため、段階を動かせません。",
       unknown: "回の日付が決まっていないため、段階を動かせません。",
     });
-  } else if (idx < 0) whyOff = "今の段階が分かりません。読み込み直してください。";
+  } else if (idx < 0) whyOff = "今の段階が分かりません。上の［最新にする］を押してください。";
   const enabled = !whyOff;
   const prev = idx > 0 ? list[idx - 1] : null;
   const next = idx >= 0 && idx < list.length - 1 ? list[idx + 1] : null;
@@ -445,8 +445,8 @@ export function stageMoveView(status) {
 export function moveConfirmText(direction, from, to) {
   const verb = direction === "back" ? "戻します" : "進めます";
   return [
-    `「${stageName(from)}」から「${stageName(to)}」へ${verb}。`,
-    `この回の受講者全員の上限が、「${stageName(to)}」の上限に切り替わります。`,
+    `${stageName(from)}から ${stageName(to)}へ${verb}。`,
+    `この回の受講者全員の上限が、${stageName(to)}の上限に切り替わります。`,
   ];
 }
 
@@ -488,12 +488,74 @@ export function grantAvailability(status) {
   return { ok: true, why: "" };
 }
 
+/** 全角の数字（０-９）とカンマ（，）を半角に直す（日本語入力のまま打った数を受け付ける。C-2） */
+function toHalfWidthNumber(value) {
+  return String(value ?? "")
+    .trim()
+    .replace(/[０-９]/g, (c) => String.fromCharCode(c.charCodeAt(0) - 0xfee0))
+    .replace(/[,，]/g, "");
+}
+
+/**
+ * 追加するクレジットの入力を解釈して、理由つきで返す（C-2）。全角の数字・カンマは半角に直す。
+ * { ok: true, credits } | { ok: false, reason: "invalid"（1 以上の整数でない）| "too_large"（max を超えた） }。
+ * max（既定 50,000）は入力の安全のための上限で、講師に効く 1 回の上限（limits.perGrant）とは別。画面の文には出さない
+ */
+export function stageGrantCreditsInput(value, max = 50000) {
+  const s = toHalfWidthNumber(value);
+  if (!/^\d+$/.test(s)) return { ok: false, reason: "invalid" };
+  const n = Number(s);
+  if (n < 1) return { ok: false, reason: "invalid" };
+  if (n > max) return { ok: false, reason: "too_large" };
+  return { ok: true, credits: n };
+}
+
 /** 追加するクレジットの入力を解釈する。1 以上の整数でなければ undefined（上限は DB が断る。ここでは大きすぎる値だけ止める） */
 export function parseStageGrantCredits(value, max = 50000) {
-  const s = String(value ?? "").trim().replace(/[,，]/g, "");
-  if (!/^\d+$/.test(s)) return undefined;
-  const n = Number(s);
-  return n >= 1 && n <= max ? n : undefined;
+  const r = stageGrantCreditsInput(value, max);
+  return r.ok ? r.credits : undefined;
+}
+
+// ---- 通信の失敗と、操作の待ち（U3-1・U3-5） ----
+
+/** 追加の応答が届かなかったとき（通信の失敗）の文。追加は済んでいるかもしれないので、押し直す前に一覧を見てもらう（U3-1） */
+export const MSG_GRANT_NETWORK_FAILURE =
+  "追加が届いたか確かめられませんでした。下の「あなたの追加」に出ていれば、追加は済んでいます。出ていないときだけ、もう一度押してください。";
+/** 段階の移動の応答が届かなかったときの文（U3-1） */
+export const MSG_MOVE_NETWORK_FAILURE = "段階を移せたか確かめられませんでした。上の「今」の段階を確かめてください。";
+/** 管理コンソールのまとめての追加の応答が届かなかったときの文（U3-1） */
+export const MSG_BULK_GRANT_NETWORK_FAILURE = "追加されたかを、読み直した名簿で確かめてください。";
+
+/** 操作の通信中に、押したボタンに出す文字（U3-5）。キーは withBusy に渡す操作の種類 */
+export const BUSY_BUTTON_TEXT = { "move-next": "進めています…", grant: "追加しています…", revoke: "取り消しています…" };
+/** この時間（ミリ秒）を超えても応答が無いとき、ボタンの下に案内を出す（U3-5） */
+export const BUSY_SLOW_MS = 10 * 1000;
+export const MSG_BUSY_SLOW =
+  "時間がかかっています。もう少し待ってください。30 秒たっても変わらないときは、ページを読み込み直して今の状態を確かめてください。";
+
+/** 数が入っていないときの文（C-2） */
+export const MSG_GRANT_CREDITS_INVALID = "1 以上の数を入れてください。";
+/** 入力の安全のための上限を超え、講師の 1 回の上限も分からないとき（管理者が講師の画面を使うときなど）の文（C-2。50,000 は出さない） */
+export const MSG_GRANT_CREDITS_TOO_LARGE = "数が大きすぎます。入れた数を確かめてください。";
+
+/** 講師の 1 回の追加の上限（limits.perGrant）を超えるときの文。上限が分からなければ null（C-2・C-4 と同じ数） */
+export function perGrantExceededText(perGrant) {
+  if (perGrant === null || perGrant === undefined) return null;
+  return perGrant === 0 ? "今は、講師の追加が 0 に設定されているため、追加できません。" : `1 回に追加できるのは ${formatCredits(perGrant)} クレジットまでです。`;
+}
+
+/**
+ * 入力を解釈して、押したときに出す文を決める（C-2）。通れば { ok: true, credits }、通らなければ { ok: false, message }。
+ * 大きすぎるとき：講師で 1 回の上限が分かるときは、その上限の文（講師の追加の確かめと同じ文）。
+ * 分からないとき・管理者が使うときは「数が大きすぎます」。どちらも 50,000 という数は出さない
+ */
+export function stageGrantCreditsCheck(value, { isInstructor = true, limits = /** @type {any} */ (null) } = {}) {
+  const r = stageGrantCreditsInput(value);
+  if (r.ok) return { ok: true, credits: r.credits };
+  if (r.reason === "too_large") {
+    return { ok: false, message: (isInstructor ? perGrantExceededText(limits?.perGrant) : null) ?? MSG_GRANT_CREDITS_TOO_LARGE };
+  }
+  return { ok: false, message: MSG_GRANT_CREDITS_INVALID };
 }
 
 /**
@@ -530,11 +592,7 @@ export function instructorGrantPlan({ emails, credits, students, limits, isInstr
   const lim = limits ?? {};
   if (isInstructor) {
     if (lim.perGrant !== null && lim.perGrant !== undefined && credits > lim.perGrant) {
-      problems.push(
-        lim.perGrant === 0
-          ? "今は、講師の追加が 0 に設定されているため、追加できません。"
-          : `1 回に追加できるのは ${formatCredits(lim.perGrant)} クレジットまでです。`,
-      );
+      problems.push(perGrantExceededText(lim.perGrant));
     }
     if (lim.perStudentStage !== null && lim.perStudentStage !== undefined) {
       for (const email of list) {
@@ -553,7 +611,7 @@ export function instructorGrantPlan({ emails, credits, students, limits, isInstr
       const request = credits * list.length;
       if (lim.cohortDayTotal + request > lim.perCohortDay) {
         problems.push(
-          `今日のこの回に追加できる合計の上限（${formatCredits(lim.perCohortDay)}）を超えます（追加済み ${formatCredits(lim.cohortDayTotal)}、今回 ${
+          `この回の 1 日の追加の合計の上限は ${formatCredits(lim.perCohortDay)} クレジットです（これまで ${formatCredits(lim.cohortDayTotal)}、今回 ${
             formatCredits(request)
           }）。`,
         );
@@ -573,13 +631,20 @@ export function grantConfirmText(names, credits, stage) {
   const who = names.length <= 3 ? names.join("、") : `${names.slice(0, 3).join("、")} ほか ${names.length - 3} 人`;
   return [
     `${who}（${names.length} 人）に、1 人あたり ${formatCredits(credits)} クレジットを追加します。`,
-    `追加は「${stageName(stage)}」の段階に付きます。`,
-    "全員分が通るか、1 人でも断られたら全員分とも追加されません。",
+    `追加は${stageName(stage)}の段階に付きます。`,
+    "1 人でも上限を超える人がいると、誰にも追加しません。",
   ];
 }
 
-/** 取り消しの確認の文（講師の画面） */
-export const REVOKE_CONFIRM_TEXT = "取り消すと、この段階の上限からは外れますが、回の合計の枠は戻りません。";
+/**
+ * 取り消しの確認の文（講師の画面と管理コンソールで共通。B-7・C-18）。1 行目は誰の何が減るか、2 行目は回の合計に数えたままであること
+ * （上限の数は入れない）。講師の画面は 1 行ずつ段落にし、管理コンソールの confirm は REVOKE_CONFIRM_TEXT（改行でつなぐ）で出す
+ */
+export const REVOKE_CONFIRM_LINES = [
+  "取り消すと、この人のこの段階の上限が、その分だけ減ります。",
+  "1 人あたりのこの回の追加の合計には、取り消した分も数えたままです。",
+];
+export const REVOKE_CONFIRM_TEXT = REVOKE_CONFIRM_LINES.join("\n");
 
 /**
  * 講師の画面で取り消せる追加（今の段階の、まだ取り消していない行）。

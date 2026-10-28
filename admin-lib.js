@@ -72,6 +72,45 @@ export function parseBulk(text) {
   return { valid, invalid, duplicates };
 }
 
+// ---- 名簿に追加のシート（U3-2・U3-12） ----
+
+/** 追加のシートの区分の名前（ラジオボタンの文字と同じ） */
+export const ADD_ROLE_NAMES = { student: "受講者", member: "メンバー", instructor: "講師", admin: "管理者" };
+
+/**
+ * 追加のボタンの文字（U3-2）：「受講者として 10 人を追加」。区分を取り違えたまま押さないよう、押す前に区分と人数を見せる。
+ * count が 0 以下・不明のとき（まとめての入力がまだ空など）は人数を書かない
+ */
+export function addSubmitLabel(role, count) {
+  const name = ADD_ROLE_NAMES[role] ?? ADD_ROLE_NAMES.student;
+  return Number.isInteger(count) && count > 0 ? `${name}として ${count} 人を追加` : `${name}として追加`;
+}
+
+/** 区分を管理者にして追加する前の確認（U3-2）。管理者のときだけ出す。押すボタンは［管理者として追加］、既定は［やめる］。emails：追加する人 */
+export function adminAddConfirmView(emails) {
+  const list = Array.isArray(emails) ? emails : [];
+  return {
+    title: "管理者として追加しますか？",
+    lines: [`次の ${list.length} 人を管理者にします。`, "名簿・回・クレジット・設定をすべて操作できるようになります。"],
+    detail: list,
+    cancelLabel: "やめる",
+    okLabel: "管理者として追加",
+  };
+}
+
+/**
+ * まとめて追加した結果の文（U3-12）。「8 人を追加しました。登録済みのため 2 人を追加していません。」
+ * skipped：登録済みで追加しなかった人数、duplicates：入力内の重複、invalid：送らなかった行の数。
+ * 返り値：{ message, kind }（kind は "ok"・"warn"・"error"。登録済みの人がいるときは閉じるまで残す warn）
+ */
+export function bulkAddResult({ added, skipped = 0, duplicates = 0, invalid = 0 }) {
+  const parts = [`${added} 人を追加しました。`];
+  if (skipped) parts.push(`登録済みのため ${skipped} 人を追加していません。`);
+  if (duplicates) parts.push(`入力内の重複 ${duplicates} 件を除きました。`);
+  if (invalid) parts.push(`次の ${invalid} 行は送らずに除きました。`);
+  return { message: parts.join(""), kind: invalid ? "error" : skipped ? "warn" : "ok" };
+}
+
 /** 最終利用日時の新しい順（未使用は最後、同じならメールアドレス順） */
 export function sortByLastUsed(rows) {
   return [...rows].sort((a, b) => {
@@ -222,8 +261,8 @@ const INSTRUCTOR_LIMIT_SCOPES = {
   grant: "1 回の追加",
   per_student_stage: "1 人・1 段階への追加の合計",
   student_stage: "1 人・1 段階への追加の合計",
-  per_cohort_day: "1 回の授業（回・1 日）への追加の合計",
-  cohort_day: "1 回の授業（回・1 日）への追加の合計",
+  per_cohort_day: "この回の 1 日の追加の合計",
+  cohort_day: "この回の 1 日の追加の合計",
 };
 
 /** 拒否の名前（message が小文字・数字・下線だけの名前そのもののとき）。そうでなければ "" */
@@ -261,6 +300,17 @@ export function stageRejectionText(error) {
     }
   }
   return STAGE_REJECTIONS[name];
+}
+
+/**
+ * 通信の失敗（応答が届かなかった）か。サーバーが答えた拒否（code や名前つきの message）は含めない。
+ * 応答が失われたときは、操作が済んでいるかどうかが分からない（U3-1。押し直す前に一覧で確かめてもらう）
+ */
+export function isNetworkFailure(error) {
+  if (!error) return false;
+  if (String(error.code ?? "") !== "") return false; // DB・API が答えた拒否には code が付く
+  if (rejectionName(error)) return false;
+  return /fetch|network|load failed|timed? ?out|timeout|aborted/i.test(String(error.message ?? ""));
 }
 
 /** Supabase（PostgREST）のエラーを日本語の説明にする */
@@ -859,7 +909,7 @@ export function cohortStatus(period) {
     case "day2":
       return { label: "Day2 当日", kind: "active" };
     case "after":
-      return { label: "終了", kind: "ended" };
+      return { label: "Day2 終了", kind: "ended" };
     default:
       return { label: "—", kind: "ended" };
   }
@@ -1057,7 +1107,7 @@ export const SETTING_LIMITS = [
   ...[
     {
       key: "stage_grant_total_limit",
-      label: "段階の回：1 人あたりの追加の合計",
+      label: "段階の回：1 人あたりのこの回の追加の合計",
       max: 50000,
       defaultValue: 10000,
       desc: "段階の回の受講者 1 人につき、その回で追加できるクレジットの合計です。講師の追加も含み、取り消した追加も数えます。",
@@ -1078,7 +1128,7 @@ export const SETTING_LIMITS = [
     },
     {
       key: "instructor_grant_max_per_cohort_day",
-      label: "講師：1 回の授業への追加の合計",
+      label: "講師：この回の 1 日の追加の合計",
       max: 100000,
       defaultValue: 3000,
       desc: "講師が、1 つの回の 1 日（日本時間）で追加できるクレジットの合計です（取り消した追加も数えます）。",
@@ -1795,16 +1845,22 @@ export function saveConfirmLines(plan, labelOf = (id) => id) {
     if (e.key !== "all" && Array.isArray(e.payload) && e.on.some((id) => (plan.optIn ?? []).includes(id))) {
       lines.push(`・${e.label}の一覧は全体と同じ（制限なし）に戻らず、これから足すモデルもこのタブでオンにしないと使えません。`);
     }
-    if (e.payload === null) {
+    // 全体の一覧はいつも明示の配列で保存する（DB 226 は全体の null を断る）。何件にするかを言う（B-1）
+    if (e.key === "all" && Array.isArray(e.payload)) lines.push(`・全体で使えるモデルを、オンにした ${e.payload.length} 件にします。`);
+    if (e.key !== "all" && e.payload === null) {
       lines.push(
-        e.key === "all"
-          ? "・すべてオンのため「制限なし」（サーバーで許可されたモデルすべて）として保存します。"
-          : `・${e.label}は制限なし（全体と同じ。これから足すモデルも使える）として保存します。${(plan.optIn ?? []).length ? "口パクなど明示が要るモデルは使えなくなります。" : ""}`,
+        `・${e.label}は制限なし（全体と同じ。これから足すモデルも使える）として保存します。${(plan.optIn ?? []).length ? "口パクなど明示が要るモデルは使えなくなります。" : ""}`,
       );
     }
   }
   lines.push("（次の生成から、すぐに効きます）");
   return lines;
+}
+
+/** 全体の一覧を保存するときの確認の 2 行目（小さな字。B-1）。全体を保存しない（変えない）ときは null */
+export const MODEL_SAVE_ALL_NOTE = "これから足すモデルは、ここでオンにするまで使えません。";
+export function saveConfirmNote(plan) {
+  return (plan?.entries ?? []).some((e) => e.key === "all" && Array.isArray(e.payload)) ? MODEL_SAVE_ALL_NOTE : null;
 }
 
 /** 一覧が空になる（その区分の全員が生成できなくなる）ときの追加の確認の文。なければ [] */
@@ -1824,20 +1880,22 @@ export function changedScopes(row, body, roles = true) {
 }
 
 /**
- * 保存する enabled_models。カタログのすべての model_id がオンなら null（制限なし＝環境変数の範囲すべて）、
- * それ以外はオンの model_id の配列（カタログ順）。カタログに無い ID（古い ID）は含めない。
+ * 保存する enabled_models。全体のタブ（scope が "all"）は、いつもオンの model_id の配列（カタログ順。全部オンでも配列。
+ * DB 226 は全体の null を断る。空の配列は全部オフ）。区分のタブは、カタログのすべての model_id がオンなら null（全体と同じ）、
+ * それ以外はオンの model_id の配列。カタログに無い ID（古い ID）は含めない。
  * 環境変数の外のモードは押せないので、selected には読み込んだ時点のコンソールの値が残る。
  * 明示が要るモデル（opt_in。口パク）の例外（中継サーバーは、全体の一覧に明示されたときだけ有効にし、
  * 受講者・メンバーでは区分の一覧にも明示が要る。区分の一覧が null なら出さない）：
  *   ・どの区分でも、opt_in のモデルがオンのときは null にまとめず、オンの全部の配列を送る。
  *   ・区分のタブでは、全体の下書き（allSelected）でオフの opt_in の ID を配列から除く。
- *   ・opt_in がどれもオフのときは、それ以外がすべてオンなら null（opt_in のモデルは無効のまま）。
+ *   ・区分のタブで opt_in がどれもオフのときは、それ以外がすべてオンなら null（opt_in のモデルは無効のまま）。
  * @param {Set<string> | null} [allSelected] 全体のタブの下書き（区分のタブの保存で使う）
  */
 export function enabledModelsPayload(models, selected, scope = "all", allSelected = null) {
   const ids = catalogModes(models).map(({ mode }) => mode.model_id);
   const optIn = optInModelIds(models);
   const on = ids.filter((id) => selected.has(id) && !(scope !== "all" && allSelected && optIn.has(id) && !allSelected.has(id)));
+  if (scope === "all") return on; // 全体の一覧は null にできない（DB 226）。「口パクなどだけオフ・ほかは全部オン」も、オンの配列で保存する
   if (on.some((id) => optIn.has(id))) return on;
   const rest = ids.filter((id) => !optIn.has(id));
   return rest.length > 0 && rest.every((id) => selected.has(id)) ? null : on;
@@ -2017,7 +2075,7 @@ const SETTING_TARGETS = {
   stage_grant_total_limit: "段階の回の受講者 1 人",
   instructor_grant_max_credits: "講師の 1 回の操作",
   instructor_grant_max_per_student_stage: "講師・1 人・1 段階",
-  instructor_grant_max_per_cohort_day: "講師・1 回の授業・1 日",
+  instructor_grant_max_per_cohort_day: "講師・この回の 1 日の追加の合計",
 };
 
 export function settingTarget(key) {

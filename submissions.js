@@ -256,7 +256,7 @@ function clearNotice() {
  * 確認を出す。「やめる」が最初にフォーカスされ、Esc でもやめる。続けるなら true。
  * 押されたボタンで直接決める（close イベントの returnValue は、続けて開き直したときに前のダイアログの分と取り違える）
  */
-function confirmDialog({ title, lines, okText }) {
+function confirmDialog({ title, lines, okText, danger = false }) {
   const dialog = $("confirm");
   return new Promise((resolve) => {
     const ctl = new AbortController();
@@ -267,7 +267,7 @@ function confirmDialog({ title, lines, okText }) {
       resolve(value);
     };
     const cancel = el("button", { type: "button", className: "btn big", text: "やめる", autofocus: true, onclick: () => finish(false) });
-    const ok = el("button", { type: "button", className: "btn primary big", text: okText, onclick: () => finish(true) });
+    const ok = el("button", { type: "button", className: danger ? "btn danger big" : "btn primary big", text: okText, onclick: () => finish(true) });
     dialog.replaceChildren(
       el("div", { className: "confirm-body" }, el("h2", { id: "confirm-title", text: title }), ...lines.map((t) => el("p", { text: t })), el("div", { className: "row" }, cancel, ok)),
     );

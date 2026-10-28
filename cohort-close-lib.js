@@ -110,19 +110,15 @@ export function cohortCloseLines(status, now = Date.now()) {
   if (status.state === "closed") {
     return [
       `クローズ：${formatShortDateTime(status.closedAt)}${status.closedBy ? `（${status.closedBy}）` : ""}`,
-      `有効に戻せる候補：${status.targetCount} 人。個別変更などで戻さない人：${status.reopenExcludedCount} 人。`,
-      status.purgeAt ? `最短の削除予定：${formatShortDateTime(status.purgeAt)}以降。失効からの保存期間は ${status.retentionDays} 日です。` : "有効に戻せる候補については、削除予定の内容はありません。戻さない人の保存期限は変更されません。",
+      `有効に戻せる候補：${status.targetCount} 人。戻さなかった人（あとで個別に設定を変えた人など）：${status.reopenExcludedCount} 人。`,
+      status.purgeAt ? `最も早い削除：${formatShortDateTime(status.purgeAt)} 以降（利用の停止から ${status.retentionDays} 日後）` : "有効に戻せる候補については、削除予定の内容はありません。戻さない人の保存期限は変更されません。",
       cohortCloseCanAct(status, "reopen", now)
         ? `${formatShortDateTime(status.reopenUntil)}まで、削除が始まる前に開き直せます。`
         : cohortCloseReason(status.reason ?? "reopen_expired"),
     ];
   }
   if (!status.canClose) return [cohortCloseReason(status.reason)];
-  return [
-    `クローズすると、この回の受講者 ${status.targetCount} 人のアカウントを止めます。`,
-    status.purgeAt ? `Canvas と生成物の最短の削除予定：${formatShortDateTime(status.purgeAt)}以降（失効から ${status.retentionDays} 日間保持）。` : "この操作による削除予定はありません。",
-    "最後の段階に入っただけでは終了したと判断しません。最後のワークショップが終わったことを確かめてから押してください。",
-  ];
+  return [`クローズすると、この回の受講者 ${status.targetCount} 人の利用を停止します。`];
 }
 
 export function cohortCloseConfirmation(status, kind) {
@@ -138,10 +134,16 @@ export function cohortCloseConfirmation(status, kind) {
   return {
     title: "最後のワークショップを終えて、回をクローズしますか？",
     okText: "終了を確認してクローズ",
+    danger: true, // 受講者全員の利用を止める重い操作。確定のボタンを危険の色にする（U3-9。講師の画面の confirmDialog が使う）
     lines: [
-      `${status.cohortId} の受講者 ${status.targetCount} 人のアカウントを止めます。失効からの保存期間は ${status.retentionDays} 日です。${status.purgeAt ? `Canvas と生成物の最短の削除予定は ${formatShortDateTime(status.purgeAt)}以降です。` : "この操作による削除予定はありません。"}`,
+      `${status.cohortId} の受講者 ${status.targetCount} 人の利用を停止します。`,
+      "押すと、受講者は Canvas と生成を使えなくなります。提出した作品は、7 日間はマイページから保存できます。",
+      status.purgeAt
+        ? `Canvas と生成物は、利用の停止から ${status.retentionDays} 日後以降に削除します（最も早い削除：${formatShortDateTime(status.purgeAt)}）。`
+        : "この操作による削除予定はありません。",
       `以前から停止中の ${status.alreadyDisabledCount} 人は変更しません。講師・管理者・別の回の受講者も対象外です。`,
-      "Day2 の最後のワークショップが終わったことを確認して確定してください。開き直せるのはクローズから最長14日以内、かつ削除が始まる前です。以前の失効や保存期間の設定によって期限が短くなる場合があります。",
+      "最後の段階に進めただけでは、終わったことになりません。最後のワークショップが終わったのを確かめてから押してください。",
+      "開き直せるのはクローズから最長 14 日以内、かつ削除が始まる前です。以前の利用の停止や保存期間の設定によって期限が短くなる場合があります。",
     ],
   };
 }
@@ -153,7 +155,7 @@ const ERRORS = {
   cohort_reopen_expired: REASONS.reopen_expired,
   cohort_content_deleted: REASONS.content_deleted,
   cohort_closed: "この回はクローズ済みです。最新の状態を確認してください。",
-  cohort_closed_identity_locked: "クローズ済みの回の会場・Day1・IDは変えられません。先に回を開き直してください。",
+  cohort_closed_identity_locked: "クローズ済みの回の会場・Day1・ID は変えられません。先に回を開き直してください。",
   cohort_close_not_ready: "まだクローズできません。Day2 の最後の段階と、最後のワークショップの終了を確認してください。",
   retention_settings_missing: REASONS.retention_unavailable,
   cohort_retention_unavailable: REASONS.retention_unavailable,

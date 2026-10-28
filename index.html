@@ -17,17 +17,17 @@
 <!-- ログインの確かめ・RPC の接続先へ先につないでおく（supabase-js の fetch は資格情報なしなので crossorigin） -->
 <link rel="preconnect" href="https://tnzwhwitgnzoehbjrmoy.supabase.co" crossorigin>
 <link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=IBM+Plex+Sans+JP:wght@400;500;600;700&amp;display=swap">
-<link rel="stylesheet" href="/r/ffc62eb7b060/studio.css">
-<link rel="stylesheet" href="/r/ffc62eb7b060/gsi-button.css">
-<link rel="stylesheet" href="/r/ffc62eb7b060/site-nav.css">
-<link rel="modulepreload" href="/r/ffc62eb7b060/auth-storage.js">
-<link rel="modulepreload" href="/r/ffc62eb7b060/mypage-lib.js">
-<link rel="modulepreload" href="/r/ffc62eb7b060/mypage-share.js">
-<link rel="modulepreload" href="/r/ffc62eb7b060/mypage-submissions.js">
-<link rel="modulepreload" href="/r/ffc62eb7b060/qr-code.js">
-<link rel="modulepreload" href="/r/ffc62eb7b060/share-lib.js">
-<link rel="modulepreload" href="/r/ffc62eb7b060/site-nav.js">
-<link rel="modulepreload" href="/r/ffc62eb7b060/submissions-lib.js">
+<link rel="stylesheet" href="/r/65e2006a0b37/studio.css">
+<link rel="stylesheet" href="/r/65e2006a0b37/gsi-button.css">
+<link rel="stylesheet" href="/r/65e2006a0b37/site-nav.css">
+<link rel="modulepreload" href="/r/65e2006a0b37/auth-storage.js">
+<link rel="modulepreload" href="/r/65e2006a0b37/mypage-lib.js">
+<link rel="modulepreload" href="/r/65e2006a0b37/mypage-share.js">
+<link rel="modulepreload" href="/r/65e2006a0b37/mypage-submissions.js">
+<link rel="modulepreload" href="/r/65e2006a0b37/qr-code.js">
+<link rel="modulepreload" href="/r/65e2006a0b37/share-lib.js">
+<link rel="modulepreload" href="/r/65e2006a0b37/site-nav.js">
+<link rel="modulepreload" href="/r/65e2006a0b37/submissions-lib.js">
 <style>
   /* 固定したヘッダーの高さの初期値（--topbar-h）：ヘッダーを 1 段にした（帯を題名の右に並べた）あとの実測（2026-10-23）。
      studio.css の値は、帯の無い案内のページ（about.html）・管理コンソールと共通なので、このページの中だけで上書きする。
@@ -130,7 +130,9 @@
 <section id="denied" class="center-card" hidden aria-labelledby="denied-title">
   <span class="brand-sub">A.I.KEN Studio</span>
   <h1 id="denied-title">マイページ</h1>
-  <p class="error-text" id="denied-message">利用登録が確認できません。管理者にお問い合わせください。</p>
+  <p class="error-text" id="denied-message">利用の登録を確認できませんでした。
+［ログアウト］を押し、次の画面の「別のアカウントでログイン」で、研修で案内されたアカウントを選んでください。
+入れないときは、講師・スタッフに知らせてください。</p>
   <div class="row"><button type="button" class="btn" id="denied-logout-btn">ログアウト</button></div>
 </section>
 
@@ -199,7 +201,6 @@
         <div class="hero-context" id="hero-context">
           <p class="stage-name" id="stage-name" hidden></p>
           <p class="slot-line" id="slot-line" hidden></p>
-          <p class="stage-summary" id="stage-summary" hidden></p>
         </div>
       </div>
       <div class="inline-alert" id="refresh-error" role="alert" hidden>
@@ -215,7 +216,6 @@
           <summary><span>今日の段階</span><span class="meta tabular" id="stages-meta"></span></summary>
           <div class="fold-body">
             <ul class="stages" id="stages"></ul>
-            <p class="small muted" id="stage-note"></p>
           </div>
         </details>
       </div>
@@ -228,7 +228,7 @@
             <div id="models"></div>
           </div>
         </details>
-        <p class="fold-empty" id="models-empty" hidden>現在使えるモデルはありません</p>
+        <p class="fold-empty" id="models-empty" hidden>今は、使えるモデルがありません。講師・スタッフに知らせてください。</p>
       </div>
 
       <!-- 提出した作品（受講者だけ。段 1d。サーバーが受講者として登録されていないと答えたときは隠す）。本体は mypage-submissions.js -->
@@ -534,7 +534,7 @@
   <p class="sr-only" id="live" role="status" aria-live="polite"></p>
 </div>
 <dialog id="my-dialog" class="my-dialog" aria-label="確認"></dialog>
-<script type="module" src="/r/ffc62eb7b060/topbar-height.js"></script>
-<script type="module" src="/r/ffc62eb7b060/mypage.js"></script>
+<script type="module" src="/r/65e2006a0b37/topbar-height.js"></script>
+<script type="module" src="/r/65e2006a0b37/mypage.js"></script>
 </body>
 </html>

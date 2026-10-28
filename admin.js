@@ -24,8 +24,11 @@ import {
 import { discardDlKey } from "./share-lib.js";
 import {
   accessText,
+  addSubmitLabel,
+  adminAddConfirmView,
   adminLoginErrorText,
   approxCreditsText,
+  bulkAddResult,
   canGrant,
   cohortIdOf,
   cohortLabel,
@@ -45,6 +48,7 @@ import {
   formatUsd,
   formatYen,
   grantTotalProblem,
+  isNetworkFailure,
   matchesFilter,
   matchesQuery,
   MAX_CREDITS,
@@ -96,6 +100,7 @@ import {
   roleListNotice,
   rolesAvailable,
   saveConfirmLines,
+  saveConfirmNote,
   scopeList,
   scopeModeStatus,
   scopeSelection,
@@ -166,9 +171,11 @@ import {
   grantTotalLine,
   groupStagesByDay,
   memberDeleteBlock,
+  MSG_BULK_GRANT_NETWORK_FAILURE,
   normalizeStageStatus,
   parseStageRows,
   parseTemplateForm,
+  REVOKE_CONFIRM_LINES,
   REVOKE_CONFIRM_TEXT,
   stageGrantTotalProblem,
   stageName,
@@ -200,7 +207,7 @@ const SUPABASE_PUBLISHABLE_KEY = "sb_publishable_KRY7iSTi9d_z9EwW0KuDwg_ooUqGvDN
 
 // 読み込めない（通信の失敗・integrity の不一致）ときは先へ進まない
 if (typeof window.supabase?.createClient !== "function") {
-  document.getElementById("status").textContent = "画面の部品を読み込めませんでした。通信状態を確認して、ページを開き直してください。";
+  document.getElementById("status").textContent = "画面を表示できませんでした。インターネットの接続を確かめて、ページを開き直してください。";
   throw new Error("supabase-js を読み込めませんでした");
 }
 
@@ -292,6 +299,8 @@ const state = {
   tab: "roster",
   /** 提出の受け付けの終わりの部品（admin-submissions.js。入口は loadDeadlines。ログアウトで null） */
   deadlines: null,
+  /** 名簿に追加のシートの入力（buildAddUi の戻り値。開いたときに入る。ログアウトで clearAppView が入力を消す。U3-2） */
+  addUi: null,
   rows: [],
   /** loading | ok | error（一度も読めていないときだけ error） */
   rowsStatus: "loading",
@@ -623,13 +632,14 @@ function scheduleToast(t) {
 
 /**
  * 画面上部のお知らせ。kind は "ok"（数秒で消える）・"error"・"warn"（閉じるまで残る）。details は箇条書き。直前と同じ文は 1 つにまとめる（×回数）。
- * action（{ label, onClick }）は、操作のあとに戻る道（［変更履歴を見る］など。3.4 の 9）
+ * action（{ label, onClick }）は、操作のあとに戻る道（［変更履歴を見る］など。3.4 の 9）。
+ * fold（{ label, items }）は、折りたたみの中の箇条書き（U3-12）
  */
-function notify(message, kind = "ok", details = [], action = null) {
+function notify(message, kind = "ok", details = [], action = null, fold = null) {
   if (appClosed) return;
   if (kind !== "error" && kind !== "warn") kind = "ok";
   placeNotice();
-  const key = [kind, message, ...details, action?.label ?? ""].join("\n");
+  const key = [kind, message, ...details, action?.label ?? "", ...(fold ? [fold.label, ...fold.items] : [])].join("\n");
   const last = toasts[toasts.length - 1];
   if (last && last.key === key) {
     last.count += 1;
@@ -646,6 +656,10 @@ function notify(message, kind = "ok", details = [], action = null) {
       { className: "notice-body" },
       el("p", { className: "notice-msg" }, el("span", { text: message }), el("span", { className: "notice-count small num", hidden: true })),
       details.length ? el("ul", {}, ...details.map((d) => el("li", { text: d }))) : null,
+      // 折りたたみ（［詳しく］。登録済みでスキップした人のメールなど。U3-12）
+      fold && fold.items.length
+        ? el("details", { className: "notice-fold" }, el("summary", { text: fold.label }), el("ul", {}, ...fold.items.map((d) => el("li", { text: d }))))
+        : null,
     ),
   );
   const t = { node, kind, key, count: 1, timer: 0, hover: false, focus: false };
@@ -1042,6 +1056,7 @@ function clearAppView() {
   askDone?.(undefined);
   if (sheet.open) closeSheet();
   clearNotice();
+  state.addUi?.reset(); // 追加のシートの入力（メール・氏名・まとめての入力・区分）も消す。前の人の入力を残さない（U3-2）
   state.rows = [];
   state.cohortCloseStates?.clear();
   state.cohortCloseStatuses?.clear();
@@ -2433,8 +2448,9 @@ async function addGrant(r, creditsText, noteText) {
     }
   }
   const note = String(noteText ?? "").trim();
-  const where = stageStudent ? "今の段階（回の追加の合計に数えます。取り消しても戻りません）" : "今の枠";
-  if (!confirm(`${r.email} の${where}に ${formatCredits(credits)} クレジット（${formatYen(credits)}）を追加しますか？`)) return;
+  const where = stageStudent ? "今の段階" : "今の枠";
+  const stageLine = stageStudent ? "\nこの追加は、1 人あたりのこの回の追加の合計に数えます。取り消しても、合計からは減りません。" : "";
+  if (!confirm(`${r.email} の${where}に ${formatCredits(credits)} クレジット（${formatYen(credits)}）を追加しますか？${stageLine}`)) return;
   let data;
   let error;
   if (stagesAvailable()) {
@@ -2481,7 +2497,7 @@ async function revokeStageGrant(r, g) {
   if (!confirm(`${r.email} への追加（+${formatCredits(g.credits)}）を取り消しますか？\n${REVOKE_CONFIRM_TEXT}`)) return;
   const { error } = await supabase.rpc("revoke_stage_grant", { p_grant_id: g.id, p_note: null });
   if (error) notify(explainError(error), "error");
-  else notify(`${r.email} への追加（+${formatCredits(g.credits)}）を取り消しました。回の合計の枠は戻りません。`);
+  else notify(`${r.email} への追加（+${formatCredits(g.credits)}）を取り消しました。${REVOKE_CONFIRM_LINES[1]}`);
   await refresh();
 }
 
@@ -2727,7 +2743,8 @@ async function applyBulkGrant(targets, creditsText, noteText) {
   if (stagesAvailable()) {
     const { error } = await supabase.rpc("admin_grant_credits", { p_emails: eligible.map((r) => r.email), p_credits: credits, p_note: note });
     if (error) {
-      notify(`追加できませんでした（全員分とも追加していません）。${explainError(error)}`, "error");
+      // 通信の失敗では、追加が済んでいるかもしれない。「追加していません」とは言わず、読み直した名簿で確かめてもらう（U3-1）
+      notify(isNetworkFailure(error) ? MSG_BULK_GRANT_NETWORK_FAILURE : `追加できませんでした（全員分とも追加していません）。${explainError(error)}`, "error");
       await refresh();
       return;
     }
@@ -2820,6 +2837,7 @@ function buildAddUi() {
   );
   // メンバー：月額
   const monthly = creditInput(DEFAULT_MONTHLY_CREDITS, { placeholder: "例：3300", id: "add-monthly" });
+  const monthlyInitial = monthly.value;
   const memberBox = el(
     "section",
     { className: "box" },
@@ -2871,10 +2889,12 @@ function buildAddUi() {
     studentBox.hidden = r !== "student";
     memberBox.hidden = !isMonthlyRole(r);
     adminNote.hidden = r !== "admin";
-    submit.textContent = isSingle ? "追加する" : "まとめて追加する";
+    // ボタンに区分と人数を出す（「受講者として 10 人を追加」。U3-2）
+    submit.textContent = addSubmitLabel(r, isSingle ? 1 : parseBulk(bulkText.value).valid.length);
   };
   modeSeg.addEventListener("change", update);
   roles.addEventListener("change", update);
+  bulkText.addEventListener("input", update);
   update();
 
   return {
@@ -2888,6 +2908,17 @@ function buildAddUi() {
     submit,
     currentMode,
     currentRole,
+    /** 入力を消して、最初の状態（1 人ずつ・受講者）に戻す。ログアウトのとき（clearAppView）に使う（U3-2） */
+    reset() {
+      email.value = "";
+      name.value = "";
+      bulkText.value = "";
+      monthly.value = monthlyInitial;
+      delete cohortSelect.dataset.touched;
+      const single = modeSeg.querySelector('input[value="single"]');
+      if (single) single.checked = true;
+      this.setRole("student");
+    },
     /** 講師の選択肢を、016 が当たっているときだけ出す（外れたときに講師が選ばれていれば、受講者に戻す） */
     syncRoles() {
       instructorChoice.hidden = !stagesAvailable();
@@ -2914,7 +2945,9 @@ function buildAddUi() {
 
 function openAdd({ role = null, cohortId } = {}) {
   addUi ??= buildAddUi();
-  if (role) addUi.setRole(role);
+  state.addUi = addUi;
+  // 開くたびに区分を「受講者」に戻す。前に選んだ「管理者」が残ったまま、まとめて登録しない（U3-2）
+  addUi.setRole(role ?? "student");
   if (cohortId !== undefined) {
     addUi.cohortSelect.dataset.touched = "1";
     addUi.refreshCohorts(cohortId);
@@ -2959,13 +2992,14 @@ async function insertMembers(rows) {
     for (const row of data) existing.add(row.email);
   }
   const pending = rows.filter((r) => !existing.has(r.email));
-  if (!pending.length) return { added: 0 };
+  const skippedEmails = rows.filter((r) => existing.has(r.email)).map((r) => r.email);
+  if (!pending.length) return { added: 0, skippedEmails };
   const { data, error } = await supabase
     .from("members")
     .upsert(pending, { onConflict: "email", ignoreDuplicates: true })
     .select("email");
   if (error) return { error };
-  return { added: data?.length ?? 0 };
+  return { added: data?.length ?? 0, skippedEmails };
 }
 
 async function submitAdd() {
@@ -2982,6 +3016,20 @@ async function submitAdd() {
   }
 }
 
+/** 区分を管理者にして追加する前の確認（U3-2）。管理者のときだけ出す。続けるなら true（既定は［やめる］。確認のあいだにログアウトしたら false） */
+async function confirmAddAsAdmin(role, emails) {
+  if (role !== "admin") return true;
+  const v = adminAddConfirmView(emails);
+  const ok = await ask({
+    title: v.title,
+    lines: v.lines,
+    detail: v.detail,
+    buttons: [{ label: v.cancelLabel, value: false }, { label: v.okLabel, value: true, kind: "danger" }],
+    cancelValue: false,
+  });
+  return ok === true && !appClosed;
+}
+
 async function addOne(role, extras) {
   const email = normalizeEmail(addUi.email.value);
   const problem = emailProblem(email);
@@ -2990,6 +3038,7 @@ async function addOne(role, extras) {
     return;
   }
   const name = addUi.name.value.trim();
+  if (!(await confirmAddAsAdmin(role, [email]))) return;
   const result = await insertMembers([{ email, display_name: name || null, role, ...extras }]);
   if (result.error) {
     notify(explainError(result.error), "error");
@@ -3012,17 +3061,17 @@ async function addBulk(role, extras) {
     notify(invalid.length ? "追加できる行がありません。次の行を確認してください。" : "追加する行がありません。", "error", problems);
     return;
   }
+  if (!(await confirmAddAsAdmin(role, valid.map((v) => v.email)))) return;
   const result = await insertMembers(valid.map((v) => ({ ...v, role, ...extras })));
   if (result.error) {
     notify(explainError(result.error), "error", problems);
     return;
   }
+  // 登録済みでスキップした人は誰かを、折りたたみ［詳しく］のメールで見せる（U3-12。その人は当日使えない）
   const skipped = valid.length - result.added;
-  const parts = [`${result.added} 件を追加しました。`];
-  if (skipped) parts.push(`登録済みのため ${skipped} 件をスキップしました（上書きはしていません）。`);
-  if (duplicates) parts.push(`入力内の重複 ${duplicates} 件を除きました。`);
-  if (invalid.length) parts.push(`次の ${invalid.length} 行は送らずに除きました。`);
-  notify(parts.join(""), invalid.length ? "error" : "ok", problems);
+  const { message, kind } = bulkAddResult({ added: result.added, skipped, duplicates, invalid: invalid.length });
+  const skippedEmails = result.skippedEmails ?? [];
+  notify(message, kind, problems, null, skippedEmails.length ? { label: "詳しく", items: skippedEmails } : null);
   if (!invalid.length) addUi.bulkText.value = "";
   await refresh();
 }
@@ -5720,9 +5769,6 @@ function modelEditor() {
   const panel = [el("p", { className: "set-target num", text: `${scope === "all" ? "使える" : `${sLabel}が使える`}モード ${usable} / ${modes.length}（未保存の変更を含む）` })];
   if (scope === "all") {
     panel.push(el("p", { className: "hint", text: "サーバーで許可されたものだけをオンにできます（「サーバー側で無効」は押せません）。保存するまで反映されません。" }));
-    if (S.models.console_enabled_models === null) {
-      panel.push(el("p", { className: "note-box", text: "今は制限なしです（サーバーで許可されたモデルがすべてオン）。" }));
-    }
     const notice = roleListNotice(S.models);
     if (notice) panel.push(el("p", { className: "note-box", text: notice }));
   } else {
@@ -5986,7 +6032,7 @@ function modelItem(m, scope) {
         className: "small muted",
         text: (noteModes.length < modes.length ? `「${noteModes.map((mode) => mode.label).join("」「")}」は` : "") +
           (scope === "all"
-            ? "全体のタブでオンにして保存したときだけ使えます（「全部オン」の保存では有効になりません）。"
+            ? "全体のタブでオンにして保存したときだけ使えます。"
             : "この区分で使わせるには、全体のタブとこのタブの両方でオンにします。オンにすると、この区分の一覧は全体と同じ（制限なし）には戻らず、これから足すモデルもこのタブでオンにしないと使えません。"),
       })
       : null,
@@ -6040,6 +6086,7 @@ async function saveModels() {
     title: lines[0],
     lines: ["変えた区分とモデルは、下の内訳のとおりです。", "次の生成から、すぐに効きます。"],
     detail: lines.slice(1, -1),
+    note: saveConfirmNote(plan),
     buttons: [{ label: "やめる", value: false }, { label: "保存する", value: true, kind: "primary" }],
   });
   if (!ok || appClosed) return;
@@ -6461,7 +6508,7 @@ function stagesSection(c) {
   } else {
     const active = S.templates.filter((t) => t.active);
     if (!active.length && !S.templates.length) {
-      out.push(el("p", { className: "hint", text: "テンプレートがありません。設定の画面の「段階のテンプレート」で作ります。" }));
+      out.push(el("p", { className: "hint", text: "テンプレートがありません。［設定］→［テンプレート］で作ります。" }));
     } else {
       const choices = active.length ? active : S.templates;
       const select = el(

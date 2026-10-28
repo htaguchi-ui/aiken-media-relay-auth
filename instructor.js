@@ -27,13 +27,14 @@ import {
   takeStoredSession,
 } from "./auth-storage.js";
 import { discardDlKey } from "./share-lib.js";
-import { MSG_CODE_FAILED, oauthOptions } from "./mypage-lib.js";
+import { checkedAtText, MSG_CODE_FAILED, oauthOptions } from "./mypage-lib.js";
 import {
   cohortStatus,
   explainError,
   formatCredits,
   formatMonthDay,
   formatShortDateTime,
+  isNetworkFailure,
   isStageSchemaMissing,
   MSG_STAGE_NOT_READY,
   setStageDbReady,
@@ -43,17 +44,23 @@ import {
   isLow,
 } from "./admin-lib.js";
 import {
+  BUSY_BUTTON_TEXT,
+  BUSY_SLOW_MS,
   grantAvailability,
   grantConfirmText,
   instructorCohortLabel,
   instructorGrantPlan,
   moveConfirmText,
+  MSG_BUSY_SLOW,
+  MSG_GRANT_NETWORK_FAILURE,
+  MSG_MOVE_NETWORK_FAILURE,
   normalizeInstructorCohorts,
   normalizeStageStatus,
   parseStageGrantCredits,
   revocableGrants,
   revokedGrants,
-  REVOKE_CONFIRM_TEXT,
+  REVOKE_CONFIRM_LINES,
+  stageGrantCreditsCheck,
   stageMoveView,
   stageName,
   stageStateLabel,
@@ -119,7 +126,7 @@ discardDlKey(browserStorage("session"));
 
 // 読み込めない（通信の失敗・integrity の不一致）ときは先へ進まない
 if (typeof window.supabase?.createClient !== "function") {
-  $("status").replaceChildren(el("p", { text: "画面を読み込めませんでした。" }), el("p", { text: "通信を確かめて開き直してください。" }));
+  $("status").replaceChildren(el("p", { text: "画面を表示できませんでした。" }), el("p", { text: "インターネットの接続を確かめて、ページを開き直してください。" }));
   throw new Error("supabase-js を読み込めませんでした");
 }
 
@@ -177,12 +184,19 @@ const state = {
   cohortId: null,
   /** cohort_stage_status を読んだもの（normalizeStageStatus）。null は未読込 */
   status: null,
+  /** status を最後に読み込めた時刻（ミリ秒。回の見出しの「10:42 時点」。U3-6） */
+  statusAt: null,
   statusError: "",
   /** cohort_close_status を読んだもの（normalizeCohortCloseStatus）。null は未読込・読めなかった（221。決定 96） */
   closeStatus: null,
   closeStatusError: "",
   /** 操作の通信中（二重に押させない） */
   busy: false,
+  /** 通信中の操作の種類（押したボタンの文字を変える。U3-5）と、取り消しのとき対象の追加の id。通信中でなければ null */
+  busyKind: null,
+  busyTarget: null,
+  /** 通信が 10 秒を超えた（ボタンの下に案内を出す。U3-5） */
+  busySlow: false,
   /** 追加の相手に選んだ受講者の email */
   selected: new Set(),
   /** 追加の入力欄の値（描き直しても残す） */
@@ -350,7 +364,7 @@ function clearNotice() {
  * 確認を出す。「やめる」が最初にフォーカスされ、Esc でもやめる。続けるなら true。
  * 押されたボタンで直接決める（close イベントの returnValue は、続けて開き直したときに前のダイアログの分と取り違える）
  */
-function confirmDialog({ title, lines, okText }) {
+function confirmDialog({ title, lines, okText, danger = false }) {
   const dialog = $("confirm");
   return new Promise((resolve) => {
     const ctl = new AbortController();
@@ -361,7 +375,7 @@ function confirmDialog({ title, lines, okText }) {
       resolve(value);
     };
     const cancel = el("button", { type: "button", className: "btn big", text: "やめる", autofocus: true, onclick: () => finish(false) });
-    const ok = el("button", { type: "button", className: "btn primary big", text: okText, onclick: () => finish(true) });
+    const ok = el("button", { type: "button", className: danger ? "btn danger big" : "btn primary big", text: okText, onclick: () => finish(true) });
     dialog.replaceChildren(
       el("div", { className: "confirm-body" }, el("h2", { id: "confirm-title", text: title }), ...lines.map((t) => el("p", { text: t })), el("div", { className: "row" }, cancel, ok)),
     );
@@ -467,6 +481,7 @@ async function loadStatus() {
     return false;
   }
   state.status = normalizeStageStatus(data);
+  state.statusAt = Date.now();
   state.statusError = "";
   // 選んだ受講者のうち、もう受講者一覧に無い・停止した人は外す
   const active = new Set(state.status.students.filter((s) => s.active).map((s) => s.email));
@@ -921,7 +936,7 @@ function render() {
         "section",
         { className: "card" },
         state.statusError ? el("p", { className: "error-text", text: state.statusError }) : el("p", { className: "muted", text: "読み込み中…" }),
-        state.statusError ? el("button", { type: "button", className: "btn", text: "読み込み直す", onclick: () => reloadStatus() }) : null,
+        state.statusError ? el("button", { type: "button", className: "btn", text: "最新にする", onclick: () => reloadStatus() }) : null,
       ),
     );
   } else if (s.creditMode === "stage") {
@@ -992,6 +1007,7 @@ function cohortCard() {
             await load({ fromApp: true });
           },
         }),
+        s && state.statusAt ? el("span", { className: "small muted tabular", id: "status-at", text: checkedAtText(state.statusAt) ?? "" }) : null,
       ),
     ),
     meta ? el("p", { className: "cohort-meta tabular", text: meta }) : null,
@@ -1051,14 +1067,16 @@ function stageCard(s) {
           disabled: state.busy,
           onclick: () => undoMove(undo, s),
         }),
+        busySlowNote("undo"),
       )
       : null,
     el(
       "div",
       { className: "move-row" },
       el("button", { type: "button", className: "btn big", id: "move-back", text: "前へ戻す", disabled: state.busy || closed || !mv.canPrev, title: closed ? MSG_CLOSED_NO_MOVE : mv.canPrev ? null : mv.prevWhy, onclick: () => move("back") }),
-      el("button", { type: "button", className: "btn primary big", id: "move-next", text: "次へ進める", disabled: state.busy || closed || !mv.canNext, title: closed ? MSG_CLOSED_NO_MOVE : mv.canNext ? null : mv.nextWhy, onclick: () => move("next") }),
+      el("button", { type: "button", className: "btn primary big", id: "move-next", text: busyText("move-next", "次へ進める"), disabled: state.busy || closed || !mv.canNext, title: closed ? MSG_CLOSED_NO_MOVE : mv.canNext ? null : mv.nextWhy, onclick: () => move("next") }),
     ),
+    busySlowNote("move-next", "move-back"),
     why ? el("p", { className: "hint", id: "move-why", text: why }) : null,
     stageTimer.card(),
   );
@@ -1173,12 +1191,12 @@ function closeSlot() {
 
 /** 取り消しの案内の文（1 行目。残りの秒数を含む） */
 function undoText(undo) {
-  return `移しました。あと ${undo.remainingSec} 秒は戻せます。`;
+  return `段階を移しました。あと ${undo.remainingSec} 秒は、前の段階に戻せます。`;
 }
 
 /** 取り消しの案内の 2 行目（その間の生成の件数。分からなければ空） */
 function undoJobsText(undo) {
-  return undo.jobsSince === null ? "" : `この間の生成 ${formatCredits(undo.jobsSince)} 件は、移った先の段階に残ります。`;
+  return undo.jobsSince === null ? "" : `移してからの生成 ${formatCredits(undo.jobsSince)} 件は、戻しても今の段階の使用として残ります。`;
 }
 
 /** 取り消せる間に、段階と「この間の生成」の件数を読み直す間隔（秒） */
@@ -1268,7 +1286,11 @@ function studentsCard(s) {
           r.limit !== null ? el("span", { className: `bar ${low ? "low" : ""}`, role: "img", "aria-label": `使用 ${pct}%` }, el("span", { style: `width:${pct}%` })) : null,
           el("span", { className: "st-use-num", text: `${formatCredits(r.used)} / ${formatCredits(r.limit)}` }),
         ),
-        el("span", { className: "st-last small muted tabular" }, el("span", { className: "st-last-label", text: "最後の生成 " }), el("span", { text: formatShortDateTime(r.lastUsedAt) })),
+        el(
+          "span",
+          { className: "st-last small muted tabular" },
+          ...(r.lastUsedAt ? [el("span", { className: "st-last-label", text: "最後の生成 " }), el("span", { text: formatShortDateTime(r.lastUsedAt) })] : [el("span", { text: "まだ生成していません" })]),
+        ),
       ),
     );
   });
@@ -1279,6 +1301,7 @@ function studentsCard(s) {
       "div",
       { className: "card-head" },
       el("h2", { id: "students-h", text: `受講者 ${rows.length} 人` }),
+      el("span", { className: "small muted", id: "students-selected", text: selectedText(state.selected.size), hidden: state.selected.size === 0 }),
       el("button", {
         type: "button",
         className: "btn compact",
@@ -1311,22 +1334,22 @@ function studentsCard(s) {
   );
 }
 
-/** 追加の上限の行（単位はクレジット。畳んだ中の先頭に書く） */
+/** 追加の上限の行（単位は「クレジット」を各行に書く。B-8 と同じ呼び名。C-4） */
 function limitItems(s) {
   const l = s.limits;
   const items = [];
   if (!state.isAdmin) {
-    if (l.perGrant !== null) items.push(`1 回の追加：${formatCredits(l.perGrant)} まで`);
-    if (l.perStudentStage !== null) items.push(`1 人・この段階の合計：${formatCredits(l.perStudentStage)} まで`);
+    if (l.perGrant !== null) items.push(`1 回に追加できる上限：${formatCredits(l.perGrant)} クレジット`);
+    if (l.perStudentStage !== null) items.push(`1 人あたりのこの段階の追加の合計：最大 ${formatCredits(l.perStudentStage)} クレジット`);
     if (l.perCohortDay !== null) {
       items.push(
         l.cohortDayTotal === null
-          ? `今日この回の合計：${formatCredits(l.perCohortDay)} まで`
-          : `今日この回の合計：${formatCredits(l.cohortDayTotal)} / ${formatCredits(l.perCohortDay)}（あと ${formatCredits(Math.max(0, l.perCohortDay - l.cohortDayTotal))}）`,
+          ? `この回の 1 日の追加の合計：最大 ${formatCredits(l.perCohortDay)} クレジット`
+          : `この回の 1 日の追加の合計：残り ${formatCredits(Math.max(0, l.perCohortDay - l.cohortDayTotal))} クレジット（${formatCredits(l.perCohortDay)} のうち ${formatCredits(l.cohortDayTotal)} を追加済み）`,
       );
     }
   }
-  if (l.total !== null) items.push(`1 人・この回の合計：${formatCredits(l.total)} まで（取り消しも数える）`);
+  if (l.total !== null) items.push(`1 人あたりのこの回の追加の合計：最大 ${formatCredits(l.total)} クレジット（取り消した分も数えます）`);
   return items;
 }
 
@@ -1368,6 +1391,7 @@ function grantCard(s) {
       el("div", {}, el("label", { className: "field-label", for: "grant-note", text: "メモ（任意）" }), note),
     ),
     el("button", { type: "button", className: "btn primary big", id: "grant-btn", onclick: () => addGrant(s) }),
+    busySlowNote("grant"),
     avail.ok ? null : el("p", { className: "note-box", id: "grant-why", text: avail.why }),
     el(
       "div",
@@ -1376,7 +1400,6 @@ function grantCard(s) {
         ? fold(
           "limits",
           "追加の上限",
-          el("p", { className: "small muted", text: "単位はクレジットです。" }),
           el("ul", { className: "limits", "aria-label": "追加の上限" }, ...limits.map((t) => el("li", { className: "tabular", text: t }))),
         )
         : null,
@@ -1395,11 +1418,12 @@ function grantCard(s) {
                 el("button", {
                   type: "button",
                   className: "btn compact",
-                  text: "取り消す",
+                  text: state.busyTarget === g.id ? busyText("revoke", "取り消す") : "取り消す",
                   disabled: state.busy,
                   "aria-label": `${nameOf(g.email)} への追加（+${formatCredits(g.credits)}）を取り消す`,
                   onclick: () => revokeGrant(g, nameOf(g.email), s),
                 }),
+                state.busyTarget === g.id ? busySlowNote("revoke") : null,
               )
             ),
           )
@@ -1430,16 +1454,38 @@ function grantCard(s) {
   );
 }
 
+/** 受講者のカードの見出しの横に出す、選んだ人数（U3-8） */
+function selectedText(n) {
+  return `${n} 人を選択中`;
+}
+
 /** 追加のボタンの文字と押せるか（選んだ人数と、入れた数で変わる） */
 function updateGrantButton() {
+  const sel = document.getElementById("students-selected");
+  if (sel) {
+    sel.textContent = selectedText(state.selected.size);
+    sel.hidden = state.selected.size === 0;
+  }
   const btn = $("grant-btn");
   if (!btn) return;
   const n = state.selected.size;
   const credits = parseStageGrantCredits(state.creditsText);
-  btn.textContent = !n ? "受講者を選んでください" : credits === undefined ? `${n} 人に追加` : `${n} 人に +${formatCredits(credits)} を追加`;
+  btn.textContent = state.busy && state.busyKind === "grant"
+    ? busyText("grant", "")
+    : !n ? "受講者を選んでください" : credits === undefined ? `${n} 人に追加` : `${n} 人に +${formatCredits(credits)} を追加`;
   const avail = state.status ? grantAvailability(state.status) : { ok: true };
   btn.disabled = state.busy || n === 0 || !avail.ok;
   if (!avail.ok) btn.title = avail.why;
+}
+
+/** 通信中に押したボタンの文字（U3-5）。押したのがその操作でなければ、ふだんの文字 */
+function busyText(kind, normal) {
+  return state.busy && state.busyKind === kind ? BUSY_BUTTON_TEXT[kind] ?? normal : normal;
+}
+
+/** 10 秒を超えても応答が無いとき、押したボタンの下に出す案内（U3-5）。kinds：その案内を出す操作の種類 */
+function busySlowNote(...kinds) {
+  return state.busy && state.busySlow && kinds.includes(state.busyKind) ? el("p", { className: "hint", id: "busy-slow", role: "status", text: MSG_BUSY_SLOW }) : null;
 }
 
 // ---- 操作 ----
@@ -1483,24 +1529,45 @@ function changeCohortClose(kind) {
   return cohortCloseAction.run(kind, id, () => !ending && id === state.cohortId && client === activeClient() && cohortCloseSameIdentity(closeIdentity(), identity));
 }
 
-/** 操作の通信中は二重に押せないようにして、終わったら描き直す */
-async function withBusy(fn) {
+/**
+ * 操作の通信中は二重に押せないようにして、終わったら描き直す。
+ * kind：押したボタンの種類（"move-next"・"move-back"・"undo"・"grant"・"revoke"。押したボタンの文字と、10 秒を超えたときの案内に使う。U3-5）、
+ * target：取り消すときの追加の id
+ */
+async function withBusy(fn, kind = null, target = null) {
   if (state.busy || !operableCohort()) return; // 操作のページで、URL の回と画面の回が同じときだけ送る（それ以外は 1 つも送らない）
   state.busy = true;
+  state.busyKind = kind;
+  state.busyTarget = target;
+  state.busySlow = false;
   statusSeq++; // 操作の前に始まった読み込みの応答は、操作のあとの状態を上書きしないよう捨てる
   render();
+  const slow = setTimeout(() => {
+    if (!state.busy || state.busyKind !== kind) return;
+    state.busySlow = true;
+    render();
+  }, BUSY_SLOW_MS);
   try {
     await fn();
   } finally {
+    clearTimeout(slow);
     state.busy = false;
+    state.busyKind = null;
+    state.busyTarget = null;
+    state.busySlow = false;
     render();
   }
 }
 
-/** 失敗を知らせる。ほかの人が先に段階を動かしていた（stage_changed）ときは、最新を読み直す */
-async function failWith(error) {
-  notify(explainError(error), "error");
-  if (rejectionName(error) === "stage_changed") await loadStatus();
+/**
+ * 失敗を知らせて、理由を問わず最新を読み直す（U3-1。通信の失敗では操作が済んでいるかもしれない。ほかの人が先に段階を動かしていた
+ * stage_changed も同じ）。通信の失敗のときは、networkMessage があればその文を出す。openMine：通信の失敗のとき「あなたの追加」を開いておく
+ */
+async function failWith(error, { networkMessage = null, openMine = false } = {}) {
+  const network = isNetworkFailure(error);
+  notify(network && networkMessage ? networkMessage : explainError(error), "error");
+  if (network && openMine) ui.folds.add("mine");
+  await loadStatus();
 }
 
 async function moveStage(direction, mv, s) {
@@ -1522,12 +1589,12 @@ async function moveStage(direction, mv, s) {
       p_note: null,
     });
     if (error) {
-      await failWith(error);
+      await failWith(error, { networkMessage: MSG_MOVE_NETWORK_FAILURE });
       return;
     }
-    notify(`「${stageName(to)}」へ${direction === "back" ? "戻しました" : "進めました"}。`);
+    notify(`${stageName(to)}へ${direction === "back" ? "戻しました" : "進めました"}。`);
     await loadStatusAndClose(); // 最後の段階に入るとクローズの札が出る
-  });
+  }, direction === "back" ? "move-back" : "move-next");
 }
 
 async function undoMove(undo, s) {
@@ -1541,22 +1608,24 @@ async function undoMove(undo, s) {
       p_note: "取り消し（前の段階に戻す）",
     });
     if (error) {
-      await failWith(error);
+      await failWith(error, { networkMessage: MSG_MOVE_NETWORK_FAILURE });
       return;
     }
-    notify(`「${stageName(undo.toStage)}」に戻しました。`);
+    notify(`${stageName(undo.toStage)}に戻しました。`);
     await loadStatusAndClose();
-  });
+  }, "undo");
 }
 
 async function addGrant(s) {
   clearNotice();
   const emails = [...state.selected];
-  const credits = parseStageGrantCredits(state.creditsText);
-  if (credits === undefined) {
-    notify("追加するクレジットは 1 以上の整数で入力してください。", "error");
+  // 全角の数字・カンマは半角に直して受け付ける。大きすぎるときは、講師なら設定の 1 回の上限の文、分からなければ「数が大きすぎます」（C-2。50,000 は出さない）
+  const check = stageGrantCreditsCheck(state.creditsText, { isInstructor: !state.isAdmin, limits: s.limits });
+  if (!check.ok) {
+    notify(check.message, "error");
     return;
   }
+  const credits = check.credits;
   const plan = instructorGrantPlan({ emails, credits, students: s.students, limits: s.limits, isInstructor: !state.isAdmin, status: s });
   if (!plan.ok) {
     notify("追加できません。", "error", plan.problems);
@@ -1573,34 +1642,34 @@ async function addGrant(s) {
       p_note: state.noteText.trim() || null,
     });
     if (error) {
-      await failWith(error);
+      await failWith(error, { networkMessage: MSG_GRANT_NETWORK_FAILURE, openMine: true });
       return;
     }
-    notify(`${emails.length} 人に ${formatCredits(credits)} クレジットを追加しました。`);
+    notify(`${emails.length} 人に、1 人あたり ${formatCredits(credits)} クレジットを追加しました。`);
     state.selected.clear();
     state.creditsText = "";
     state.noteText = "";
     await loadStatus();
-  });
+  }, "grant");
 }
 
 async function revokeGrant(g, name, s) {
   clearNotice();
   const ok = await confirmDialog({
     title: "追加を取り消しますか？",
-    lines: [`${name} への追加（+${formatCredits(g.credits)}）を取り消します。`, REVOKE_CONFIRM_TEXT],
+    lines: [`${name} への追加（+${formatCredits(g.credits)}）を取り消します。`, ...REVOKE_CONFIRM_LINES],
     okText: "取り消す",
   });
   if (!ok) return;
   await withBusy(async () => {
     const { error } = await rpc("revoke_stage_grant", { p_grant_id: g.id, p_note: null });
     if (error) {
-      await failWith(error);
+      await failWith(error, { openMine: true });
       return;
     }
     notify(`${name} への追加（+${formatCredits(g.credits)}）を取り消しました。`);
     await loadStatus();
-  });
+  }, "revoke", g.id);
 }
 
 // ---- 開始 ----
