@@ -674,7 +674,7 @@ async function reloadStatus() {
 const MSG_END_ADMIN_CONSOLE = "管理コンソールのログインだけを終えます（マイページ・Canvas のログインはそのまま）";
 const MSG_ADMIN_CONSOLE_NEEDED = "管理者として講師ページを使うには、管理コンソールでログインしてから開いてください。";
 // ログインの画面でだけ、管理者向けの案内の前に置く（講師が迷わないように。田口さん 2026-10-23）
-const MSG_TEACHER_LOGIN_FIRST = "講師の方は、上の「Google でログイン」のボタンから入ってください。";
+const MSG_TEACHER_LOGIN_FIRST = "講師の方は、「Google でログイン」のボタンから入ってください。";
 const MSG_ADMIN_CONSOLE_EXPIRED ="管理コンソールのログインから 12 時間たちました。管理コンソールでもう一度ログインしてから開いてください。";
 
 /** 管理者として動いている間の { client, expiresAt, userId }（講師・ログイン前は null） */
