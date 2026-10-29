@@ -6242,6 +6242,9 @@ function emptyStageState() {
     status: new Map(),
     /** 回ごとに選んでいるテンプレートの id */
     pick: new Map(),
+    /** 組 8b：テンプレートの既定（admin_template_guides_list）。tplGuidesState は ok・missing（関数が無い。組 8 の画面のまま）・error（読めない）・unknown */
+    tplGuides: [],
+    tplGuidesState: "unknown",
   };
 }
 
@@ -6289,13 +6292,15 @@ async function loadStageInfo() {
   const ticket = gates.stages.begin();
   // 回の段階の情報と、ほかの 5 つ（段階・テンプレート・担当の講師・設定）は互いの答えを待たないので、まとめて並べて読む（ページを開く速さ 2026-10-23）。
   // 回の読み込みが失敗したときは、今までどおりほかの 5 つの答えは使わない
-  const [c, st, tp, ti, ins, set] = await Promise.all([
+  const [c, st, tp, ti, ins, set, tg] = await Promise.all([
     supabase.from("cohorts").select("id, credit_mode, stage_template_id, stages_applied_at"),
     supabase.from("cohort_stages").select("id, cohort_id, day_kind, seq, label, title, credits").order("seq"),
     supabase.from("stage_templates").select("id, name, note, active, updated_at").order("name"),
     supabase.from("stage_template_items").select("id, template_id, day_kind, seq, label, title, credits").order("seq"),
     supabase.from("cohort_instructors").select("cohort_id, email"),
     supabase.rpc("admin_get_settings"),
+    // 組 8b：テンプレートの既定。失敗しても、ほかの 6 つの答えは使う（段階の情報全体を「古い」にしない）
+    rpcSettled(TPL_LIST_FN),
   ]);
   if (appClosed) return false;
   if (c.error) {
@@ -6326,9 +6331,59 @@ async function loadStageInfo() {
     // 円の目安のドル円（227）。起動・更新のたびにここで読む（設定の画面を開かなくても名簿・回の目安に効く）
     applyFxRate(set.data?.fx_usd_jpy);
   }
+  applyTemplateGuides(tg);
   const partial = [st, tp, ti, ins, set].some((x) => x.error);
   state.fresh.stages = partial ? { at: state.fresh.stages.at ?? null, stale: true } : { at: Date.now(), stale: false };
   return true;
+}
+
+// ---- 組 8b：テンプレートの既定の案内（.orchestration/workshop-ui-20261028/DESIGN.md 第 II 部 8 章） ----
+// 新しい関数 4 つ。「関数が無い」は、呼んだ関数ごとにその名前で isMissingFunctionError を、isStageSchemaMissing より先に見る（8.5。
+// 包む RPC の「無い」の誤りには、PostgREST が似た名前の 016 の関数を候補として書きうるため）。無ければ組 8 の画面と 016 の RPC で動く。
+const TPL_LIST_FN = "admin_template_guides_list";
+const TPL_APPLIED_FN = "admin_cohort_applied_defaults";
+const TPL_SAVE_FN = "admin_template_guides_save";
+const TPL_APPLY_FN = "admin_template_guides_apply";
+
+/** RPC を呼び、投げた例外も { data, error } にする（ほかの読みを止めない） */
+async function rpcSettled(name, args) {
+  try {
+    const r = args === undefined ? await supabase.rpc(name) : await supabase.rpc(name, args);
+    return r ?? { data: null, error: { message: "no response" } };
+  } catch (e) {
+    return { data: null, error: { message: String(e?.message ?? e) } };
+  }
+}
+
+/** admin_template_guides_list の答えを段階の状態に入れる（関数が無ければ missing。ほかの失敗は error で、前の既定は使わない） */
+function applyTemplateGuides(r) {
+  const S = state.stages;
+  if (!r?.error) {
+    S.tplGuides = Array.isArray(r?.data) ? r.data : [];
+    S.tplGuidesState = "ok";
+  } else if (isMissingFunctionError(r.error, TPL_LIST_FN)) {
+    S.tplGuides = [];
+    S.tplGuidesState = "missing";
+  } else {
+    S.tplGuides = [];
+    S.tplGuidesState = "error";
+  }
+}
+/** 使っている途中で包む RPC が無くなったら、既定の機能を無しに切り替える（016 に送り直さない。8.5） */
+function markTemplateGuidesMissing() {
+  state.stages.tplGuides = [];
+  state.stages.tplGuidesState = "missing";
+}
+
+/** テンプレートの欄の一覧の 1 段階の後ろ（「案内：名前・10:30〜12:00」か「案内なし」。既定を読めたときだけ。8.3） */
+function templateGuideLine(templateId, s) {
+  const S = state.stages;
+  if (S.tplGuidesState !== "ok") return null;
+  const d = S.tplGuides.find((x) => x.template_id === templateId && x.day_kind === s.day_kind && Number(x.seq) === Number(s.seq));
+  if (!d?.guide_id || d.matches_item !== true) return "案内なし";
+  const hm = (v) => (/^\d{2}:\d{2}/.test(String(v ?? "")) ? String(v).slice(0, 5) : "");
+  const a = hm(d.planned_start), b = hm(d.planned_end);
+  return `案内：${d.guide_name ?? ""}${a && b ? `・${a}〜${b}` : ""}`;
 }
 
 /** 回の今の段階など（cohort_stage_status）を読む。読めなければ null（段階の欄に今の段階を出さないだけ） */
@@ -6352,21 +6407,30 @@ function templateName(id) {
   return state.stages.templates.find((t) => t.id === id)?.name ?? null;
 }
 
-/** 段階の行の入力欄の組（テンプレートの編集・回の段階の編集で共通）。canStructure は順番・数を変えられるか */
-function rowsEditor(kind, initial, { canStructure }) {
+/**
+ * 段階の行の入力欄の組（テンプレートの編集・回の段階の編集で共通）。canStructure は順番・数を変えられるか。
+ * guides（組 8b。テンプレートの編集のときだけ渡す。8.3）：{ options: [{ id, label }]、readFailed: 既定を読めなかったか }。
+ * 渡すと、行ごとに既定の案内（と、ワークショップの日だけ時刻の目安 2 つ）を行の値として持つ（↑↓ で一緒に動く）。回の段階の編集では渡さない
+ */
+function rowsEditor(kind, initial, { canStructure, guides = null }) {
   const where = DAY_KIND_LABELS[kind];
   const max = kind === "bridge" ? 1 : MAX_STAGES_PER_DAY;
+  const withTimes = !!guides && kind !== "bridge";
   let rows = initial.map((r) => ({
     id: r.id ?? null,
     label: r.label ?? "",
     title: r.title ?? "",
     credits: r.credits === null || r.credits === undefined ? "" : String(r.credits),
+    ...(guides ? { guide: r.guide ?? "", start: r.start ?? "", end: r.end ?? "" } : {}),
   }));
+  /** DB が行を断った理由（行の番号 → 文。並べ替え・足す・消すで消える） */
+  let errors = new Map();
   const host = el("div", { className: "stage-rows" });
   const total = el("p", { className: "hint num", "aria-live": "polite" });
   const addBtn = el("button", { type: "button", className: "btn", text: "段階を足す", onclick: () => {
     read();
-    rows.push({ id: null, label: "", title: "", credits: "" });
+    rows.push({ id: null, label: "", title: "", credits: "", ...(guides ? { guide: "", start: "", end: "" } : {}) });
+    errors = new Map();
     draw();
   } });
   /** 画面の入力を rows に取り込む */
@@ -6377,7 +6441,49 @@ function rowsEditor(kind, initial, { canStructure }) {
       rows[i].title = row.querySelector('[data-f="title"]').value;
       rows[i].credits = row.querySelector('[data-f="credits"]').value;
     });
+    if (guides) {
+      host.querySelectorAll(".stage-guide-row").forEach((row, i) => {
+        if (!rows[i]) return;
+        const g = row.querySelector('[data-f="guide"]');
+        if (g && !g.disabled) rows[i].guide = g.value;
+        if (withTimes) {
+          rows[i].start = row.querySelector('[data-f="start"]')?.value ?? "";
+          rows[i].end = row.querySelector('[data-f="end"]')?.value ?? "";
+        }
+      });
+    }
     return rows;
+  }
+  /** 行の既定の案内と時刻の欄（組 8b） */
+  function guideRow(r, i) {
+    const n = `${where} ${i + 1} 番目`;
+    const select = el("select", { className: "input", "aria-label": `${n}の既定の案内`, "data-f": "guide", disabled: !!guides.readFailed });
+    if (guides.readFailed) select.append(el("option", { value: "", text: "既定の案内を読めませんでした" }));
+    else {
+      select.append(el("option", { value: "", text: "案内なし" }));
+      const opts = guides.options ?? [];
+      for (const o of opts) select.append(el("option", { value: o.id, text: o.label }));
+      // 一覧に無い案内（ふつうは無い）が既定なら、そのまま残す
+      if (r.guide && !opts.some((o) => o.id === r.guide)) select.append(el("option", { value: r.guide, text: r.guide }));
+      select.value = r.guide ?? "";
+    }
+    const parts = [el("span", { className: "stage-no", "aria-hidden": "true" }), select];
+    if (withTimes) {
+      const start = el("input", { type: "time", className: "input num", "aria-label": `${n}の時刻の目安（始まり）`, "data-f": "start", disabled: !!guides.readFailed });
+      const end = el("input", { type: "time", className: "input num", "aria-label": `${n}の時刻の目安（終わり）`, "data-f": "end", disabled: !!guides.readFailed });
+      start.value = r.start ?? "";
+      end.value = r.end ?? "";
+      parts.push(el("span", { className: "stage-times" }, start, el("span", { text: "〜" }), end));
+    } else {
+      parts.push(el("span", { className: "hint", text: "（時刻なし）" }));
+    }
+    const err = errors.get(i);
+    return el(
+      "div",
+      { className: "stage-guide-row" },
+      ...parts,
+      err ? el("p", { className: "warn-text small stage-guide-err", role: "alert", text: err }) : null,
+    );
   }
   function updateTotal() {
     read();
@@ -6390,6 +6496,7 @@ function rowsEditor(kind, initial, { canStructure }) {
     const j = i + d;
     if (j < 0 || j >= rows.length) return;
     [rows[i], rows[j]] = [rows[j], rows[i]];
+    errors = new Map();
     draw();
   }
   function draw() {
@@ -6401,7 +6508,7 @@ function rowsEditor(kind, initial, { canStructure }) {
         title.value = r.title;
         const credits = creditInput(r.credits, { placeholder: "上限", "aria-label": `${where} ${i + 1} 番目のクレジット`, "data-f": "credits" });
         for (const input of [label, title, credits]) input.addEventListener("input", updateTotal);
-        return el(
+        const line = el(
           "div",
           { className: "stage-row" },
           el("span", { className: "stage-no num", text: `${i + 1}` }),
@@ -6422,13 +6529,15 @@ function rowsEditor(kind, initial, { canStructure }) {
                 onclick: () => {
                   read();
                   rows.splice(i, 1);
+                  errors = new Map();
                   draw();
                 },
               }),
             )
             : null,
         );
-      }),
+        return guides ? [line, guideRow(r, i)] : [line];
+      }).flat(),
     );
     addBtn.disabled = rows.length >= max;
     updateTotal();
@@ -6436,8 +6545,14 @@ function rowsEditor(kind, initial, { canStructure }) {
   draw();
   return {
     node: el("div", { className: "stack" }, host, canStructure ? addBtn : null, total),
-    /** 入力された行（id・名前・題名・クレジットの文字） */
+    /** 入力された行（id・名前・題名・クレジットの文字。組 8b の口があれば既定の案内〔guide〕と時刻〔start・end〕も） */
     read: () => read().map((r) => ({ ...r })),
+    /** DB が断った行の下に理由を出す（組 8b。i はその日の中の 0 からの番号） */
+    setError: (i, text) => {
+      read();
+      errors = new Map([[i, text]]);
+      draw();
+    },
   };
 }
 
@@ -6553,9 +6668,32 @@ async function readCohortStageGuides(cid) {
   const { data, error } = await supabase.rpc("admin_cohort_stage_guides", { p_cohort_id: cid });
   if (!error) return { stages: data?.stages ?? [] };
   if (isMissingFunctionError(error, "admin_cohort_stage_guides")) {
-    return { stages: stagesOfCohort(cid).map((s) => ({ stage_id: s.id, day_kind: s.day_kind, seq: s.seq, label: s.label, title: s.title, guide_id: null })) };
+    // 250 が無い DB には 251 も無い（251 は 250 の後ろに当て、先に戻す）ので、組 8b の読みもしない（missing）
+    return {
+      stages: stagesOfCohort(cid).map((s) => ({ stage_id: s.id, day_kind: s.day_kind, seq: s.seq, label: s.label, title: s.title, guide_id: null })),
+      missing: true,
+    };
   }
   return null;
+}
+
+/**
+ * 組 8b：包む適用 RPC の確かめの前に、写し（と orphan_ops）と今の既定を読む（毎回。8.2）。
+ * 返り：{ mode: "8b", applied, orphanOps, defaults }・{ mode: "8" }（どちらかの関数が、その名前で「無い」）・null（ほかの読みの失敗）
+ */
+async function readApplyDefaults(cid) {
+  const [ap, tg] = await Promise.all([rpcSettled(TPL_APPLIED_FN, { p_cohort_id: cid }), rpcSettled(TPL_LIST_FN)]);
+  if (isMissingFunctionError(ap.error, TPL_APPLIED_FN) || isMissingFunctionError(tg.error, TPL_LIST_FN)) {
+    markTemplateGuidesMissing();
+    return { mode: "8" };
+  }
+  if (ap.error || tg.error) return null;
+  return {
+    mode: "8b",
+    applied: Array.isArray(ap.data?.applied) ? ap.data.applied : [],
+    orphanOps: Number(ap.data?.orphan_ops ?? 0) || 0,
+    defaults: Array.isArray(tg.data) ? tg.data : [],
+  };
 }
 
 async function applyTemplate(c, templateId) {
@@ -6579,17 +6717,30 @@ async function applyTemplate(c, templateId) {
   const read = lib ? await readCohortStageGuides(c.id) : null;
   if (appClosed) return;
   if (!read) {
-    notify(APPLY_READ_FAILED, "error");
+    // 組 8b の形（既定を読めている）なら、写し・既定を読めないときと同じ文（数えるのは「書き換えた段階」。8.2）
+    notify(lib && state.stages.tplGuidesState === "ok" ? lib.APPLY_DIFF_READ_FAILED : APPLY_READ_FAILED, "error");
+    return;
+  }
+  const cohortName = lib.cohortShort(c);
+  const hasStages = read.stages.length > 0 || stagesOfCohort(c.id).length > 0;
+  // 組 8b：写しと既定も読む（読めなければ確かめを出さず、適用もしない。関数が無ければ組 8 の形と 016）
+  const extra = read.missing ? { mode: "8" } : await readApplyDefaults(c.id);
+  if (appClosed) return;
+  if (!extra) {
+    notify(lib.APPLY_DIFF_READ_FAILED, "error");
+    return;
+  }
+  if (extra.mode === "8b") {
+    await applyWithDefaults(c, templateId, { lib, t, already, hasStages, cohortName, stages: read.stages, extra });
     return;
   }
   const loss = lib.planApplyLoss(read.stages);
-  const cohortName = lib.cohortShort(c);
   const spec = lib.applyAsk({
     cohortName,
     templateName: t,
     memberCount: Number(c.member_count ?? 0),
     already,
-    hasStages: read.stages.length > 0 || stagesOfCohort(c.id).length > 0,
+    hasStages,
     loss,
   });
   const ok = await ask({
@@ -6605,6 +6756,53 @@ async function applyTemplate(c, templateId) {
   const { error } = await supabase.rpc("admin_apply_stage_template", { p_cohort_id: c.id, p_template_id: templateId });
   if (error) notify(explainError(error), "error");
   else notify(lib.applyResultText({ cohortName, templateName: t, lost: loss.count }));
+  await refresh();
+  if (!error && isStageCohort(c.id)) {
+    await loadCohortStageStatus(c.id);
+    renderAll();
+  }
+}
+
+/** 組 8b の適用（8.2）：planApplyDiff で数え、ask で確かめ、包む適用 RPC を 1 回だけ呼ぶ（画面で付け直さない。016 に送り直さない） */
+async function applyWithDefaults(c, templateId, { lib, t, already, hasStages, cohortName, stages, extra }) {
+  const curTid = cohortInfoOf(c.id)?.stage_template_id ?? null;
+  const sameTemplate = !!curTid && curTid === templateId;
+  const rows = stages.filter((s) => s.guide_id);
+  const diff = lib.planApplyDiff(
+    stages,
+    rows,
+    extra.applied,
+    curTid ? extra.defaults.filter((d) => d.template_id === curTid) : [],
+    extra.defaults.filter((d) => d.template_id === templateId),
+    extra.orphanOps,
+    { sameTemplate },
+  );
+  const spec = lib.applyDiffAsk({
+    cohortName,
+    templateName: t,
+    memberCount: Number(c.member_count ?? 0),
+    already,
+    hasStages,
+    hasRows: rows.length > 0,
+    sameTemplate,
+    diff,
+  });
+  const ok = await ask({
+    title: spec.title,
+    lines: spec.lines,
+    warnings: spec.warnings,
+    detail: spec.detail,
+    note: spec.note,
+    buttons: [{ label: "やめる", value: false }, { label: spec.okLabel, value: true, kind: "primary" }],
+  });
+  if (!ok || appClosed) return;
+  const { data, error } = await supabase.rpc(TPL_APPLY_FN, { p_cohort_id: c.id, p_template_id: templateId });
+  if (error) {
+    if (isMissingFunctionError(error, TPL_APPLY_FN)) {
+      markTemplateGuidesMissing();
+      notify(lib.DEFAULTS_GONE, "error");
+    } else notify(explainError(error), "error");
+  } else notify(lib.applyDiffResultText({ cohortName, templateName: t, attached: data?.attached, skipped: data?.skipped }));
   await refresh();
   if (!error && isStageCohort(c.id)) {
     await loadCohortStageStatus(c.id);
@@ -6866,7 +7064,16 @@ function templatePanel(id) {
             el("span", { className: "strong", text: DAY_KIND_LABELS[kind] }),
             el("span", { className: "credits", text: g[kind].length ? `合計 ${formatCredits(totals[kind])} クレジット` : "段階なし" }),
             g[kind].length
-              ? el("ol", {}, ...g[kind].map((s) => el("li", {}, stageName(s), el("span", { className: "credits", text: `${formatCredits(s.credits)} クレジット` }))))
+              ? el("ol", {}, ...g[kind].map((s) => {
+                const guide = templateGuideLine(id, s);
+                return el(
+                  "li",
+                  {},
+                  stageName(s),
+                  el("span", { className: "credits", text: `${formatCredits(s.credits)} クレジット` }),
+                  guide ? el("span", { className: "credits", text: guide }) : null,
+                );
+              }))
               : null,
           )
         ),
@@ -6899,9 +7106,56 @@ function templatePanel(id) {
   };
 }
 
+/** 組 8b のテンプレートの編集の行の見た目（シートの段階の行の下に、既定の案内と時刻の目安） */
+const TPL_GUIDE_CSS = `
+.stage-guide-row { display: grid; grid-template-columns: 24px minmax(0, 1fr) auto; gap: 6px; align-items: center; margin: 2px 0 10px; }
+.stage-guide-row .stage-times { display: inline-flex; gap: 4px; align-items: center; }
+.stage-guide-row input[type="time"] { width: 7.4em; }
+.stage-guide-row .stage-guide-err { grid-column: 2 / -1; margin: 0; }
+@media (max-width: 699.98px) {
+  .stage-guide-row { grid-template-columns: 24px minmax(0, 1fr); }
+  .stage-guide-row .stage-times, .stage-guide-row > .hint { grid-column: 2 / -1; }
+}`;
+function ensureTemplateGuideStyle() {
+  if (!document.getElementById("tpl-guide-style")) document.head.append(el("style", { id: "tpl-guide-style", text: TPL_GUIDE_CSS }));
+}
+
+/**
+ * 組 8b：テンプレートの編集を開く前に、案内の一覧と今の既定を読む（8.3）。
+ * 返り：{ mode: "8b", lib, guides, defaults }・{ mode: "8" }（既定の一覧の関数が無い。016 で保存する組 8 のシート）・{ mode: "error", lib }（読めない。保存を止める）
+ */
+async function readTemplateGuides() {
+  let lib = null;
+  try {
+    lib = await workshopLib();
+  } catch {
+    lib = null;
+  }
+  const [tg, gs] = await Promise.all([rpcSettled(TPL_LIST_FN), rpcSettled("admin_workshop_guides")]);
+  if (isMissingFunctionError(tg.error, TPL_LIST_FN)) {
+    markTemplateGuidesMissing();
+    return { mode: "8" };
+  }
+  if (!lib || tg.error || gs.error) return { mode: "error", lib };
+  applyTemplateGuides(tg);
+  return { mode: "8b", lib, guides: Array.isArray(gs.data) ? gs.data : [], defaults: state.stages.tplGuides };
+}
+
+/** テンプレートの編集を読んでいる間に、もう一度押されても 2 つ開かない */
+let templateOpening = false;
+
 /** テンプレートの編集（全部の幅でシート。段階の行の入力が右の欄には入りきらないため） */
-function openTemplateEditor(t) {
-  if (state.settings.busy) return;
+async function openTemplateEditor(t) {
+  if (state.settings.busy || templateOpening) return;
+  templateOpening = true;
+  let gd;
+  try {
+    gd = await readTemplateGuides();
+  } finally {
+    templateOpening = false;
+  }
+  if (appClosed || state.settings.busy) return;
+  const guideMode = gd.mode;
   const items = t ? templateItemsOf(t.id) : [];
   const name = textInput({ maxlength: "60", placeholder: "例：標準（Day1 に 3 つ・Day2 に 2 つ）" });
   name.value = t?.name ?? "";
@@ -6909,30 +7163,69 @@ function openTemplateEditor(t) {
   note.value = t?.note ?? "";
   const active = el("input", { type: "checkbox", checked: t ? t.active : true });
   const g = groupStagesByDay(items);
-  const editors = Object.fromEntries(DAY_KINDS.map((k) => [k, rowsEditor(k, g[k], { canStructure: true })]));
+  // 組 8b：既定（matches_item が偽の既定は「案内なし」で出し、上に 1 行）
+  const dr = guideMode === "8b" ? gd.lib.templateDefaultRows(gd.defaults, t?.id ?? null) : { byPos: new Map(), hidden: 0 };
+  const withDefaults = (kind, list) =>
+    list.map((it) => {
+      const d = guideMode === "8b" ? dr.byPos.get(gd.lib.templatePos(kind, it.seq)) : null;
+      return { ...it, guide: d?.guide ?? "", start: d?.start ?? "", end: d?.end ?? "" };
+    });
+  const editors = Object.fromEntries(DAY_KINDS.map((k) => [
+    k,
+    guideMode === "8"
+      ? rowsEditor(k, g[k], { canStructure: true })
+      : rowsEditor(k, withDefaults(k, g[k]), {
+        canStructure: true,
+        guides: { options: guideMode === "8b" ? gd.lib.templateGuideOptions(k, gd.guides) : [], readFailed: guideMode === "error" },
+      }),
+  ]));
   const snapshot = () => JSON.stringify([name.value, note.value, active.checked, DAY_KINDS.map((k) => editors[k].read())]);
   const first = snapshot();
   let saving = false;
+  // 既定を読めない・使っている途中で包む RPC が無くなったら、保存を止める（名前やメモだけの変更でも。8.3・8.5）
+  let locked = guideMode === "error";
+  const lockSave = () => {
+    locked = true;
+    saveBtn.disabled = true;
+    saveBtn.title = "既定の案内を読めないので、保存できません";
+  };
   const saveBtn = el("button", {
     type: "button",
     className: "btn primary big",
     text: "保存",
+    disabled: locked,
+    title: locked ? "既定の案内を読めないので、保存できません" : null,
     onclick: async () => {
-      if (saving) return;
+      if (saving || locked) return;
       saving = true;
       saveBtn.disabled = true;
       saveBtn.textContent = "保存中…";
       try {
-        await saveTemplate(t, { name, note, active, editors });
+        await saveTemplate(t, { name, note, active, editors, guideMode, lib: gd.lib ?? null, lockSave });
       } finally {
         saving = false;
         if (saveBtn.isConnected) {
-          saveBtn.disabled = false;
+          saveBtn.disabled = locked;
           saveBtn.textContent = "保存";
         }
       }
     },
   });
+  if (guideMode !== "8") ensureTemplateGuideStyle();
+  const hiddenLine = guideMode === "8b" ? gd.lib.templateHiddenLine(dr.hidden) : "";
+  const guideHelp = guideMode === "8"
+    ? null
+    : el(
+      "details",
+      { className: "help" },
+      el(
+        "summary",
+        {},
+        el("span", { className: "help-text strong", text: "既定の案内と時刻の目安" }),
+        el("span", { className: "help-q", "aria-hidden": "true", text: "?" }),
+      ),
+      el("div", { className: "help-body", text: gd.lib?.TEMPLATE_GUIDE_HELP ?? "" }),
+    );
   openSheet("template-editor", () =>
     setSheet({
       title: t ? "テンプレートを変更" : "テンプレートを作る",
@@ -6940,6 +7233,8 @@ function openTemplateEditor(t) {
         field("テンプレートの名前", name),
         field("メモ（任意）", note),
         el("label", { className: "check" }, active, "回に適用するテンプレートの候補に出す"),
+        guideHelp,
+        hiddenLine ? el("p", { className: "warn-text small", text: hiddenLine }) : null,
         ...DAY_KINDS.map((kind) =>
           el(
             "section",
@@ -6949,11 +7244,20 @@ function openTemplateEditor(t) {
             editors[kind].node,
           )
         ),
-        el("p", { className: "hint", text: "1 つの段階の上限は 0〜10,000、1 日の合計は 10,000 までです。" }),
+        el("p", {
+          className: "hint",
+          text: guideMode === "8" ? "1 つの段階の上限は 0〜10,000、1 日の合計は 10,000 までです。" : gd.lib?.TEMPLATE_GUIDE_FOOT ?? "",
+        }),
       ],
       foot: [saveBtn, cancelButton("やめる")],
     })
   );
+  if (guideMode === "error") {
+    notify(
+      gd.lib?.TEMPLATE_GUIDES_READ_FAILED ?? "既定の案内を読めませんでした。このまま保存すると既定が消えるので、保存を止めています。［閉じる］のあと、もう一度開いてください。",
+      "error",
+    );
+  }
   templateDirty = () => snapshot() !== first;
   // 閉じる・Esc・背景：保存していない入力があれば、編集を続けるか破棄するかを選んでもらう
   sheetGuard = async () => {
@@ -6965,31 +7269,55 @@ function openTemplateEditor(t) {
 
 async function saveTemplate(t, f) {
   clearNotice();
+  const guideMode = f.guideMode ?? "8";
+  // 既定を読めないまま保存すると、016 の保存と同じく既定が消えるので、止める（8.3）
+  if (guideMode === "error") return;
+  const days = Object.fromEntries(DAY_KINDS.map((k) => [k, f.editors[k].read()]));
   const { value, problems } = parseTemplateForm({
     name: f.name.value,
     note: f.note.value,
     active: f.active.checked,
-    days: Object.fromEntries(DAY_KINDS.map((k) => [k, f.editors[k].read()])),
+    days,
   });
+  // 組 8b：各項目に guide_id・planned_start・planned_end の 3 つの鍵を必ず入れる（「案内なし」は null。鍵が無いと DB が断る）
+  let items = value.items;
+  if (guideMode === "8b") {
+    const g = f.lib.templateItemsWithGuides(value.items, days);
+    problems.push(...g.problems);
+    items = g.items;
+  }
   if (problems.length) {
     notify("保存できません。次の項目を確認してください。", "error", problems);
     return;
   }
   state.settings.busy = true;
   gates.stages.invalidate();
-  const { error } = await supabase.rpc("admin_save_stage_template", {
+  const fn = guideMode === "8b" ? TPL_SAVE_FN : "admin_save_stage_template";
+  const { error } = await supabase.rpc(fn, {
     p_template_id: t?.id ?? null,
     p_name: value.name,
     p_note: value.note,
     p_active: value.active,
-    p_items: value.items,
+    p_items: items,
   });
   gates.stages.invalidate();
   state.settings.busy = false;
   if (appClosed) return;
   if (error) {
+    if (guideMode === "8b" && isMissingFunctionError(error, TPL_SAVE_FN)) {
+      // 使っている途中で DB が戻された：016 に切り替えて送り直さない。保存を止め、最新にしてもらう（8.5）
+      markTemplateGuidesMissing();
+      f.lockSave?.();
+      notify(f.lib.DEFAULTS_GONE, "error");
+      await loadStageInfo();
+      if (!appClosed) renderSettings();
+      return;
+    }
+    const target = guideMode === "8b" ? f.lib.templateSaveErrorTarget(error, items) : null;
+    if (target?.area === "row") f.editors[target.dayKind]?.setError?.(target.index, target.text);
     // シートは閉じず、入力を残す。捨てた段階の読み込みの代わりを読み直す（読み込み中のまま止めない）
-    notify(`保存できませんでした。${explainError(error)}（入力は残してあります）`, "error");
+    if (target?.area === "band") notify(target.text, "error");
+    else notify(`保存できませんでした。${explainError(error)}（入力は残してあります）`, "error");
     await loadStageInfo();
     if (!appClosed) renderSettings();
     return;

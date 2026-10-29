@@ -15,7 +15,11 @@
 // 表示はすべて createElement / textContent で組み立てる（データを innerHTML に入れない）。読み書きは DB の管理の RPC と、
 // cohorts の枠の列（id, credit_mode, stage_template_id）の読みだけ（admin_workshop_guides・admin_save_workshop_guide・
 // admin_publish_workshop_guide・admin_cohorts・admin_cohort_stage_guides・admin_set_cohort_stage_guide。どれも中で is_admin()）。
-// 字数の検査は DB が行い、その理由をその欄の下に出す（正は DB）。組 8b の関数は呼ばない。
+// 字数の検査は DB が行い、その理由をその欄の下に出す（正は DB）。
+// 組 8b（同じ DESIGN の第 II 部 8 章）：テンプレートの既定（admin_template_guides_list）と適用の時点の写し（admin_cohort_applied_defaults）を
+// 読み、回のテンプレートの名前・由来の札・［既定に戻す］［既定を付ける］［既定をまとめて付ける］・「使っている所」のテンプレートを出す。
+// どちらかが「関数が無い」（関数ごとにその名前で判定）なら既定の機能を無しとし、組 8 の画面のまま動く（8.5）。書き込みは組 8 と同じ
+// admin_set_cohort_stage_guide だけ（［既定に戻す］なども行の下書きを作り、［まとめて保存］で送る）。テンプレートの名前は stage_templates を読む。
 import {
   activeAsk,
   assignmentArgs,
@@ -23,6 +27,8 @@ import {
   cohortOptions,
   composeOpening,
   defaultCohortId,
+  defaultsByPos,
+  DEFAULTS_READ_FAILED,
   deriveName,
   emptyGuide,
   errorField,
@@ -32,16 +38,21 @@ import {
   guideListRow,
   guideOptionsFor,
   guideState,
+  HELP_MAIN_FIRST_8B,
   KIND_LABELS,
+  missingFunction,
   missingRequired,
   nameErrorText,
   openingFits,
   openingIsDefault,
+  originState,
   problemTarget,
   publishAsk,
   stageRowName,
+  templatePos,
   timeField,
   todayJst,
+  TPL_FN,
   toBody,
   toForm,
   usedIn,
@@ -130,7 +141,17 @@ dialog.wg-dialog::backdrop { background: var(--scrim, rgba(26, 30, 38, 0.62)); }
 .wg-times { display: inline-flex; align-items: center; gap: 4px; flex-wrap: nowrap; }
 .wg-ops { display: flex; gap: 6px; align-items: center; flex-wrap: wrap; }
 details.wg-more > summary { cursor: pointer; font-size: 13px; font-weight: 600; margin: 8px 0 4px; }
+/* 由来の札（組 8b。8.4）：広い幅は案内の下に札と操作、狭い幅は札を公開の札の段・操作を時刻の段に（1 段階 4 段のまま。8.1） */
+.wg-origin { display: flex; flex-wrap: wrap; gap: 6px; align-items: center; margin-top: 3px; font-size: 12px; color: var(--muted, #4C525F); }
+.wg-origin-tag { font-size: 12px; color: var(--muted, #4C525F); margin-left: 6px; }
+.wg-narrow { display: none; }
+.wg-wide[hidden], .wg-narrow[hidden] { display: none; }
 @media (max-width: 699.98px) {
+  .wg-wide { display: none; }
+  span.wg-narrow { display: inline; }
+  button.wg-narrow { display: inline-block; margin-left: auto; }
+  /* 時刻と［既定に戻す］［開く］が 1 行に入らない幅では、ボタンを次の行の右へ（時刻は割らない） */
+  .wg-scroll td.wg-ops-cell:has(> button.wg-narrow) { flex-wrap: wrap; row-gap: 4px; }
   /* 狭い幅は 1 列で「一覧 → 編集」と進む。編集を開いたら一覧を隠し、［← 段階の一覧］で戻る（広い幅でも、同じボタンで編集を閉じて表に戻る） */
   .wg-main.wg-editing { grid-template-columns: minmax(0, 1fr); }
   .wg-main.wg-editing .wg-left { display: none; }
@@ -201,9 +222,12 @@ function bookIcon() {
 /** 閉じたかを確かめる間隔（ミリ秒） */
 const CLOSE_CHECK_MS = 300;
 
-/** 見出しの ？ の中身（3.2。組 8b で 1 文目を替える） */
-const HELP_MAIN =
-  "段階ごとに案内を選び、［まとめて保存］で付けます。公開した版は、受講者の AI が次に案内を読み直したときから使われます。受講者の AI に届くのは、段階ごとの枠の回で、受講者向けのスイッチ（WORKSHOP_GUIDE）が入っているときだけです。";
+/** 見出しの ？ の中身（3.2）。組 8b の既定の機能があるときは 1 文目を替える（8.1。あとの 2 文はそのまま） */
+const HELP_MAIN_FIRST = "段階ごとに案内を選び、［まとめて保存］で付けます。";
+const HELP_MAIN_REST =
+  "公開した版は、受講者の AI が次に案内を読み直したときから使われます。受講者の AI に届くのは、段階ごとの枠の回で、受講者向けのスイッチ（WORKSHOP_GUIDE）が入っているときだけです。";
+const HELP_MAIN = `${HELP_MAIN_FIRST}${HELP_MAIN_REST}`;
+const HELP_MAIN_8B = `${HELP_MAIN_FIRST_8B}${HELP_MAIN_REST}`;
 /** 最初のひと言の ？ の中身（3.3） */
 const HELP_OPENING = "大切なことと手順 1 から、画面が作ります。直したいときは［書き直す］を押してください。";
 /** 既定の最初のひと言を DB が断ったとき（3.9 の表） */
@@ -306,11 +330,20 @@ export function mountWorkshopGuide({ supabase, menu, isClosed, ask, askDiscard }
     // 回への割り当ての行ごとの保存していない入力（回と段階で 1 つ）と、その行の誤り（F240-02）
     rowDrafts: new Map(),
     rowErrors: new Map(),
+    // 組 8b：既定の機能（"unknown"〔まだ分からない〕・"on"・"off"〔関数が無い。組 8 の画面のまま〕）と、テンプレートの既定・名前・回ごとの写し。
+    // 読めなかった（通信など）ときは tplDefaults を null・appliedErrors に回を入れる（「無い」とはみなさない。8.5）
+    tplFeature: "unknown",
+    tplDefaults: null,
+    /** テンプレートの id → 名前（stage_templates。読めなければ null） */
+    tplNames: null,
+    /** 回の id → admin_cohort_applied_defaults の返り（{ applied, orphan_ops }） */
+    applied: new Map(),
+    appliedErrors: new Set(),
   };
   // 選んでいる案内・窓が替わるたびに進める番号（確かめを出した時点の対象を、あとで替わっていないか確かめる。F240-01）
   let epoch = 0;
   // 読み込みごとの番号（新しい読み込みのあとに戻った古い応答は描かない）
-  const seq = { guides: 0, cohorts: 0, frames: 0, assign: new Map() };
+  const seq = { guides: 0, cohorts: 0, frames: 0, assign: new Map(), tpl: 0, tplNames: 0, applied: new Map() };
   // 文字を入れたときに、描き直さずに状態だけ替える所（F240-05）
   let live = null;
   let disposed = false;
@@ -342,6 +375,8 @@ export function mountWorkshopGuide({ supabase, menu, isClosed, ask, askDiscard }
     S.sel = null;
     S.cohorts = null;
     S.assign = new Map();
+    S.applied = new Map();
+    S.tplDefaults = null;
     S.rowDrafts.clear();
   }
   function checkClosed() {
@@ -491,11 +526,93 @@ export function mountWorkshopGuide({ supabase, menu, isClosed, ask, askDiscard }
     const ids = (S.cohorts ?? []).filter((c) => c.current_period !== "after" || c.id === S.cohortId).map((c) => c.id);
     await Promise.all(ids.map((id) => loadAssignFor(id)));
   }
+
+  // ---- 組 8b：テンプレートの既定と写し（8.4・8.5） ----
+
+  const tplOn = () => S.tplFeature !== "off";
+  /** 「関数が無い」と分かったら、既定の機能を無しにする（4 つは 1 つの取引で当て・戻すので、1 つでも無ければ全部無いとみなす） */
+  function tplOff() {
+    S.tplFeature = "off";
+    S.tplDefaults = null;
+    S.applied = new Map();
+    S.appliedErrors.clear();
+  }
+  async function loadTplDefaults() {
+    if (!tplOn()) return;
+    const my = ++seq.tpl;
+    const { data, error } = await rpc(TPL_FN.list);
+    if (my !== seq.tpl || checkClosed() || !tplOn()) return;
+    if (!error) {
+      S.tplDefaults = Array.isArray(data) ? data : [];
+      S.tplFeature = "on";
+    } else if (missingFunction(error, TPL_FN.list)) tplOff();
+    else S.tplDefaults = null;
+  }
+  async function loadAppliedFor(cid) {
+    if (!cid || !tplOn()) return;
+    const my = (seq.applied.get(cid) ?? 0) + 1;
+    seq.applied.set(cid, my);
+    const { data, error } = await rpc(TPL_FN.applied, { p_cohort_id: cid });
+    if (my !== seq.applied.get(cid) || checkClosed() || !tplOn()) return;
+    if (!error) {
+      S.applied.set(cid, { applied: Array.isArray(data?.applied) ? data.applied : [], orphan_ops: Number(data?.orphan_ops ?? 0) || 0 });
+      S.appliedErrors.delete(cid);
+      S.tplFeature = "on";
+    } else if (missingFunction(error, TPL_FN.applied)) tplOff();
+    else {
+      S.applied.delete(cid);
+      S.appliedErrors.add(cid);
+    }
+  }
+  /** テンプレートの名前（回のテンプレートの 1 行と「使っている所」）。既定の機能が無いときは読まない（組 8 の読みのまま） */
+  async function loadTplNames() {
+    if (!tplOn()) return;
+    const my = ++seq.tplNames;
+    let res;
+    try {
+      res = typeof supabase.from === "function"
+        ? await supabase.from("stage_templates").select("id, name")
+        : { data: null, error: { message: "no table api" } };
+    } catch (e) {
+      res = { data: null, error: { message: String(e) } };
+    }
+    if (my !== seq.tplNames || checkClosed()) return;
+    S.tplNames = res?.error ? null : new Map((res?.data ?? []).map((x) => [x.id, x.name]));
+  }
+  /** 由来の札などを出せるか（既定の機能があり、テンプレートの既定とこの回の写しの両方を読めた） */
+  function originReady(cid) {
+    return S.tplFeature === "on" && S.tplDefaults !== null && S.applied.has(cid) && S.frames !== null;
+  }
+  /** 既定を読めなかった（通信など。回のテンプレートが分からないときを含む）ので、表の上に 1 行を出すか */
+  function originFailed(cid) {
+    return tplOn() && (S.tplDefaults === null || S.appliedErrors.has(cid) || S.frames === null);
+  }
+  /** 段階ごとの由来の札（6.5）。stage_id → originState の返り */
+  function originsFor(cid, a) {
+    const tid = S.frames?.get(cid)?.stage_template_id ?? null;
+    const byPos = defaultsByPos(S.tplDefaults, tid);
+    const copies = new Map((S.applied.get(cid)?.applied ?? []).map((x) => [x.stage_id, x]));
+    const m = new Map();
+    for (const st of a.stages ?? []) {
+      m.set(
+        st.stage_id,
+        originState(st, st.guide_id ? st : null, copies.get(st.stage_id) ?? null, byPos.get(templatePos(st.day_kind, st.seq)) ?? null),
+      );
+    }
+    return m;
+  }
+  /** 「使っている所」に足すテンプレート（既定の機能があって、既定を読めたときだけ） */
+  function tplUses() {
+    return S.tplFeature === "on" && S.tplDefaults ? { defaults: S.tplDefaults, names: S.tplNames } : null;
+  }
+
   async function loadAll() {
-    await Promise.all([loadGuides(), loadCohorts(), loadFrames()]);
+    // 開くたび・［最新にする］のたびに、既定の機能があるかを読み直す（DB を戻した・当て直したあとも画面が合うように）
+    S.tplFeature = "unknown";
+    await Promise.all([loadGuides(), loadCohorts(), loadFrames(), loadTplDefaults()]);
     if (checkClosed()) return;
     if (!S.cohortId || !(S.cohorts ?? []).some((c) => c.id === S.cohortId)) S.cohortId = defaultCohortId(S.cohorts, todayJst());
-    await loadAssignAll();
+    await Promise.all([loadAssignAll(), loadAppliedFor(S.cohortId), loadTplNames()]);
   }
   async function reload() {
     if (checkClosed() || S.busy) return;
@@ -896,7 +1013,7 @@ export function mountWorkshopGuide({ supabase, menu, isClosed, ask, askDiscard }
     if (S.sel?.attach && S.sel.attach.cohortId !== id) S.sel.attach = null;
     S.cohortId = id;
     render();
-    await loadAssignFor(id);
+    await Promise.all([loadAssignFor(id), loadAppliedFor(id)]);
     render();
   }
   const rowKey = (cid, s) => `${cid}|${s.stage_id}`;
@@ -1420,7 +1537,7 @@ export function mountWorkshopGuide({ supabase, menu, isClosed, ask, askDiscard }
     if (S.nameError) scroll.append(el("p", { className: "wg-row-err", role: "alert", text: S.nameError }));
     const st = editorStatus(sel);
     scroll.append(el("p", { className: `wg-state wg-tone-${st.tone}`, text: `${KIND_LABELS[sel.kind]}｜${st.text}` }));
-    if (sel.id) scroll.append(el("p", { className: "wg-hint", text: usedInText(usedIn(sel.id, S.assign, S.cohorts, S.frames)) }));
+    if (sel.id) scroll.append(el("p", { className: "wg-hint", text: usedInText(usedIn(sel.id, S.assign, S.cohorts, S.frames, tplUses())) }));
     if (sel.id && sel.saved) {
       const on = sel.saved.active !== false;
       scroll.append(el(
@@ -1572,6 +1689,10 @@ export function mountWorkshopGuide({ supabase, menu, isClosed, ask, askDiscard }
       if (!err) scroll.append(el("p", { text: "読み込んでいます…" }));
       return el("section", { className: "wg-pane wg-left" }, scroll);
     }
+    // 組 8b：回のテンプレートの名前（テンプレートが無い回・既定の機能が無いときは出さない。8.1）
+    const tplId = S.tplFeature === "on" ? S.frames?.get(cid)?.stage_template_id : null;
+    const tplName = tplId ? S.tplNames?.get(tplId) : null;
+    if (tplName) scroll.append(el("p", { className: "wg-hint", text: `テンプレート：${tplName}` }));
     const mode = S.frames ? S.frames.get(cid)?.credit_mode : undefined;
     if (S.framesError) scroll.append(el("p", { className: "wg-hint", text: "回の枠を読めませんでした。" }));
     else if (mode && mode !== "stage") {
@@ -1604,6 +1725,27 @@ export function mountWorkshopGuide({ supabase, menu, isClosed, ask, askDiscard }
       scroll.append(box);
     }
     const stages = a.stages ?? [];
+    // 組 8b：由来の札（写しと既定の両方を読めたときだけ。読めなければ 1 行を出し、割り当ての選択と保存はそのまま使える。8.4）
+    const origins = originReady(cid) ? originsFor(cid, a) : null;
+    if (!origins && originFailed(cid) && stages.length) scroll.append(el("p", { className: "wg-hint", text: DEFAULTS_READ_FAILED }));
+    if (origins && !compact) {
+      // ［既定をまとめて付ける］は「既定は付いていません」（6.5 の 6）だけを拾う。「この回で外した」「段階がテンプレートと違います」は拾わない
+      const unset = stages.filter((st) => origins.get(st.stage_id)?.key === "unset" && !S.rowDrafts.has(rowKey(cid, st)));
+      if (unset.length) {
+        scroll.append(el(
+          "div",
+          { className: "wg-bar" },
+          el("span", { className: "wg-state", text: `既定が付いていない段階が ${unset.length} つあります。` }),
+          el("button", {
+            type: "button",
+            className: "wg-btn small",
+            text: "既定をまとめて付ける",
+            disabled: S.busy,
+            onclick: () => attachAllDefaults(cid, unset, origins),
+          }),
+        ));
+      }
+    }
     if (!stages.length) {
       scroll.append(el("p", {
         className: "wg-hint",
@@ -1617,7 +1759,7 @@ export function mountWorkshopGuide({ supabase, menu, isClosed, ask, askDiscard }
       }
       t.append(el("thead", {}, head));
       const tb = el("tbody");
-      for (const s of stages) tb.append(compact ? compactStageRow(cid, s) : stageRow(cid, s));
+      for (const s of stages) tb.append(compact ? compactStageRow(cid, s) : stageRow(cid, s, origins?.get(s.stage_id) ?? null));
       t.append(tb);
       scroll.append(t);
     }
@@ -1641,7 +1783,21 @@ export function mountWorkshopGuide({ supabase, menu, isClosed, ask, askDiscard }
     return el("section", { className: "wg-pane wg-left" }, scroll, band);
   }
 
-  function stageRow(cid, s) {
+  /** 由来の札の値を、その行の下書きにする（［既定に戻す］［既定を付ける］［既定をまとめて付ける］。まだ保存しない。保存は［まとめて保存］） */
+  function draftFromOrigin(cid, s, value) {
+    const key = rowKey(cid, s);
+    const bridge = s.day_kind === "bridge";
+    const v = { guide: value?.guide_id ?? "", start: bridge ? "" : value?.start ?? "", end: bridge ? "" : value?.end ?? "" };
+    if (sameRow(v, savedRow(s))) S.rowDrafts.delete(key);
+    else S.rowDrafts.set(key, v);
+    S.rowErrors.delete(key);
+  }
+  function attachAllDefaults(cid, list, origins) {
+    if (S.busy || checkClosed()) return;
+    for (const s of list) draftFromOrigin(cid, s, origins.get(s.stage_id)?.value);
+    render();
+  }
+  function stageRow(cid, s, origin = null) {
     const key = rowKey(cid, s);
     const saved = savedRow(s);
     const d = S.rowDrafts.get(key) ?? saved;
@@ -1675,6 +1831,33 @@ export function mountWorkshopGuide({ supabase, menu, isClosed, ask, askDiscard }
       times.append(start, el("span", { text: "〜" }), end);
     }
     const mark = el("span", { className: "wg-unsaved", text: " ●未保存", hidden: !S.rowDrafts.has(key) });
+    // 由来の札（組 8b。未保存の行には出さず「●未保存」だけ。8.4）。広い幅は案内の下、狭い幅は札を公開の段・操作を時刻の段に
+    /** @type {any[]} */
+    const originNodes = [];
+    let originWide = null, originTag = null, originBtn = null;
+    if (origin?.text) {
+      const label = origin.action === "attach" ? "既定を付ける" : origin.action === "revert" ? "既定に戻す" : "";
+      const act = () => {
+        if (S.busy || checkClosed()) return;
+        draftFromOrigin(cid, s, origin.value);
+        render();
+      };
+      const mkBtn = (cls) =>
+        label
+          ? el("button", { type: "button", className: `wg-btn small${cls}`, text: label, disabled: S.busy, onclick: act })
+          : null;
+      const hide = S.rowDrafts.has(key);
+      originWide = el(
+        "div",
+        { className: "wg-origin wg-wide", hidden: hide },
+        el("span", { text: origin.text, title: origin.title || undefined }),
+        mkBtn(""),
+      );
+      originTag = el("span", { className: "wg-origin-tag wg-narrow", text: origin.text, title: origin.title || undefined, hidden: hide });
+      originBtn = mkBtn(" wg-narrow");
+      if (originBtn && hide) originBtn.hidden = true;
+      originNodes.push(originWide, originTag, originBtn);
+    }
     // 入れたものを行の下書きに残す（ほかの行の保存や、この行の誤りで描き直しても消えない）。元の値に戻したら下書きから外す
     const keep = () => {
       const v = { guide: g.value, start: start?.value ?? "", end: end?.value ?? "" };
@@ -1683,6 +1866,7 @@ export function mountWorkshopGuide({ supabase, menu, isClosed, ask, askDiscard }
         S.rowErrors.delete(key);
       } else S.rowDrafts.set(key, v);
       mark.hidden = !S.rowDrafts.has(key);
+      for (const n of originNodes) if (n) n.hidden = S.rowDrafts.has(key);
     };
     g.addEventListener("change", () => {
       keep();
@@ -1710,13 +1894,15 @@ export function mountWorkshopGuide({ supabase, menu, isClosed, ask, askDiscard }
         disabled: S.busy || S.guides === null,
         onclick: () => newGuide(s.day_kind === "bridge" ? "bridge" : "workshop", s),
       });
+    const stCell = stateCell(st, "公開");
+    if (originTag) stCell.append(originTag);
     return el(
       "tr",
       {},
       el("td", { className: "wg-stage-name" }, el("span", { text: stageRowName(s) }), mark),
-      el("td", {}, g, rowErr ? el("p", { className: "wg-row-err", role: "alert", text: rowErr }) : null),
-      stateCell(st, "公開"),
-      el("td", { className: "wg-ops-cell" }, times, op),
+      el("td", {}, g, originWide, rowErr ? el("p", { className: "wg-row-err", role: "alert", text: rowErr }) : null),
+      stCell,
+      el("td", { className: "wg-ops-cell" }, times, originBtn, op),
     );
   }
   function compactStageRow(cid, s) {
@@ -1802,7 +1988,7 @@ export function mountWorkshopGuide({ supabase, menu, isClosed, ask, askDiscard }
         if (!compact) cells.push(el("td", { "data-label": "種類", text: r.kind }));
         cells.push(stateCell(st, "公開"));
         if (!compact) {
-          const u = usedIn(g.id, S.assign, S.cohorts, S.frames);
+          const u = usedIn(g.id, S.assign, S.cohorts, S.frames, tplUses());
           cells.push(el("td", { "data-label": "使っている所", text: u.length ? usedInText(u).replace(/^使っている所：/, "") : "なし" }));
         }
         tb.append(el("tr", {}, ...cells));
@@ -1825,6 +2011,11 @@ export function mountWorkshopGuide({ supabase, menu, isClosed, ask, askDiscard }
       const on = b.getAttribute("data-key") === S.view;
       b.setAttribute("aria-selected", on ? "true" : "false");
       b.tabIndex = on ? 0 : -1;
+    }
+    const helpText = S.tplFeature === "on" ? HELP_MAIN_8B : HELP_MAIN;
+    if (helpMain.textContent !== helpText) {
+      helpMain.textContent = helpText;
+      helpMainBtn.setAttribute("title", helpText);
     }
     live = { fk: new Map(), miss: new Map(), count: null, publish: null, openingText: null, openingReason: null, openingBox: null, editHead: null, confirmCancel: null, rowBand: null };
     const editing = !!S.sel;

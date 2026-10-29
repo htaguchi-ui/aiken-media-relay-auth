@@ -518,14 +518,16 @@ export function guideState(row, { creditMode = undefined, pending = false, via =
 /**
  * guideId を付けている段階。assignByCohort：回の id → admin_cohort_stage_guides の返り、cohorts：admin_cohorts の行、
  * frames：回の id → { credit_mode }（読めなければ null）。返り：[{ cohortId, cohortName, label, training, hidden }]
- * （Day1 の古い順・段階の順）
+ * （Day1 の古い順・段階の順）。templates（組 8b）を渡すと、既定にしているテンプレートを後ろに足す（{ template: true }。
+ * matches_item が真の既定だけ。1 つのテンプレートは 1 回）。公開・止める確かめには渡さない（回に付くまで受講者に効かないため。3.4）
  * @param {string|null|undefined} guideId
  * @param {Map<string, any>|null|undefined} assignByCohort
  * @param {any[]|null|undefined} cohorts
  * @param {Map<string, any>|null} [frames]
+ * @param {{ defaults: any[]|null, names: Map<string, string>|null }|null} [templates]
  */
-export function usedIn(guideId, assignByCohort, cohorts, frames = null) {
-  /** @type {{ cohortId: string, cohortName: string, label: string, training: boolean, hidden: boolean }[]} */
+export function usedIn(guideId, assignByCohort, cohorts, frames = null, templates = null) {
+  /** @type {{ cohortId: string, cohortName: string, label: string, training: boolean, hidden: boolean, template?: boolean }[]} */
   const out = [];
   if (!guideId) return out;
   const sorted = [...(cohorts ?? [])].sort((a, b) =>
@@ -545,6 +547,15 @@ export function usedIn(guideId, assignByCohort, cohorts, frames = null) {
         training: inTraining(c),
         hidden: mode !== undefined && mode !== null && mode !== "stage",
       });
+    }
+  }
+  if (templates?.defaults) {
+    const seen = new Set();
+    for (const d of templates.defaults) {
+      if (d?.guide_id !== guideId || d.matches_item !== true || seen.has(d.template_id)) continue;
+      seen.add(d.template_id);
+      const name = templates.names?.get(d.template_id);
+      out.push({ cohortId: "", cohortName: "", label: `テンプレート「${str(name) || "名前なし"}」`, training: false, hidden: false, template: true });
     }
   }
   return out;
@@ -759,4 +770,356 @@ export function nameErrorText(error) {
   return errorDetail(error)?.reason === "duplicate"
     ? "同じ名前の案内があります。［名前を変える］で変えてください。"
     : "名前が長すぎます";
+}
+
+// ---- 組 8b：テンプレートの既定の案内（.orchestration/workshop-ui-20261028/DESIGN.md 第 II 部 6.4・6.5・8.1〜8.5） ----
+
+/** 組 8b の新しい関数の名前。「関数が無い」の判定は、呼んだ関数ごとにその名前で行う（4 つは互いに部分の文字列にならない。8.5） */
+export const TPL_FN = {
+  list: "admin_template_guides_list",
+  applied: "admin_cohort_applied_defaults",
+  save: "admin_template_guides_save",
+  apply: "admin_template_guides_apply",
+};
+
+/**
+ * 名前の関数（RPC）が DB に無い誤りか（PGRST202 か 42883 で、誤りの message に名前が入る）。admin-lib.js の isMissingFunctionError と
+ * 同じ判定（admin-workshop.js の import の関係を変えないために写す。試験で同じ答えになることを固定）
+ * @param {any} error
+ * @param {string} name
+ */
+export function missingFunction(error, name) {
+  if (!["PGRST202", "42883"].includes(str(error?.code))) return false;
+  return !name || str(error?.message).includes(name);
+}
+
+/** 既定（写し・テンプレートの既定）を読めなかったときの 1 行（8.4） */
+export const DEFAULTS_READ_FAILED = "既定の案内を読めませんでした";
+/** 使っている途中で包む RPC が無くなったとき（8.5。016 に送り直さない） */
+export const DEFAULTS_GONE = "既定の案内の機能が使えなくなりました。画面を最新にしてから、もう一度操作してください。";
+/** 窓の見出しの ？ の 1 文目（8.1。あとの 2 文は組 8 のまま） */
+export const HELP_MAIN_FIRST_8B = "テンプレートで付いた案内を、回ごとに替えられます。";
+
+const DAY_ORDER = { day1: 1, bridge: 2, day2: 3 };
+const posKey = (/** @type {any} */ dayKind, /** @type {any} */ seq) => `${str(dayKind)}|${Number(seq)}`;
+const blankToNull = (/** @type {any} */ v) => (str(v).trim() === "" ? null : str(v).trim());
+const byStageOrder = (/** @type {any} */ a, /** @type {any} */ b) =>
+  ((/** @type {any} */ (DAY_ORDER))[a.day_kind] ?? 9) - ((/** @type {any} */ (DAY_ORDER))[b.day_kind] ?? 9) ||
+  Number(a.seq ?? 0) - Number(b.seq ?? 0);
+
+/** 比べる 3 つ（案内・始まり・終わり。時刻は "HH:MM" か ""）。案内が無ければ null */
+function triple(/** @type {any} */ x) {
+  if (!x?.guide_id) return null;
+  return { guide_id: str(x.guide_id), start: timeField(x.planned_start), end: timeField(x.planned_end) };
+}
+function sameTriple(/** @type {any} */ a, /** @type {any} */ b) {
+  if (!a || !b) return !a && !b;
+  return a.guide_id === b.guide_id && a.start === b.start && a.end === b.end;
+}
+
+/** テンプレートの既定（admin_template_guides_list の行）のうち、そのテンプレートの分を位置（日の種類＋順番）で引く表
+ * @param {any[]|null|undefined} defaults
+ * @param {string|null|undefined} templateId
+ * @returns {Map<string, any>} */
+export function defaultsByPos(defaults, templateId) {
+  const m = new Map();
+  if (!templateId) return m;
+  for (const d of defaults ?? []) if (d?.template_id === templateId) m.set(posKey(d.day_kind, d.seq), d);
+  return m;
+}
+/** 位置の鍵（日の種類＋順番） */
+export function templatePos(dayKind, seq) {
+  return posKey(dayKind, seq);
+}
+
+/** 既定がこの段階に使えるか（matches_item が真で、回の段階の名前と題名が既定の保存の時点の名前と題名と同じ。6.5 の 4） */
+export function defaultUsable(stage, d) {
+  return !!d?.guide_id && d.matches_item === true && str(stage?.label).trim() === str(d.item_label).trim() &&
+    blankToNull(stage?.title) === blankToNull(d.item_title);
+}
+
+/** 由来の札の文（8.4） */
+export const ORIGIN_TEXT = {
+  default: "テンプレートの既定",
+  changed: "この回で書き換え",
+  removed: "この回で外した",
+  unset: "既定は付いていません",
+  mismatch: "段階がテンプレートと違います",
+};
+/** 「段階がテンプレートと違います」のホバー（8.4） */
+export const ORIGIN_MISMATCH_TITLE = "この段階の名前か題名が、テンプレートの同じ順番の段階と違うので、既定を付けません。";
+
+/**
+ * 由来の札（6.5 の表の 8 つの順）。stage：段階（day_kind・seq・label・title）、row：今の割り当て（guide_id・planned_start・planned_end。
+ * 無ければ null）、applied：その段階の写し（admin_cohort_applied_defaults の applied の行。無ければ null）、tplDefault：回の今のテンプレートの
+ * 同じ位置の既定（admin_template_guides_list の行。無ければ null）。比べるのは案内・始まり・終わりの 3 つ。
+ * 返り：{ order, key, text, title, action, value }。action は revert（［既定に戻す］）・attach（［既定を付ける］）か null、
+ * value は行に入れる値（{ guide_id, start, end }。時刻は "HH:MM" か ""）
+ * @param {any} stage
+ * @param {any} row
+ * @param {any} applied
+ * @param {any} tplDefault
+ */
+export function originState(stage, row, applied, tplDefault) {
+  const cur = triple(row);
+  const mk = (/** @type {number} */ order, /** @type {string} */ key, /** @type {string|null} */ action = null, /** @type {any} */ value = null) => ({
+    order,
+    key,
+    text: /** @type {any} */ (ORIGIN_TEXT)[key] ?? "",
+    title: key === "mismatch" ? ORIGIN_MISMATCH_TITLE : "",
+    action,
+    value,
+  });
+  const copy = triple(applied);
+  if (copy) {
+    if (sameTriple(cur, copy)) return mk(1, "default");
+    return cur ? mk(2, "changed", "revert", copy) : mk(3, "removed", "revert", copy);
+  }
+  if (tplDefault?.guide_id) {
+    if (!defaultUsable(stage, tplDefault)) return mk(7, "mismatch");
+    const d = triple(tplDefault);
+    if (sameTriple(cur, d)) return mk(4, "default");
+    return cur ? mk(5, "changed", "revert", d) : mk(6, "unset", "attach", d);
+  }
+  return mk(8, "none");
+}
+
+/** 時刻の幅（"10:30〜12:00"。無ければ「なし」） */
+function rangeText(/** @type {any} */ t) {
+  return t?.start && t?.end ? `${t.start}〜${t.end}` : "なし";
+}
+
+/**
+ * 包む適用 RPC で失われる物と替わる物を数える（8.2。純粋な関数）。
+ * stages：admin_cohort_stage_guides の stages（外れた行〔orphans〕は渡さない）、rows：今の割り当て（stage_id・guide_id・guide_name・
+ * planned_start・planned_end・set_via。stages から guide_id のある物を渡す）、applied：admin_cohort_applied_defaults の applied、
+ * curTplDefaults：回の今のテンプレートの既定（無ければ []）、newTplDefaults：適用するテンプレートの既定、orphanOps：admin_cohort_applied_defaults の
+ * orphan_ops。sameTemplate：回のテンプレートと適用するテンプレートが同じか（言い方を替える）。
+ * 返り：{ N, M, E, K, attach, items }。N＝この回で書き換えた段階・M＝テンプレートの変更で替わる段階・E＝N のうち既定が無く外れる段階・
+ * K＝消える行のうち手順書で付けた記録の件数（今の段階の ops_script の行＋orphanOps）・attach＝付ける既定の数（matches_item が真）。
+ * items は detail の項目（N を先に M をあとに。それぞれの中では案内が替わる・外れる段階を先に、時刻だけが変わる段階をあとに）
+ * @param {any[]|null|undefined} stages
+ * @param {any[]|null|undefined} rows
+ * @param {any[]|null|undefined} applied
+ * @param {any[]|null|undefined} curTplDefaults
+ * @param {any[]|null|undefined} newTplDefaults
+ * @param {number|null|undefined} orphanOps
+ * @param {{ sameTemplate?: boolean }} [o]
+ */
+export function planApplyDiff(stages, rows, applied, curTplDefaults, newTplDefaults, orphanOps, { sameTemplate = true } = {}) {
+  const rowById = new Map((rows ?? []).filter((r) => r?.guide_id).map((r) => [r.stage_id, r]));
+  const copyById = new Map((applied ?? []).map((a) => [a.stage_id, a]));
+  const cur = new Map();
+  for (const d of curTplDefaults ?? []) cur.set(posKey(d.day_kind, d.seq), d);
+  const next = new Map();
+  for (const d of newTplDefaults ?? []) if (d?.guide_id && d.matches_item === true) next.set(posKey(d.day_kind, d.seq), d);
+  const head = sameTemplate ? "テンプレートの変更：" : "新しいテンプレート：";
+  /** @type {{ group: number, rank: number, ord: number, text: string }[]} */
+  const hits = [];
+  let N = 0, M = 0, E = 0, ord = 0;
+  for (const s of [...(stages ?? [])].sort(byStageOrder)) {
+    const row = rowById.get(s.stage_id) ?? null;
+    const a = triple(row);
+    const nd = next.get(posKey(s.day_kind, s.seq)) ?? null;
+    const b = triple(nd);
+    if (sameTriple(a, b)) continue;
+    const o = originState(s, row, copyById.get(s.stage_id) ?? null, cur.get(posKey(s.day_kind, s.seq)) ?? null);
+    let group;
+    if (o.order === 2 || o.order === 3 || o.order === 5 || ((o.order === 7 || o.order === 8) && a)) group = 0;
+    else if (o.order === 1 || o.order === 4) group = 1;
+    else continue;
+    const name = stageShort(s);
+    let text, rank = 0;
+    if (a && b && a.guide_id === b.guide_id) {
+      text = `${name}：時刻 ${rangeText(a)} → ${rangeText(b)}`;
+      rank = 1;
+    } else if (a && b) {
+      const t = a.start !== b.start || a.end !== b.end ? `（時刻 ${rangeText(a)} → ${rangeText(b)}）` : "";
+      text = `${name}：「${str(row?.guide_name)}」→「${str(nd?.guide_name)}」${t}`;
+    } else if (b) text = `${name}：外していた →「${str(nd?.guide_name)}」`;
+    else text = `${name}：「${str(row?.guide_name)}」→ 外れます`;
+    if (group === 0) {
+      N++;
+      if (!b) E++;
+    } else {
+      M++;
+      text = `${head}${text}`;
+    }
+    hits.push({ group, rank, ord: ord++, text });
+  }
+  hits.sort((x, y) => x.group - y.group || x.rank - y.rank || x.ord - y.ord);
+  const K = (stages ?? []).filter((s) => s?.guide_id && s.set_via === "ops_script").length + Math.max(0, Number(orphanOps ?? 0) || 0);
+  return { N, M, E, K, attach: next.size, items: hits.map((h) => h.text) };
+}
+
+/**
+ * 包む適用 RPC の確かめ（8.2。本文 6 行まで）。diff：planApplyDiff の返り、hasRows：今の段階に割り当てが 1 つ以上あるか。
+ * 7 行になるとき（lines 3・warnings 1・detail 2・note 1）だけ、detail を 1 項目にまとめて「ほか R か所」を残す
+ * @param {{ cohortName: string, templateName: string, memberCount?: number, already: boolean, hasStages: boolean, hasRows?: boolean,
+ *   sameTemplate?: boolean, diff: { N: number, M: number, E: number, K: number, attach: number, items: string[] } }} o
+ */
+export function applyDiffAsk({ cohortName, templateName, memberCount = 0, already, hasStages, hasRows = false, sameTemplate = true, diff }) {
+  /** @type {string[]} */
+  const lines = [];
+  const first = !already && !hasStages;
+  if (first) lines.push("この回の枠が、Day ごとではなく、ワークショップごとの段階になります。");
+  else if (already) lines.push("段階を全部入れ替えます（名前・クレジットの変更は消えます）。");
+  else lines.push("この回の枠が段階ごとになり、残っていた段階は全部入れ替わります（名前・クレジットの変更は消えます）。");
+  const { N, M, E, K, attach } = diff;
+  if (attach > 0) {
+    const part = first || M < 1
+      ? ""
+      : sameTemplate
+      ? `（うち ${M} か所は、テンプレートの変更で替わります）`
+      : `（うち ${M} か所は、新しいテンプレートの既定に替わります）`;
+    lines.push(`案内は、テンプレートの既定を ${attach} か所に付けます${part}。`);
+  } else if (!first && hasRows) lines.push("このテンプレートには既定の案内がありません。付けた案内は外れます。");
+  if (Number(memberCount) > 0) lines.push(`所属している受講者 ${Number(memberCount)} 人全員に効きます。`);
+  /** @type {string[]} */
+  const warnings = [];
+  if (!first && N > 0) {
+    const tail = sameTemplate
+      ? E > 0 ? `適用すると、テンプレートの既定に戻ります（既定の無い ${E} か所は外れます）。` : "適用すると、テンプレートの既定に戻ります。"
+      : E > 0
+      ? `適用すると、新しいテンプレートの既定になります（既定の無い ${E} か所は外れます）。`
+      : "適用すると、新しいテンプレートの既定になります。";
+    warnings.push(`この回で書き換えた段階が ${N} か所あります。${tail}`);
+  }
+  const note = K > 0
+    ? `手順書で付けた記録 ${K} 件も消えます（台帳に残っています）。`
+    : first
+    ? "Day1 が始まる前なら、「Day ごとの枠に戻す」で戻せます。始まったあとは戻せません。"
+    : null;
+  const items = first ? [] : diff.items ?? [];
+  let detail = items.length <= 2 ? [...items] : [items[0], `ほか ${items.length - 1} か所（［ワークショップの案内］で確かめられます）`];
+  if (detail.length && lines.length + warnings.length + detail.length + (note ? 1 : 0) > ASK_LIMITS.total) {
+    detail = [items.length > 1 ? `${items[0]} ほか ${items.length - 1} か所` : items[0]];
+  }
+  return {
+    title: `${str(cohortName)} に「${str(templateName)}」を適用しますか？`,
+    lines,
+    warnings,
+    detail,
+    note,
+    okLabel: "適用する",
+    kind: "primary",
+  };
+}
+
+/** 包む適用 RPC の結果の文（8.2）
+ * @param {{ cohortName: string, templateName: string, attached?: number, skipped?: number }} o */
+export function applyDiffResultText({ cohortName, templateName, attached = 0, skipped = 0 }) {
+  const a = Number(attached) || 0, s = Number(skipped) || 0;
+  return `${str(cohortName)} にテンプレート「${str(templateName)}」を適用しました。${a > 0 ? `案内を ${a} か所に付けました。` : ""}${
+    s > 0 ? `${s} か所は、テンプレートの段階が変わっていたので付けていません。テンプレートの［変更］で既定を選び直してください。` : ""
+  }`;
+}
+
+/** 包む適用 RPC の前に読めなかったとき（8.2） */
+export const APPLY_DIFF_READ_FAILED =
+  "この回の案内の割り当てを読めませんでした。書き換えた段階を数えられないので、適用を止めました。［最新にする］のあと、もう一度押してください。";
+
+// ---- テンプレートの編集（T1。8.3） ----
+
+/** テンプレートの編集の「既定の案内」の ？ の中身（8.3） */
+export const TEMPLATE_GUIDE_HELP = "回にこのテンプレートを適用すると、各段階にこの案内が付きます。回ごとに替えるときは［ワークショップの案内］の［回ごと］で行います。";
+/** テンプレートの編集のシートの下の 1 行（8.3） */
+export const TEMPLATE_GUIDE_FOOT = "既定の案内と時刻は、これから適用する回に付きます。すでに適用した回は変わりません。";
+/** 既定か案内の一覧を読めなかったとき（8.3。保存を止める） */
+export const TEMPLATE_GUIDES_READ_FAILED = "既定の案内を読めませんでした。このまま保存すると既定が消えるので、保存を止めています。［閉じる］のあと、もう一度開いてください。";
+/** 画面の書き誤り（missing_key）で DB が断ったとき（8.3） */
+export const TEMPLATE_MISSING_KEY = "画面の不具合で保存できませんでした。画面を最新にしてください。";
+
+/** matches_item が偽の既定を外して表示したときの 1 行（8.3） */
+export function templateHiddenLine(n) {
+  return n > 0 ? `テンプレートの段階が別の画面で変わったため、既定の案内 ${n} か所を外して表示しています。保存すると確定します。` : "";
+}
+
+/**
+ * テンプレートの編集の既定の値。返り：{ byPos: Map<"day|seq", { guide, start, end }>, hidden }（hidden は matches_item が偽で外して表示する数）
+ * @param {any[]|null|undefined} defaults
+ * @param {string|null|undefined} templateId
+ */
+export function templateDefaultRows(defaults, templateId) {
+  /** @type {Map<string, { guide: string, start: string, end: string }>} */
+  const byPos = new Map();
+  let hidden = 0;
+  for (const d of defaultsByPos(defaults, templateId).values()) {
+    if (d.matches_item !== true) {
+      hidden++;
+      continue;
+    }
+    const bridge = d.day_kind === "bridge";
+    byPos.set(posKey(d.day_kind, d.seq), {
+      guide: str(d.guide_id),
+      start: bridge ? "" : timeField(d.planned_start),
+      end: bridge ? "" : timeField(d.planned_end),
+    });
+  }
+  return { byPos, hidden };
+}
+
+/** テンプレートの編集の既定の案内の選択肢（日の種類に合う種類だけ。後ろに「未公開」「止めている」） */
+export function templateGuideOptions(dayKind, guides) {
+  const kind = dayKind === "bridge" ? "bridge" : "workshop";
+  return (guides ?? [])
+    .filter((g) => g.kind === kind)
+    .map((g) => ({
+      id: g.id,
+      label: `${str(g.name)}${g.published_version == null ? "（未公開）" : ""}${g.active === false ? "（止めている）" : ""}`,
+    }));
+}
+
+/**
+ * parseTemplateForm の items（day_kind・seq〔その日の中の 1 からの順〕）に、行の既定の案内と時刻を位置で足す（8.3）。
+ * days：日の種類 → 行の並び（{ guide, start, end }。並べ替えのあとの並び）。どの項目にも guide_id・planned_start・planned_end の
+ * 3 つの鍵を必ず入れる（「案内なし」は null）。時刻はワークショップだけ（ブリッジワークは null）。片方だけ・始まり≧終わり・案内なしに時刻は断る。
+ * 返り：{ items, problems }
+ * @param {any[]} items
+ * @param {Record<string, any[]>} days
+ */
+export function templateItemsWithGuides(items, days) {
+  /** @type {string[]} */
+  const problems = [];
+  const out = (items ?? []).map((it) => {
+    const r = days?.[it.day_kind]?.[Number(it.seq) - 1] ?? {};
+    const gid = str(r.guide).trim() || null;
+    const where = `${(/** @type {any} */ (DAY_LABELS))[it.day_kind] ?? str(it.day_kind)}の ${Number(it.seq)} 番目`;
+    let s = null, e = null;
+    if (it.day_kind !== "bridge") {
+      const a = timeValue(r.start), b = timeValue(r.end);
+      if (a === undefined || b === undefined) problems.push(`${where}：時刻は 10:00 の形で入れてください`);
+      else if ((a === null) !== (b === null)) problems.push(`${where}：時刻の目安は、始まりと終わりの両方を入れてください（入れないときは両方とも空に）`);
+      else if (a !== null && b !== null && a >= b) problems.push(`${where}：時刻の目安は、始まりを終わりより前にしてください`);
+      else if (!gid && a !== null) problems.push(`${where}：時刻の目安は、既定の案内を選んだ段階にだけ入れられます`);
+      else {
+        s = a;
+        e = b;
+      }
+    }
+    return { ...it, guide_id: gid, planned_start: s, planned_end: e };
+  });
+  return { items: out, problems };
+}
+
+/**
+ * 包む保存 RPC の誤りを、テンプレートの編集の場所に結ぶ（3.9 の表に足した 1 行。8.3）。items：送った p_items。
+ * DB（251）の detail の index は p_items の 1 から数えた番号（251 の頭の注記）。返りの index はその日の中の 0 からの番号。
+ * 返り：{ area: "band", text }（missing_key）・{ area: "row", dayKind, index, text }（detail に index がある）・null（ほか）
+ * @param {any} error
+ * @param {any[]} items
+ */
+export function templateSaveErrorTarget(error, items) {
+  const d = errorDetail(error);
+  if (d?.reason === "missing_key") return { area: "band", text: TEMPLATE_MISSING_KEY };
+  const i = Number(d?.index) - 1;
+  if (d && d.index !== null && d.index !== undefined && Number.isInteger(i) && i >= 0 && items?.[i]) {
+    return {
+      area: "row",
+      dayKind: items[i].day_kind,
+      index: Number(items[i].seq) - 1,
+      text: str(error?.hint) || explainError(error),
+    };
+  }
+  return null;
 }
