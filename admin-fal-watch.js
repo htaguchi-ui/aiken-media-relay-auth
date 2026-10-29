@@ -104,6 +104,12 @@ const TABS = [
   { key: "alerts", label: "知らせ" },
 ];
 
+/** 単価（price）と請求（billing）の last_committed_at のうち古い方。読めない値は除く。どちらも無ければ null */
+function oldestCommitted(summary) {
+  const times = [summary?.price?.last_committed_at, summary?.billing?.last_committed_at].filter((t) => Number.isFinite(Date.parse(t ?? "")));
+  return times.length ? times.reduce((a, b) => (Date.parse(b) < Date.parse(a) ? b : a)) : null;
+}
+
 /** 閉じたかを確かめる間隔（ミリ秒） */
 const CLOSE_CHECK_MS = 300;
 
@@ -178,7 +184,9 @@ export async function mountFalWatch({ supabase, host, isClosed }) {
   function renderLine() {
     if (!summary) return;
     const s = summarize(summary);
-    line.replaceChildren(el("span", { className: "fw-title", text: "［fal の確かめ］" }), s.line);
+    // 問題が無いとき（s.allVerified）は短い 1 行。時刻は単価・請求の最後の反映のうち古い方（照らし済みの時刻）。数はホバーと窓で見る（管理の構成 0b の P1）
+    line.replaceChildren(el("span", { className: "fw-title", text: "［fal の確かめ］" }), s.allVerified ? `問題なし ${jstText(oldestCommitted(summary))}` : s.line);
+    line.title = s.allVerified ? s.line : "";
     line.classList.toggle("fw-ok", s.allVerified);
     if (s.band.length) {
       const ul = el("ul");
@@ -420,6 +428,7 @@ export async function mountFalWatch({ supabase, host, isClosed }) {
       if (dialog.open) await renderTab();
     } catch (e) {
       if (disposed || myGen !== gen) return;
+      line.title = "";
       line.replaceChildren(
         el("span", { className: "fw-title", text: "［fal の確かめ］" }),
         el("span", { className: "fw-err", text: `読み込めませんでした：${e.message}` }),

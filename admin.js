@@ -774,6 +774,7 @@ sheet.addEventListener("close", () => {
   templateDirty = null;
   placeNotice(); // 閉じたので入れ物を body へ戻す（シートの中身を消す前に）
   sheet.replaceChildren();
+  forgetSheetMember();
   // 設定の項目のシートを閉じたら、入口の行へフォーカスを戻す（選択は残る。下の帯から開き直せる）
   if (kind === "setting") {
     renderSettings();
@@ -1902,11 +1903,17 @@ function renderSelectBar() {
 
 let detailSeq = 0;
 
-async function openMember(email) {
+/**
+ * 人の詳細を開く。広い幅は名簿の右の欄、狭い幅はシート。asSheet が true なら、広い幅でもシートで開く
+ * （回の受講者から開くとき。［名簿］に替えない。管理の構成 0b の P7）。シートで開いた人は、シートを閉じたら右の欄に残さない
+ */
+async function openMember(email, { asSheet = false } = {}) {
   const seq = ++detailSeq;
+  const inAside = () => !asSheet && isDesktop();
+  memberViaSheet = asSheet;
   state.detailEmail = email;
   state.detailLoading = true;
-  if (isDesktop()) {
+  if (inAside()) {
     renderRoster();
     renderMemberAside();
   } else {
@@ -1915,7 +1922,7 @@ async function openMember(email) {
   const fresh = await freshRow(email);
   if (seq !== detailSeq || appClosed) return;
   state.detailLoading = false;
-  if (!isDesktop() && sheetKind !== "member") return; // 読み込み中に閉じられた
+  if (!inAside() && sheetKind !== "member") return; // 読み込み中に閉じられた
   // 当てる直前に、この応答がまだ最新か確かめる。古ければ（より新しい名簿の応答が当たった）当てず、最新の名簿からその人を選び直す。
   // 古い成功で一覧・確認の時刻・前に読んだ値の印を戻さず、古い失敗で詳細を閉じない
   const current = gates.rows.current(fresh.ticket);
@@ -1934,8 +1941,23 @@ async function openMember(email) {
     renderAll();
     return;
   }
-  if (!isDesktop()) openSheet("member", renderMemberSheet);
+  if (!inAside()) openSheet("member", renderMemberSheet);
   renderAll();
+}
+
+/** シートで開いた人（openMember の asSheet）か。シートが閉じたら forgetSheetMember で外す */
+let memberViaSheet = false;
+
+/** シートが閉じたとき：シートで開いた人なら、右の欄・名簿の選択に残さず、読み込み中の続きも止める */
+function forgetSheetMember() {
+  if (!memberViaSheet) return;
+  memberViaSheet = false;
+  detailSeq++;
+  state.detailEmail = null;
+  state.detailLoading = false;
+  if (appClosed) return; // ログアウトで閉じたときは描かない
+  renderMemberAside();
+  renderRoster();
 }
 
 function closeMember() {
@@ -2075,7 +2097,8 @@ function windowSection(r, v) {
   );
 }
 
-function periodList(c, currentPeriod) {
+/** 期間の一覧。credits が false なら Day ごとのクレジットを出さない（段階ごとの枠の回のシート） */
+function periodList(c, currentPeriod, { credits = true } = {}) {
   return el(
     "ol",
     { className: "periods" },
@@ -2090,7 +2113,7 @@ function periodList(c, currentPeriod) {
           el("span", { className: "period-name" }, p.name, p.state === "now" ? el("span", { className: "badge now", text: "今" }) : null),
           el("span", { className: "small muted num", text: p.dates }),
         ),
-        el("span", { className: `period-credits num ${p.unset ? "unset" : ""}`, text: p.credits }),
+        credits ? el("span", { className: `period-credits num ${p.unset ? "unset" : ""}`, text: p.credits }) : null,
       )
     ),
   );
@@ -2115,7 +2138,16 @@ function cohortSection(r, v) {
       "div",
       { className: "box-head" },
       el("div", { className: "detail-title" }, el("h3", { text: "所属する回" }), el("span", { className: "small num", text: labelText })),
-      el("button", { type: "button", className: "link-btn", text: "回を開く", onclick: () => openCohort(r.cohort_id) }),
+      el("button", {
+        type: "button",
+        className: "link-btn",
+        text: "回を開く",
+        onclick: () => {
+          // 広い幅で人をシートで開いているとき（回の受講者から開いた。0b の P7）は、シートを閉じて後ろの回の欄を見せる
+          if (isDesktop() && sheetKind === "member") closeSheet();
+          openCohort(r.cohort_id);
+        },
+      }),
     ),
     // admin_usage の日付・クレジットは「実際に適用される値」（回に所属していれば回の値）
     periodList(r, r.current_period),
@@ -3118,8 +3150,18 @@ async function loadCohortCloseStatus(id) {
   return !!status;
 }
 
+/**
+ * 締めの札。「未クローズ」は Day2 のあとの段階ごとの枠の回だけに出す（管理の構成 0b の P5）。上から順に決める：
+ * (1) Day の回（段階の情報があり、その回の credit_mode が stage でない）→ 出さない (2) 締めの一覧に無い → クローズ未確認
+ * (3) 締め済み → クローズ済み (4) 段階の情報・その回の情報・回の行のどれかが無い → 未クローズのまま (5) Day2 のあとでない → 出さない
+ * (6) 残り → 未クローズ
+ */
 function cohortCloseBadge(id) {
+  const info = stagesAvailable() ? cohortInfoOf(id) : null;
+  if (info && info.credit_mode !== "stage") return null;
   const summary = state.cohortCloseStates.get(id);
+  const row = state.cohorts.find((c) => c.id === id);
+  if (summary && summary.state !== "closed" && info && row && row.current_period !== "after") return null;
   return el("span", {
     className: `badge ${summary?.state === "closed" ? "stopped" : "default"}`, // 0179 の "off" は CSS に無い。停止の色（stopped）にそろえる
     text: summary ? summary.state === "closed" ? "クローズ済み" : "未クローズ" : "クローズ未確認",
@@ -3440,21 +3482,27 @@ function cohortMembers(c) {
   return sortByRemaining(state.rows.filter((r) => r.role === "student" && r.cohort_id === c.id));
 }
 
+/** 段階ごとの枠の回の、Day ごとのクレジットの代わりの 1 行（1280 の右の欄と 360 のシートで同じ文） */
+const STAGE_LIMIT_NOTE = "この回の上限は、段階ごとに決まります（下の「段階」で変えます）。";
+
 function renderCohortSheet() {
   const c = state.cohorts.find((x) => x.id === state.cohortId);
   if (!c) {
     closeSheet();
     return;
   }
+  // 段階ごとの枠の回は、Day ごとのクレジットを出さず、1280 の右の欄（cohortEditForm）と同じ 1 行の注意にする（管理の構成 0b の P3）
+  const stageMode = isStageCohort(c.id);
+  const title = stageMode ? "日程" : "日程と 1 人あたりのクレジット";
   const schedule = state.cohortEditing
-    ? el("section", { className: "box" }, el("h3", { text: "日程と 1 人あたりのクレジット" }), cohortEditForm(c))
+    ? el("section", { className: "box" }, el("h3", { text: title }), cohortEditForm(c))
     : el(
       "section",
       { className: "box tight" },
       el(
         "div",
         { className: "box-head" },
-        el("h3", { text: "日程と 1 人あたりのクレジット" }),
+        el("h3", { text: title }),
         el("button", {
           type: "button",
           className: "link-btn",
@@ -3465,7 +3513,8 @@ function renderCohortSheet() {
           },
         }),
       ),
-      periodList(c, c.current_period),
+      periodList(c, c.current_period, { credits: !stageMode }),
+      stageMode ? el("p", { className: "note-box", text: STAGE_LIMIT_NOTE }) : null,
       el("p", { className: "hint", text: "変更すると、所属している受講者全員に反映されます。" }),
     );
   setSheet({
@@ -3573,13 +3622,9 @@ function cohortStudentsBox(c, limit) {
   );
 }
 
+/** 回の受講者から開く：［名簿］に替えず、どの幅でも人のシートで開く（管理の構成 0b の P7） */
 function openMemberFromCohort(email) {
-  if (isDesktop()) {
-    switchTab("roster");
-    openMember(email);
-  } else {
-    openMember(email);
-  }
+  return openMember(email, { asSheet: true });
 }
 
 function showCohortInRoster(id) {
@@ -3818,7 +3863,7 @@ function cohortEditForm(c) {
     el("div", { className: "grid-2" }, field("Day1", f.day1), field("Day2", f.day2)),
     rule?.guarded ? el("p", { className: "hint", text: rule.note }) : null,
     stageMode
-      ? el("p", { className: "note-box", text: "この回の上限は、段階ごとに決まります（下の「段階」で変えます）。" })
+      ? el("p", { className: "note-box", text: STAGE_LIMIT_NOTE })
       : creditsFieldset(f, c.current_period),
     field("名前", f.name),
     field("メモ", f.note),
