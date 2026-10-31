@@ -201,7 +201,7 @@ export function createStageTimer(deps) {
   async function cancel() {
     const ok = await deps.confirm({
       title: "制作時間を取り消しますか？",
-      lines: ["受講者の AI は、時刻表の目安（無ければ残り時間を言わない）に戻ります。段階はそのままです。"],
+      lines: ["受講者の AI は、段階の時間の目安（無ければ残り時間を言わない）に戻ります。段階はそのままです。"],
       okText: "取り消す",
     });
     if (!ok) return;

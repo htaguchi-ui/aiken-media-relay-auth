@@ -1,7 +1,7 @@
 // 管理コンソールの［ワークショップの案内］（docs/design-workshop-guide.md 第 1.3.1 版 4.6。束 K の K3。
 // .orchestration/workshop-ui-20261028/DESIGN.md 第 I 部〔組 8〕で、回を起点の画面に作り替えた）。
 // 左のメニュー（#side-menu）の最後に［案内］を 1 つ足し、押すと自分の <dialog> を開く。中は 2 つのつまみ：
-//   ［回ごと］回を選ぶ → 段階ごとに案内・公開の札・予定の時刻。行で選び、固定の帯の［まとめて保存］で付ける。行の［開く］で右に編集
+//   ［回ごと］回を選ぶ → 段階ごとに案内・公開の札・時間（分）。行で選び、固定の帯の［まとめて保存］で付ける。行の［開く］で右に編集
 //   ［案内の一覧］名前・公開の札・使っている所。名前を押すと右に編集
 // 編集は必ず書く 5 欄（テーマ・大切なこと・目標・最低限の完成・手順）と「詳しく（任意）」。最初のひと言・管理用の名前・仕上げの分は
 // 画面が既定で埋める（最初のひと言は「{大切なこと}まずは「{手順 1}」から、{問いかけ}」。［書き直す］で手で直せる。
@@ -20,6 +20,9 @@
 // 読み、回のテンプレートの名前・由来の札・［既定に戻す］［既定を付ける］［既定をまとめて付ける］・「使っている所」のテンプレートを出す。
 // どちらかが「関数が無い」（関数ごとにその名前で判定）なら既定の機能を無しとし、組 8 の画面のまま動く（8.5）。書き込みは組 8 と同じ
 // admin_set_cohort_stage_guide だけ（［既定に戻す］なども行の下書きを作り、［まとめて保存］で送る）。テンプレートの名前は stage_templates を読む。
+// 組 10（.orchestration/stage-minutes-20261029/DESIGN.md 2.2・2.3）：［回ごと］の時刻の欄をやめ、段階の分（admin_cohort_stage_minutes の読みだけ）を
+// 「90 分」と出す（変えるのは管理コンソールの「段階を編集」）。割り当ては時刻を空で送る。open({ cohortId, stageId, onClose }) で
+// その回・その段階を選んで開き、onClose は［閉じる］・Esc で閉じたとき（closeNow）にだけ 1 回呼ぶ（dispose・管理コンソールが閉じたときは呼ばない）。
 import {
   activeAsk,
   assignmentArgs,
@@ -38,6 +41,7 @@ import {
   guideListRow,
   guideOptionsFor,
   guideState,
+  minutesText,
   HELP_MAIN_FIRST_8B,
   KIND_LABELS,
   missingFunction,
@@ -50,7 +54,6 @@ import {
   publishAsk,
   stageRowName,
   templatePos,
-  timeField,
   todayJst,
   TPL_FN,
   toBody,
@@ -139,6 +142,8 @@ dialog.wg-dialog::backdrop { background: var(--scrim, rgba(26, 30, 38, 0.62)); }
 .wg-confirm p { margin: 2px 0; font-size: 13px; }
 .wg-scroll td select { width: 100%; }
 .wg-times { display: inline-flex; align-items: center; gap: 4px; flex-wrap: nowrap; }
+.wg-min { font-size: 13px; white-space: nowrap; color: var(--text-2, #4A505B); }
+.wg-scroll tr.wg-target > td { background: var(--surface-2, #F6F7F9); }
 .wg-ops { display: flex; gap: 6px; align-items: center; flex-wrap: wrap; }
 details.wg-more > summary { cursor: pointer; font-size: 13px; font-weight: 600; margin: 8px 0 4px; }
 /* 由来の札（組 8b。8.4）：広い幅は案内の下に札と操作、狭い幅は札を公開の札の段・操作を時刻の段に（1 段階 4 段のまま。8.1） */
@@ -339,11 +344,17 @@ export function mountWorkshopGuide({ supabase, menu, isClosed, ask, askDiscard }
     /** 回の id → admin_cohort_applied_defaults の返り（{ applied, orphan_ops }） */
     applied: new Map(),
     appliedErrors: new Set(),
+    // 組 10：回の id → 段階の分（stage_id → 分か null）。読めない・関数が無いときは null（分を出さない）
+    minutes: new Map(),
+    /** 組 10：open({ cohortId, stageId }) で目立たせる段階（閉じると消える） */
+    target: null,
   };
   // 選んでいる案内・窓が替わるたびに進める番号（確かめを出した時点の対象を、あとで替わっていないか確かめる。F240-01）
   let epoch = 0;
   // 読み込みごとの番号（新しい読み込みのあとに戻った古い応答は描かない）
-  const seq = { guides: 0, cohorts: 0, frames: 0, assign: new Map(), tpl: 0, tplNames: 0, applied: new Map() };
+  const seq = { guides: 0, cohorts: 0, frames: 0, assign: new Map(), tpl: 0, tplNames: 0, applied: new Map(), minutes: new Map() };
+  // 組 10：窓を閉じたときに 1 回だけ呼ぶ関数（open(opts) の onClose。次の open() には持ち越さない）
+  let onCloseOnce = null;
   // 文字を入れたときに、描き直さずに状態だけ替える所（F240-05）
   let live = null;
   let disposed = false;
@@ -378,6 +389,10 @@ export function mountWorkshopGuide({ supabase, menu, isClosed, ask, askDiscard }
     S.applied = new Map();
     S.tplDefaults = null;
     S.rowDrafts.clear();
+    S.minutes = new Map();
+    S.target = null;
+    // 閉じた管理コンソールの上で「段階を編集」を開き直さないよう、onClose は呼ばずに捨てる
+    onCloseOnce = null;
   }
   function checkClosed() {
     if (disposed) return true;
@@ -452,9 +467,9 @@ export function mountWorkshopGuide({ supabase, menu, isClosed, ask, askDiscard }
   const hasRowDrafts = () => S.rowDrafts.size > 0;
   function unsavedWhat({ editor = true, rows = true } = {}) {
     const e = editor && S.dirty, r = rows && hasRowDrafts();
-    if (e && r) return "案内の入力と、段階の行で選んだ案内・時刻";
+    if (e && r) return "案内の入力と、段階の行で選んだ案内";
     if (e) return "案内の入力";
-    if (r) return "段階の行で選んだ案内・時刻";
+    if (r) return "段階の行で選んだ案内";
     return "";
   }
   /** 未保存（編集の欄・行の下書き）があれば確かめる。破棄したら消す。続けてよければ true */
@@ -520,6 +535,21 @@ export function mountWorkshopGuide({ supabase, menu, isClosed, ask, askDiscard }
       S.assign.set(cid, data ?? { stages: [], orphans: [] });
       S.assignErrors.delete(cid);
     }
+  }
+  /** 組 10：回の段階の分（表示だけ）。関数が無い・読めないときは null（分を出さない。ほかの読みと保存はそのまま） */
+  async function loadMinutesFor(cid) {
+    if (!cid) return;
+    const my = (seq.minutes.get(cid) ?? 0) + 1;
+    seq.minutes.set(cid, my);
+    const { data, error } = await rpc("admin_cohort_stage_minutes", { p_cohort_id: cid });
+    if (my !== seq.minutes.get(cid) || checkClosed()) return;
+    const list = !error && Array.isArray(data?.stages) ? data.stages : null;
+    S.minutes.set(
+      cid,
+      list
+        ? new Map(list.filter((x) => x && typeof x.stage_id === "string").map((x) => [x.stage_id, Number.isInteger(x.minutes) ? x.minutes : null]))
+        : null,
+    );
   }
   /** 使っている所のために、終わっていない回（と選んでいる回）の割り当てを読む */
   async function loadAssignAll() {
@@ -612,7 +642,7 @@ export function mountWorkshopGuide({ supabase, menu, isClosed, ask, askDiscard }
     await Promise.all([loadGuides(), loadCohorts(), loadFrames(), loadTplDefaults()]);
     if (checkClosed()) return;
     if (!S.cohortId || !(S.cohorts ?? []).some((c) => c.id === S.cohortId)) S.cohortId = defaultCohortId(S.cohorts, todayJst());
-    await Promise.all([loadAssignAll(), loadAppliedFor(S.cohortId), loadTplNames()]);
+    await Promise.all([loadAssignAll(), loadAppliedFor(S.cohortId), loadTplNames(), loadMinutesFor(S.cohortId)]);
   }
   async function reload() {
     if (checkClosed() || S.busy) return;
@@ -623,13 +653,35 @@ export function mountWorkshopGuide({ supabase, menu, isClosed, ask, askDiscard }
     render();
   }
 
-  async function open() {
+  /**
+   * 窓を開く。opts（省ける。組 10）：{ cohortId, stageId, onClose }。cohortId・stageId があれば［回ごと］でその回を選び、その段階の行を
+   * 目立たせる（案内が付いていれば右に編集を開き、無ければその行の案内の選択へ）。onClose は、［閉じる］・Esc で実際に閉じたあとに 1 回だけ呼ぶ
+   * @param {{ cohortId?: string, stageId?: string, onClose?: () => void }} [opts]
+   */
+  async function open(opts) {
     if (checkClosed()) return;
+    onCloseOnce = typeof opts?.onClose === "function" ? opts.onClose : null;
+    S.target = opts?.cohortId && opts?.stageId ? { cohortId: String(opts.cohortId), stageId: String(opts.stageId) } : null;
+    if (S.target) {
+      S.view = "cohort";
+      S.cohortId = S.target.cohortId;
+      closeEditor();
+    }
     if (!dialog.open) dialog.showModal();
     cancelInlineConfirm();
     setMsg("", "");
     render();
     await loadAll();
+    if (checkClosed()) return;
+    const t = S.target;
+    if (t && S.cohortId === t.cohortId) {
+      const st = (S.assign.get(t.cohortId)?.stages ?? []).find((x) => x.stage_id === t.stageId);
+      if (st?.guide_id && guideById(st.guide_id)) selectGuide(st.guide_id);
+      render();
+      if (S.sel) showEditor();
+      else live?.fk.get(`row:${rowKey(t.cohortId, { stage_id: t.stageId })}:g`)?.focus?.();
+      return;
+    }
     render();
   }
   entry.addEventListener("click", () => open());
@@ -642,8 +694,19 @@ export function mountWorkshopGuide({ supabase, menu, isClosed, ask, askDiscard }
     S.problem = null;
     S.rowDrafts.clear();
     S.rowErrors.clear();
+    S.target = null;
     live = null;
     if (dialog.open) dialog.close();
+    // 組 10：開いた側（「段階を編集」）へ戻す。1 回だけ呼ぶ
+    const f = onCloseOnce;
+    onCloseOnce = null;
+    if (f) {
+      try {
+        f();
+      } catch (e) {
+        console.error(e);
+      }
+    }
   }
   async function requestClose() {
     if (S.busy || checkClosed()) return;
@@ -1012,16 +1075,14 @@ export function mountWorkshopGuide({ supabase, menu, isClosed, ask, askDiscard }
     // 段階の行の［新しく作る］で開いた（まだ保存していない）案内は、回を替えたら付け先を外す（見えない回の段階に付けない）
     if (S.sel?.attach && S.sel.attach.cohortId !== id) S.sel.attach = null;
     S.cohortId = id;
+    if (S.target && S.target.cohortId !== id) S.target = null;
     render();
-    await Promise.all([loadAssignFor(id), loadAppliedFor(id)]);
+    await Promise.all([loadAssignFor(id), loadAppliedFor(id), loadMinutesFor(id)]);
     render();
   }
   const rowKey = (cid, s) => `${cid}|${s.stage_id}`;
-  const savedRow = (s) => ({
-    guide: s.guide_id ?? "",
-    start: s.day_kind === "bridge" ? "" : timeField(s.planned_start),
-    end: s.day_kind === "bridge" ? "" : timeField(s.planned_end),
-  });
+  // 組 10：時刻は画面で持たない（いつも空。保存では時刻を空で送る）。比べるのは案内だけ
+  const savedRow = (s) => ({ guide: s.guide_id ?? "", start: "", end: "" });
   const sameRow = (a, b) => a.guide === b.guide && a.start === b.start && a.end === b.end;
   /** 今の回の、保存していない行の数（今の回の段階〔a.stages〕にある行だけ。無くなった段階の下書きは［まとめて保存］で送らないので数えない） */
   function draftCount(cid = S.cohortId) {
@@ -1754,7 +1815,7 @@ export function mountWorkshopGuide({ supabase, menu, isClosed, ask, askDiscard }
     } else {
       const t = el("table");
       const head = el("tr");
-      for (const h of compact ? ["段階", "公開"] : ["段階", "案内", "公開", "予定の時刻"]) {
+      for (const h of compact ? ["段階", "公開"] : ["段階", "案内", "公開", "時間"]) {
         head.append(el("th", { scope: "col", text: h }));
       }
       t.append(el("thead", {}, head));
@@ -1786,8 +1847,7 @@ export function mountWorkshopGuide({ supabase, menu, isClosed, ask, askDiscard }
   /** 由来の札の値を、その行の下書きにする（［既定に戻す］［既定を付ける］［既定をまとめて付ける］。まだ保存しない。保存は［まとめて保存］） */
   function draftFromOrigin(cid, s, value) {
     const key = rowKey(cid, s);
-    const bridge = s.day_kind === "bridge";
-    const v = { guide: value?.guide_id ?? "", start: bridge ? "" : value?.start ?? "", end: bridge ? "" : value?.end ?? "" };
+    const v = { guide: value?.guide_id ?? "", start: "", end: "" };
     if (sameRow(v, savedRow(s))) S.rowDrafts.delete(key);
     else S.rowDrafts.set(key, v);
     S.rowErrors.delete(key);
@@ -1818,17 +1878,12 @@ export function mountWorkshopGuide({ supabase, menu, isClosed, ask, askDiscard }
     }
     g.value = d.guide;
     live.fk.set(`row:${key}:g`, g);
-    let start = null, end = null;
+    // 組 10：時刻の欄の代わりに分の表示だけ（変えるのは「段階を編集」）。ブリッジワークは「—」・分を読めないときは何も出さない
     const times = el("span", { className: "wg-times" });
     if (s.day_kind === "bridge") times.append(el("span", { className: "wg-hint", text: "—" }));
     else {
-      start = el("input", { type: "time", "aria-label": `${stageRowName(s)}の始まり`, "data-fk": `row:${key}:s`, disabled: S.busy });
-      end = el("input", { type: "time", "aria-label": `${stageRowName(s)}の終わり`, "data-fk": `row:${key}:e`, disabled: S.busy });
-      start.value = d.start;
-      end.value = d.end;
-      live.fk.set(`row:${key}:s`, start);
-      live.fk.set(`row:${key}:e`, end);
-      times.append(start, el("span", { text: "〜" }), end);
+      const mins = S.minutes.get(cid);
+      if (mins) times.append(el("span", { className: "wg-min", title: "段階を編集で変えます", text: minutesText(mins.get(s.stage_id)) || "—" }));
     }
     const mark = el("span", { className: "wg-unsaved", text: " ●未保存", hidden: !S.rowDrafts.has(key) });
     // 由来の札（組 8b。未保存の行には出さず「●未保存」だけ。8.4）。広い幅は案内の下、狭い幅は札を公開の段・操作を時刻の段に
@@ -1860,7 +1915,7 @@ export function mountWorkshopGuide({ supabase, menu, isClosed, ask, askDiscard }
     }
     // 入れたものを行の下書きに残す（ほかの行の保存や、この行の誤りで描き直しても消えない）。元の値に戻したら下書きから外す
     const keep = () => {
-      const v = { guide: g.value, start: start?.value ?? "", end: end?.value ?? "" };
+      const v = { guide: g.value, start: "", end: "" };
       if (sameRow(v, saved)) {
         S.rowDrafts.delete(key);
         S.rowErrors.delete(key);
@@ -1872,17 +1927,6 @@ export function mountWorkshopGuide({ supabase, menu, isClosed, ask, askDiscard }
       keep();
       render();
     });
-    for (const t of [start, end]) {
-      if (!t) continue;
-      t.addEventListener("input", () => {
-        keep();
-        updateRowBand();
-      });
-      t.addEventListener("change", () => {
-        keep();
-        updateRowBand();
-      });
-    }
     const st = rowState(cid, s, d);
     const rowErr = S.rowErrors.get(key);
     const op = d.guide
@@ -1896,9 +1940,10 @@ export function mountWorkshopGuide({ supabase, menu, isClosed, ask, askDiscard }
       });
     const stCell = stateCell(st, "公開");
     if (originTag) stCell.append(originTag);
+    const target = !!S.target && S.target.cohortId === cid && S.target.stageId === s.stage_id;
     return el(
       "tr",
-      {},
+      target ? { className: "wg-target" } : {},
       el("td", { className: "wg-stage-name" }, el("span", { text: stageRowName(s) }), mark),
       el("td", {}, g, originWide, rowErr ? el("p", { className: "wg-row-err", role: "alert", text: rowErr }) : null),
       stCell,
@@ -1927,13 +1972,6 @@ export function mountWorkshopGuide({ supabase, menu, isClosed, ask, askDiscard }
       ),
       stateCell(st, "公開"),
     );
-  }
-  function updateRowBand() {
-    // 時刻を入れている間は描き直さない（入力の focus を保つ）。帯の文とボタンだけ替える
-    if (!live?.rowBand) return;
-    const n = draftCount();
-    live.rowBand.text.textContent = n ? `保存していない行が ${n} つあります` : "段階ごとに案内を選び、［まとめて保存］で付けます";
-    for (const b of live.rowBand.buttons) b.disabled = S.busy || !n;
   }
 
   function listView(compact) {

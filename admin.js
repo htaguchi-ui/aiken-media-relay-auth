@@ -195,6 +195,20 @@ import {
   normalizeCohortCloseSummaries,
 } from "./cohort-close-lib.js";
 import { fillIcons, renderSiteNav } from "./site-nav.js";
+// 組 10：段階の分の純粋な関数（講師ページと共用。静的に import する＝stage-minutes DESIGN 2.4・9 章）
+import {
+  bindStageIds,
+  collectMinuteChanges,
+  countStagesWithMinutes,
+  DAY_MINUTES_MAX,
+  dayTotalView,
+  formatStageMinutes,
+  MSG_DAY_MINUTES_WARN,
+  MSG_MINUTES_INVALID,
+  normalizeStageMinutes,
+  parseStageMinutes,
+  sumMinutes,
+} from "./stage-minutes-lib.js";
 
 // 他のサイトに埋め込まれて操作させられるのを防ぐ（GitHub Pages では frame-ancestors を指定できないため）
 if (window.top !== window.self) {
@@ -3411,7 +3425,9 @@ async function openCohort(id) {
   }
   // 編集の前に読み直す（人数・使用・日付を最新に）
   await Promise.all([loadCohorts(), loadUsage(), loadStageInfo()]);
-  if (stagesAvailable()) await Promise.all([loadCohortFlags(id), isStageCohort(id) ? loadCohortStageStatus(id) : null]);
+  if (stagesAvailable()) {
+    await Promise.all([loadCohortFlags(id), isStageCohort(id) ? loadCohortStageStatus(id) : null, isStageCohort(id) ? loadCohortStageMinutes(id) : null]);
+  }
   await loadCohortCloseStatus(id);
   if (seq !== cohortSeq) return;
   state.cohortLoading = false;
@@ -6290,6 +6306,8 @@ function emptyStageState() {
     /** 組 8b：テンプレートの既定（admin_template_guides_list）。tplGuidesState は ok・missing（関数が無い。組 8 の画面のまま）・error（読めない）・unknown */
     tplGuides: [],
     tplGuidesState: "unknown",
+    /** 組 10：回ごとの段階の分（admin_cohort_stage_minutes）。回の id → { status: "ok", byId }・{ status: "missing" }・{ status: "error" } */
+    minutes: new Map(),
   };
 }
 
@@ -6431,6 +6449,55 @@ function templateGuideLine(templateId, s) {
   return `案内：${d.guide_name ?? ""}${a && b ? `・${a}〜${b}` : ""}`;
 }
 
+// ---- 組 10：段階の分（.orchestration/stage-minutes-20261029/DESIGN.md 2.1・2.2・3 章） ----
+// 分は回ごとに読む（回の詳細を描くときと「段階を編集」を開くとき）。loadStageInfo には混ぜない（分の読みの失敗で段階の情報全体を「古い」にしない）。
+// 分の RPC の誤りは isStageSchemaMissing・explainError に渡さない（「無い」の誤りの hint に 016 の名前が候補で入ることがあり、
+// 渡すと段階の欄全体が「016 が未適用」になるため）。「無い」は呼んだ RPC の名前で isMissingFunctionError を見る（3 章の誤りをさばく順）
+const MINUTES_READ_FN = "admin_cohort_stage_minutes";
+const MINUTES_SAVE_FN = "admin_set_cohort_stage_minutes";
+const MINUTES_NOT_SAVED = "分は保存されていません";
+// 分の読み取り・合計・変わった段階を集める・答えの形の確かめは stage-minutes-lib.js（講師ページと共用）。ここは画面と RPC の呼び方だけ
+
+/** その回の段階の分の合計（日の種類ごと。今ある段階だけ数える。適用し直しで id が変わった段階は数えない） */
+function stageMinutesTotals(byId, stages) {
+  const of = (kind) => sumMinutes((stages ?? []).filter((s) => s.day_kind === kind).map((s) => byId.get(s.id)));
+  return { day1: of("day1"), day2: of("day2") };
+}
+
+/** 回ごとの読みの番号（古い答えで新しい答えを上書きしない） */
+const stageMinutesSeq = new Map();
+
+/** 分を読む（回ごと）。返り：{ status: "ok", byId }・{ status: "missing" }（252 が無い）・{ status: "error" }（通信・権限・形の誤り） */
+async function loadCohortStageMinutes(cid) {
+  const my = (stageMinutesSeq.get(cid) ?? 0) + 1;
+  stageMinutesSeq.set(cid, my);
+  const r = await rpcSettled(MINUTES_READ_FN, { p_cohort_id: cid });
+  let v;
+  if (r.error) v = isMissingFunctionError(r.error, MINUTES_READ_FN) ? { status: "missing" } : { status: "error" };
+  else {
+    const n = normalizeStageMinutes(r.data, cid);
+    v = n ? { status: "ok", byId: n.byStage } : { status: "error" };
+  }
+  if (stageMinutesSeq.get(cid) === my && !appClosed) state.stages.minutes.set(cid, v);
+  return v;
+}
+
+/** 適用の確かめの「分を入れた段階 N か所は未設定に戻ります」の N（252 が無ければ 0・ほかの理由で読めなければ "unknown"。1.1 (b)） */
+async function countStageMinutes(cid) {
+  const r = await rpcSettled(MINUTES_READ_FN, { p_cohort_id: cid });
+  if (r.error) return isMissingFunctionError(r.error, MINUTES_READ_FN) ? 0 : "unknown";
+  return countStagesWithMinutes(normalizeStageMinutes(r.data, cid)) ?? "unknown";
+}
+
+/** 「段階を編集」の行の下の分の欄と［案内］のボタンの見た目 */
+const STAGE_MINUTES_CSS = `
+.stage-extra-row { display: flex; flex-wrap: wrap; gap: 6px 10px; align-items: center; margin: 2px 0 10px; padding-left: 30px; }
+.stage-extra-row .stage-min { display: inline-flex; gap: 4px; align-items: center; }
+.stage-extra-row .stage-min input { width: 4.5em; }`;
+function ensureStageMinutesStyle() {
+  if (!document.getElementById("stage-minutes-style")) document.head.append(el("style", { id: "stage-minutes-style", text: STAGE_MINUTES_CSS }));
+}
+
 /** 回の今の段階など（cohort_stage_status）を読む。読めなければ null（段階の欄に今の段階を出さないだけ） */
 async function loadCohortStageStatus(id) {
   const { data, error } = await supabase.rpc("cohort_stage_status", { p_cohort_id: id });
@@ -6455,26 +6522,34 @@ function templateName(id) {
 /**
  * 段階の行の入力欄の組（テンプレートの編集・回の段階の編集で共通）。canStructure は順番・数を変えられるか。
  * guides（組 8b。テンプレートの編集のときだけ渡す。8.3）：{ options: [{ id, label }]、readFailed: 既定を読めなかったか }。
- * 渡すと、行ごとに既定の案内（と、ワークショップの日だけ時刻の目安 2 つ）を行の値として持つ（↑↓ で一緒に動く）。回の段階の編集では渡さない
+ * 渡すと、行ごとに既定の案内（と、ワークショップの日だけ時刻の目安 2 つ）を行の値として持つ（↑↓ で一緒に動く）。回の段階の編集では渡さない。
+ * 組 10：guides.times が false なら時刻の欄を出さない（テンプレートの編集。時刻は持たない。stage-minutes DESIGN 1.4）。
+ * minutes（回の段階の編集・ワークショップの日だけ）：行ごとに分の欄（行の値 minutes）と、日の合計（head）・6 時間を超えたときの 1 行。
+ * guideButton（回の段階の編集だけ）：(行, 番号) → 行の下に置く［案内］のボタン。どちらも渡さなければ今と同じ形
  */
-function rowsEditor(kind, initial, { canStructure, guides = null }) {
+function rowsEditor(kind, initial, { canStructure, guides = null, minutes = false, guideButton = null }) {
   const where = DAY_KIND_LABELS[kind];
   const max = kind === "bridge" ? 1 : MAX_STAGES_PER_DAY;
-  const withTimes = !!guides && kind !== "bridge";
+  const withTimes = !!guides && guides.times !== false && kind !== "bridge";
+  const withMinutes = !!minutes && kind !== "bridge";
   let rows = initial.map((r) => ({
     id: r.id ?? null,
     label: r.label ?? "",
     title: r.title ?? "",
     credits: r.credits === null || r.credits === undefined ? "" : String(r.credits),
     ...(guides ? { guide: r.guide ?? "", start: r.start ?? "", end: r.end ?? "" } : {}),
+    ...(withMinutes ? { minutes: r.minutes === null || r.minutes === undefined ? "" : String(r.minutes) } : {}),
   }));
   /** DB が行を断った理由（行の番号 → 文。並べ替え・足す・消すで消える） */
   let errors = new Map();
   const host = el("div", { className: "stage-rows" });
   const total = el("p", { className: "hint num", "aria-live": "polite" });
+  // 組 10：分の合計（日の見出しの右）と 6 時間を超えたときの 1 行（保存は止めない）
+  const minHead = withMinutes ? el("span", { className: "small muted num", "aria-live": "polite" }) : null;
+  const minWarn = withMinutes ? el("p", { className: "warn-text small", hidden: true, text: MSG_DAY_MINUTES_WARN }) : null;
   const addBtn = el("button", { type: "button", className: "btn", text: "段階を足す", onclick: () => {
     read();
-    rows.push({ id: null, label: "", title: "", credits: "", ...(guides ? { guide: "", start: "", end: "" } : {}) });
+    rows.push({ id: null, label: "", title: "", credits: "", ...(guides ? { guide: "", start: "", end: "" } : {}), ...(withMinutes ? { minutes: "" } : {}) });
     errors = new Map();
     draw();
   } });
@@ -6495,6 +6570,12 @@ function rowsEditor(kind, initial, { canStructure, guides = null }) {
           rows[i].start = row.querySelector('[data-f="start"]')?.value ?? "";
           rows[i].end = row.querySelector('[data-f="end"]')?.value ?? "";
         }
+      });
+    }
+    if (withMinutes) {
+      host.querySelectorAll(".stage-extra-row").forEach((row, i) => {
+        const m = row.querySelector('[data-f="minutes"]');
+        if (rows[i] && m) rows[i].minutes = m.value;
       });
     }
     return rows;
@@ -6519,7 +6600,7 @@ function rowsEditor(kind, initial, { canStructure, guides = null }) {
       start.value = r.start ?? "";
       end.value = r.end ?? "";
       parts.push(el("span", { className: "stage-times" }, start, el("span", { text: "〜" }), end));
-    } else {
+    } else if (guides.times !== false) {
       parts.push(el("span", { className: "hint", text: "（時刻なし）" }));
     }
     const err = errors.get(i);
@@ -6530,11 +6611,28 @@ function rowsEditor(kind, initial, { canStructure, guides = null }) {
       err ? el("p", { className: "warn-text small stage-guide-err", role: "alert", text: err }) : null,
     );
   }
+  /** 行の下の分の欄と［案内］のボタン（組 10。回の段階の編集だけ） */
+  function extraRow(r, i) {
+    const parts = [];
+    if (withMinutes) {
+      const m = el("input", { type: "text", inputmode: "numeric", maxlength: "3", className: "input num", "aria-label": `${where} ${i + 1} 番目の分`, "data-f": "minutes" });
+      m.value = r.minutes ?? "";
+      m.addEventListener("input", updateTotal);
+      parts.push(el("span", { className: "stage-min" }, m, el("span", { text: "分" })));
+    }
+    if (guideButton) parts.push(guideButton(r, i));
+    return el("div", { className: "stage-extra-row" }, ...parts);
+  }
   function updateTotal() {
     read();
     const sum = rows.reduce((n, r) => n + (parseCredits(r.credits) ?? 0), 0);
     total.textContent = `${where}の合計 ${formatCredits(sum)} / ${formatCredits(MAX_DAY_STAGE_TOTAL)}`;
     total.classList.toggle("warn-text", sum > MAX_DAY_STAGE_TOTAL);
+    if (withMinutes) {
+      const v = dayTotalView(rows.map((r) => parseStageMinutes(r.minutes).minutes));
+      minHead.textContent = v.total > 0 ? v.text : "";
+      minWarn.hidden = !v.warn;
+    }
   }
   function move(i, d) {
     read();
@@ -6581,7 +6679,7 @@ function rowsEditor(kind, initial, { canStructure, guides = null }) {
             )
             : null,
         );
-        return guides ? [line, guideRow(r, i)] : [line];
+        return guides ? [line, guideRow(r, i)] : withMinutes || guideButton ? [line, extraRow(r, i)] : [line];
       }).flat(),
     );
     addBtn.disabled = rows.length >= max;
@@ -6589,8 +6687,10 @@ function rowsEditor(kind, initial, { canStructure, guides = null }) {
   }
   draw();
   return {
-    node: el("div", { className: "stack" }, host, canStructure ? addBtn : null, total),
-    /** 入力された行（id・名前・題名・クレジットの文字。組 8b の口があれば既定の案内〔guide〕と時刻〔start・end〕も） */
+    node: el("div", { className: "stack" }, host, canStructure ? addBtn : null, total, minWarn),
+    /** 組 10：日の見出しの右に置く分の合計（分の欄が無ければ null） */
+    head: minHead,
+    /** 入力された行（id・名前・題名・クレジットの文字。組 8b の口があれば既定の案内〔guide〕と時刻〔start・end〕も。組 10 の分の欄があれば分〔minutes〕も） */
     read: () => read().map((r) => ({ ...r })),
     /** DB が断った行の下に理由を出す（組 8b。i はその日の中の 0 からの番号） */
     setError: (i, text) => {
@@ -6623,13 +6723,19 @@ function stagesSection(c) {
     }
     const totals = dayTotals(rows);
     const g = groupStagesByDay(rows);
+    // 組 10：分（読めたときだけ。ワークショップの日だけ）
+    const mins = S.minutes.get(c.id);
+    const minById = mins?.status === "ok" ? mins.byId : null;
+    const minTotals = minById ? stageMinutesTotals(minById, rows) : null;
+    const minOf = (s) => (minById && s.day_kind !== "bridge" ? minById.get(s.id) ?? null : null);
     for (const kind of DAY_KINDS) {
       if (kind === "bridge" && !dayKindStartDate(full, "bridge")) continue;
+      const minHead = minTotals && kind !== "bridge" && minTotals[kind] > 0 ? `${minTotals[kind]} 分 · ` : "";
       out.push(
         el(
           "div",
           { className: "stage-day" },
-          el("div", { className: "box-head" }, el("h4", { className: "group-title", text: DAY_KIND_LABELS[kind] }), el("span", { className: "small muted num", text: `合計 ${formatCredits(totals[kind])}` })),
+          el("div", { className: "box-head" }, el("h4", { className: "group-title", text: DAY_KIND_LABELS[kind] }), el("span", { className: "small muted num", text: `${minHead}合計 ${formatCredits(totals[kind])}` })),
           g[kind].length
             ? el(
               "ol",
@@ -6639,6 +6745,7 @@ function stagesSection(c) {
                   "li",
                   {},
                   el("div", { className: "period-text" }, el("span", { className: "period-name", text: stageName(s) })),
+                  minOf(s) !== null ? el("span", { className: "small muted num", text: formatStageMinutes(minOf(s)) }) : null,
                   el("span", { className: "period-credits num", text: formatCredits(s.credits) }),
                 )
               ),
@@ -6648,7 +6755,8 @@ function stagesSection(c) {
       );
     }
     out.push(
-      el("button", { type: "button", className: "btn", text: "段階を編集", onclick: () => openStageEditor(c.id) }),
+      // 組 10：読んでいる間は押したボタンを押せなくする（描き直しで新しいボタンになっても、読み終えるまでは開かない）
+      el("button", { type: "button", className: "btn", text: "段階を編集", onclick: (e) => openStageEditor(c.id, e.currentTarget) }),
       el("p", {
         className: "hint",
         text: "名前・題名・クレジットはいつでも変えられます。順番と数は、その日が始まる前だけ変えられます（消した段階に付けた案内は外れます）。",
@@ -6810,6 +6918,9 @@ async function applyTemplate(c, templateId) {
 
 /** 組 8b の適用（8.2）：planApplyDiff で数え、ask で確かめ、包む適用 RPC を 1 回だけ呼ぶ（画面で付け直さない。016 に送り直さない） */
 async function applyWithDefaults(c, templateId, { lib, t, already, hasStages, cohortName, stages, extra }) {
+  // 組 10：適用すると段階の id が変わるので、分を入れた段階は未設定に戻る。その数を確かめの中に 1 行（1.1 (b)）
+  const minutesLost = hasStages ? await countStageMinutes(c.id) : 0;
+  if (appClosed) return;
   const curTid = cohortInfoOf(c.id)?.stage_template_id ?? null;
   const sameTemplate = !!curTid && curTid === templateId;
   const rows = stages.filter((s) => s.guide_id);
@@ -6831,6 +6942,7 @@ async function applyWithDefaults(c, templateId, { lib, t, already, hasStages, co
     hasRows: rows.length > 0,
     sameTemplate,
     diff,
+    minutesLost,
   });
   const ok = await ask({
     title: spec.title,
@@ -6867,47 +6979,253 @@ async function setCreditMode(c, mode) {
   await refresh();
 }
 
-/** 段階の編集（回の段階の名前・題名・クレジット。順番と数は、その日が始まる前だけ） */
-function openStageEditor(cid) {
+/** 組 10：「段階を編集」を読んでいる回の id（読んでいる間は［段階を編集］を押せない・二重に開かない） */
+let stageEditorLoading = null;
+/** 組 10：［案内］の窓の部品（mountWorkshopGuide の戻り値 { open, dispose }）。読み込めない・まだのときは null */
+let workshopGuide = null;
+
+/** 組 10：保存のあとに押せないようにする（分の保存が落ちたとき。［もう一度］と［閉じる］のほか。2.1 の保存の 4） */
+function disableInputs(node) {
+  for (const n of node.querySelectorAll("input, select, textarea, button")) n.disabled = true;
+}
+
+/**
+ * 段階の編集（回の段階の名前・題名・クレジット。順番と数は、その日が始まる前だけ）。
+ * 組 10（stage-minutes DESIGN 2.1・2.2）：開くときに分（admin_cohort_stage_minutes）と案内の割り当て（readCohortStageGuides）を別々に読み、
+ * 読み終えてから描く。ワークショップの日の行に分の欄、全部の行に［案内］のボタン（保存済みの段階だけ押せる）
+ */
+async function openStageEditor(cid, btn = null) {
+  if (stageEditorLoading || appClosed) return;
+  if (!state.cohorts.some((x) => x.id === cid)) return;
+  stageEditorLoading = cid;
+  if (btn) btn.disabled = true;
+  let min, read;
+  try {
+    [min, read] = await Promise.all([
+      loadCohortStageMinutes(cid).catch(() => ({ status: "error" })),
+      readCohortStageGuides(cid).catch(() => null),
+    ]);
+  } finally {
+    stageEditorLoading = null;
+    if (btn) btn.disabled = false;
+  }
+  if (appClosed) return;
   const c = state.cohorts.find((x) => x.id === cid);
   if (!c) return;
+  ensureStageMinutesStyle();
   const full = cohortFull(c);
   const groups = groupStagesByDay(stagesOfCohort(cid));
+  // 分：読めたときだけ欄を出す。252 が無い（missing）は欄も文も出さない。読めない（error）は欄を出さず 1 行（読めない値を空と見せて上書きしない）
+  const minutesOrig = min?.status === "ok" ? min.byId : null;
+  const guideOf = new Map((read?.stages ?? []).map((s) => [s.stage_id, s]));
+  const guideApi = workshopGuide;
+  let busy = false;
+  let locked = false;
   const editors = {};
   const body = [];
+  /** ［案内］のボタン（行ごと。新しく足した行は押せない） */
+  const guideButton = (r) => {
+    const g = r.id ? guideOf.get(r.id) : null;
+    let text = "案内を付ける";
+    let title = null;
+    if (r.id && !read) {
+      text = "案内を開く";
+      title = "案内の名前を読み込めません";
+    } else if (g?.guide_id) text = `${g.guide_name ?? ""}${g.published_version === null || g.published_version === undefined ? "（未公開）" : ""}`;
+    if (!r.id) title = "保存すると開けます";
+    else if (!guideApi) title = "案内を読み込めません";
+    return el("button", {
+      type: "button",
+      className: "btn small-btn",
+      text,
+      title,
+      disabled: !r.id || !guideApi || locked,
+      onclick: () => openGuideFromEditor(r.id),
+    });
+  };
+  let firstWsDay = true;
   for (const kind of DAY_KINDS) {
     if (kind === "bridge" && !dayKindStartDate(full, "bridge")) continue;
     const started = dayKindStarted(full, kind);
-    editors[kind] = rowsEditor(kind, groups[kind], { canStructure: !started });
+    const withMinutes = !!minutesOrig && kind !== "bridge";
+    const initial = withMinutes ? groups[kind].map((s) => ({ ...s, minutes: minutesOrig.get(s.id) ?? null })) : groups[kind];
+    editors[kind] = rowsEditor(kind, initial, { canStructure: !started, minutes: withMinutes, guideButton });
+    const readFailedLine = min?.status === "error" && kind !== "bridge" && firstWsDay;
+    if (kind !== "bridge") firstWsDay = false;
     body.push(
       el(
         "section",
         { className: "box" },
-        el("h3", { text: DAY_KIND_LABELS[kind] }),
+        el("div", { className: "box-head" }, el("h3", { text: DAY_KIND_LABELS[kind] }), editors[kind].head),
+        readFailedLine ? el("p", { className: "warn-text small", text: "分を読み込めません（段階は保存できます）" }) : null,
         started ? el("p", { className: "hint", text: "この日はもう始まっているため、名前・題名・クレジットだけ変えられます（順番と数は変えられません）。" }) : null,
         editors[kind].node,
       ),
     );
   }
-  openSheet("stage-editor", () =>
+  const snapshot = () => JSON.stringify(Object.keys(editors).map((k) => editors[k].read()));
+  const first = snapshot();
+  const lockText = el("p", { className: "warn-text small", role: "alert" });
+  let retryBtn = null;
+  /** 分の保存が落ちたあとに閉じる：回の詳細を読み直し、分は保存されていないと 1 行 */
+  const closeLocked = async () => {
+    if (busy) return;
+    closeSheet();
+    notify(MINUTES_NOT_SAVED, "warn");
+    await refresh();
+  };
+  const normalFoot = [
+    el("button", {
+      type: "button",
+      className: "btn primary big",
+      text: "保存",
+      onclick: async () => {
+        if (busy || locked) return;
+        busy = true;
+        try {
+          await saveStages(cid, groups, editors, mctx);
+        } finally {
+          busy = false;
+        }
+      },
+    }),
+    cancelButton(),
+  ];
+  const lockedFoot = () => [
+    lockText,
+    (retryBtn = el("button", {
+      type: "button",
+      className: "btn primary big",
+      text: "もう一度",
+      onclick: async () => {
+        if (busy || !retryNow) return;
+        busy = true;
+        retryBtn.disabled = true;
+        const r = await retryNow();
+        busy = false;
+        if (appClosed) return;
+        if (r.ok) {
+          notify(`${cid} の段階を保存しました。`);
+          closeSheet();
+          await refresh();
+          return;
+        }
+        lockText.textContent = `段階は保存しました。分は保存できませんでした${r.text ? `（${r.text}）` : ""}`;
+        retryBtn.disabled = false;
+      },
+    })),
+    el("button", { type: "button", className: "btn big cancel", text: "閉じる", onclick: () => closeLocked() }),
+  ];
+  let retryNow = null;
+  const draw = () =>
     setSheet({
       title: `${cid} の段階`,
       body: [
         el("p", { className: "muted", text: "1 つの段階の上限は 0〜10,000、1 日の合計は 10,000 までです。変えると、所属している受講者全員に効きます。" }),
         ...body,
       ],
-      foot: [
-        el("button", { type: "button", className: "btn primary big", text: "保存", onclick: () => saveStages(cid, groups, editors) }),
-        cancelButton(),
-      ],
-    })
-  );
+      foot: locked ? lockedFoot() : normalFoot,
+    });
+  const mctx = {
+    minutes: minutesOrig,
+    /** 016 は通り、分の保存が落ちた：シートを閉じず、押せるのは［もう一度］（分だけを送り直す）と［閉じる］だけにする */
+    onMinutesFailed: ({ retry, text }) => {
+      if (appClosed) return;
+      locked = true;
+      retryNow = retry;
+      for (const b of body) disableInputs(b);
+      lockText.textContent = `段階は保存しました。分は保存できませんでした${text ? `（${text}）` : ""}`;
+      draw();
+    },
+  };
+  /** ［案内］：保存していない変更があれば「保存してから開きますか」。窓を閉じたら、同じ回の「段階を編集」を開き直す（2.2） */
+  async function openGuideFromEditor(stageId) {
+    if (busy || locked || appClosed || !guideApi || !stageId) return;
+    if (snapshot() !== first) {
+      busy = true;
+      let saved = false;
+      try {
+        const plan = await planStageSave(cid, groups, editors, minutesOrig);
+        if (appClosed || plan.status === "closed") return;
+        if (plan.status === "invalid") {
+          notify("保存できません。次の項目を確認してください。", "error", plan.problems);
+          return;
+        }
+        if (plan.status === "ok") {
+          // 確かめは 1 回だけ（016 の保存をするときは、保存の確かめの行をそのまま載せる。分だけなら行は足さない）
+          const ok = await ask({
+            title: "保存してから開きますか？",
+            lines: plan.structural ? [STAGE_SAVE_LINE] : [],
+            warnings: plan.structural ? plan.warnings : [],
+            buttons: [{ label: "やめる", value: false }, { label: "保存して開く", value: true, kind: "primary" }],
+          });
+          if (!ok || appClosed) return;
+          if ((await runStageSave(cid, plan, mctx)) !== "saved") return;
+        }
+        saved = true;
+      } finally {
+        busy = false;
+      }
+      if (!saved || appClosed) return;
+    }
+    closeSheet();
+    guideApi.open({
+      cohortId: cid,
+      stageId,
+      onClose: () => {
+        if (!appClosed) void openStageEditor(cid);
+      },
+    });
+  }
+  openSheet("stage-editor", draw);
+  // 分の保存が落ちたあと（押せるのは［もう一度］と［閉じる］）は、×・Esc・背景も［閉じる］と同じ
+  sheetGuard = () => {
+    if (!locked) return true;
+    if (!busy) void closeLocked();
+    return false;
+  };
 }
 
-async function saveStages(cid, groups, editors) {
+/**
+ * 段階の編集の保存。m（組 10。回の「段階を編集」から渡す）：{ minutes（読んだ分。分の欄が無ければ null）, onMinutesFailed }。
+ * 016 の保存（名前・題名・クレジット・順番）をするときだけ確かめを出す。分だけなら確かめない（お金に関わらないため）
+ */
+async function saveStages(cid, groups, editors, m = {}) {
   clearNotice();
+  const plan = await planStageSave(cid, groups, editors, m.minutes ?? null);
+  if (plan.status === "invalid") {
+    notify("保存できません。次の項目を確認してください。", "error", plan.problems);
+    return "none";
+  }
+  if (plan.status === "unchanged") {
+    notify("変更はありません。");
+    return "none";
+  }
+  if (plan.status !== "ok") return "none";
+  if (plan.structural) {
+    const ok = await ask({
+      title: `${cid} の段階を保存しますか？`,
+      lines: [STAGE_SAVE_LINE],
+      warnings: plan.warnings,
+      buttons: [{ label: "やめる", value: false }, { label: "保存する", value: true, kind: "primary" }],
+    });
+    if (!ok || appClosed) return "none";
+  }
+  return runStageSave(cid, plan, m);
+}
+
+/** 016 の保存をするときの確かめの 1 行（［保存して開く］の確かめにもそのまま載せる。2.2） */
+const STAGE_SAVE_LINE = "所属している受講者全員の上限が変わります。";
+
+/**
+ * 保存の中身を決める（送らない）。m（組 10）：回の段階の編集で読んだ分（stage_id → 分。分の欄が無ければ null）。
+ * 返り：{ status: "invalid", problems }・{ status: "unchanged" }・{ status: "closed" }・
+ *   { status: "ok", plans（016）, structural, warnings（消す段階の案内の 1 行）, minuteItems（分が変わった行） }
+ */
+async function planStageSave(cid, groups, editors, minutesOrig = null) {
   const problems = [];
   const plans = [];
+  const minuteItems = [];
   for (const [kind, editor] of Object.entries(editors)) {
     const rows = editor.read();
     const parsed = parseStageRows(kind, rows);
@@ -6929,15 +7247,23 @@ async function saveStages(cid, groups, editors) {
         }
       });
     }
+    // 組 10：分（変わった行だけ。新しく足した行は分を入れたときだけ。1 日の合計は 720 分まで）
+    if (minutesOrig && kind !== "bridge") {
+      const read = [];
+      rows.forEach((r, i) => {
+        if (!("minutes" in r)) return;
+        const p = parseStageMinutes(r.minutes);
+        if (!p.ok) problems.push(`${DAY_KIND_LABELS[kind]}の ${i + 1} 番目：${MSG_MINUTES_INVALID}`);
+        else read.push({ index: i, stageId: r.id ?? null, minutes: p.minutes });
+      });
+      if (sumMinutes(read.map((x) => x.minutes)) > DAY_MINUTES_MAX) problems.push(`${DAY_KIND_LABELS[kind]}：1 日の合計は ${DAY_MINUTES_MAX} 分までです`);
+      // 保存済みの段階は変わった物だけ（lib の collectMinuteChanges）。新しく足した行は id が 016 の保存のあとに決まるので、順番を持っておく
+      for (const it of collectMinuteChanges(minutesOrig, read.filter((x) => x.stageId))) minuteItems.push({ day: kind, index: null, id: it.stage_id, minutes: it.minutes });
+      for (const x of read) if (!x.stageId && x.minutes !== null) minuteItems.push({ day: kind, index: x.index, id: null, minutes: x.minutes });
+    }
   }
-  if (problems.length) {
-    notify("保存できません。次の項目を確認してください。", "error", problems);
-    return;
-  }
-  if (!plans.length) {
-    notify("変更はありません。");
-    return;
-  }
+  if (problems.length) return { status: "invalid", problems };
+  if (!plans.length && !minuteItems.length) return { status: "unchanged" };
   // 消す段階に案内が付いていれば、確かめに 1 行（並べ替え・名前の変更では外れないので出さない）
   const kept = new Set(plans.filter((p) => p.kind === "replace").flatMap((p) => p.stages.map((x) => x.id).filter(Boolean)));
   const removed = plans.filter((p) => p.kind === "replace").flatMap((p) => (groups[p.day] ?? []).map((x) => x.id).filter((id) => id && !kept.has(id)));
@@ -6950,32 +7276,80 @@ async function saveStages(cid, groups, editors) {
       lib = null;
     }
     const read = lib ? await readCohortStageGuides(cid) : null;
-    if (appClosed) return;
+    if (appClosed) return { status: "closed" };
     const line = read ? lib.stageRemovalLine(removed, read.stages) : "消す段階に案内が付いているかを読めませんでした（付いていれば外れます）。";
     if (line) warnings.push(line);
   }
-  const ok = await ask({
-    title: `${cid} の段階を保存しますか？`,
-    lines: ["所属している受講者全員の上限が変わります。"],
-    warnings,
-    buttons: [{ label: "やめる", value: false }, { label: "保存する", value: true, kind: "primary" }],
-  });
-  if (!ok || appClosed) return;
+  return { status: "ok", plans, structural: plans.length > 0, warnings, minuteItems };
+}
+
+/**
+ * 決めた中身を送る（確かめは済み）。順は 016 → 分（2.1 の保存の順）。
+ * 返り："saved"・"stopped"（016 が途中で落ちた。分は送らない）・"minutes"（016 は通り、分が落ちた）・"failed"（分だけの保存が落ちた）
+ */
+async function runStageSave(cid, plan, m = {}) {
+  const minutesChanged = plan.minuteItems.length > 0;
+  const replaced = new Map();
   // 1 日の合計が途中で 10,000 を超えないよう、クレジットを下げる更新を先に行う
-  plans.sort((a, b) => (a.kind === "update" ? a.delta : -Infinity) - (b.kind === "update" ? b.delta : -Infinity));
+  const plans = [...plan.plans].sort((a, b) => (a.kind === "update" ? a.delta : -Infinity) - (b.kind === "update" ? b.delta : -Infinity));
   for (const p of plans) {
-    const { error } = p.kind === "replace"
+    const { data, error } = p.kind === "replace"
       ? await supabase.rpc("admin_replace_day_stages", { p_cohort_id: cid, p_day_kind: p.day, p_stages: p.stages })
       : await supabase.rpc("admin_update_cohort_stage", { p_stage_id: p.id, p_label: p.label, p_title: p.title, p_credits: p.credits });
     if (error) {
-      notify(`保存の途中で止まりました。${explainError(error)}`, "error");
+      // 段階の id が決まっていないので、分は送らない（2.1 の保存の 5）
+      notify(`保存の途中で止まりました。${explainError(error)}`, "error", minutesChanged ? [MINUTES_NOT_SAVED] : []);
       await refresh();
-      return;
+      return "stopped";
     }
+    if (p.kind === "replace") replaced.set(p.day, { sent: p.stages, data });
   }
-  notify(`${cid} の段階を保存しました。`);
-  closeSheet();
-  await refresh();
+  if (!minutesChanged) {
+    notify(`${cid} の段階を保存しました。`);
+    closeSheet();
+    await refresh();
+    return "saved";
+  }
+  // 新しく足した行の id は、016 の戻り（その日の段階を順番の順）を順番で結んで取る（名前で結ばない）
+  const items = [];
+  let unresolved = false;
+  for (const it of plan.minuteItems) {
+    let id = it.id;
+    if (!id) {
+      // 016 の戻り（その日の段階）を順番の順に並べ、送った行と順番で結ぶ（lib の bindStageIds。数が合わなければ結べない）
+      const r = replaced.get(it.day);
+      const ids = r && Array.isArray(r.data) ? bindStageIds(r.sent, [...r.data].sort((a, b) => Number(a.seq) - Number(b.seq))) : null;
+      id = ids?.[it.index] ?? null;
+    }
+    if (!id) unresolved = true;
+    else items.push({ stage_id: id, minutes: it.minutes });
+  }
+  const send = async () => {
+    if (unresolved) return { ok: false, text: "" };
+    const r = await rpcSettled(MINUTES_SAVE_FN, { p_cohort_id: cid, p_items: items });
+    if (r.error) {
+      // 「無い」の誤りの hint は 016 の名前の候補なので出さない。ほかは DB の理由（hint）をそのまま
+      return { ok: false, text: isMissingFunctionError(r.error, MINUTES_SAVE_FN) ? "" : String(r.error.hint ?? "") };
+    }
+    const n = normalizeStageMinutes(r.data, cid);
+    if (n && !appClosed) state.stages.minutes.set(cid, { status: "ok", byId: n.byStage });
+    return { ok: true };
+  };
+  const r = await send();
+  if (appClosed) return "none";
+  if (r.ok) {
+    notify(`${cid} の段階を保存しました。`);
+    closeSheet();
+    await refresh();
+    return "saved";
+  }
+  if (plan.structural) {
+    if (typeof m.onMinutesFailed === "function") m.onMinutesFailed({ retry: send, text: r.text });
+    else notify(`段階は保存しました。分は保存できませんでした${r.text ? `（${r.text}）` : ""}`, "error");
+    return "minutes";
+  }
+  notify(`分は保存できませんでした。${r.text}`, "error");
+  return "failed";
 }
 
 // ---- 講師の担当 ----
@@ -7213,7 +7587,8 @@ async function openTemplateEditor(t) {
   const withDefaults = (kind, list) =>
     list.map((it) => {
       const d = guideMode === "8b" ? dr.byPos.get(gd.lib.templatePos(kind, it.seq)) : null;
-      return { ...it, guide: d?.guide ?? "", start: d?.start ?? "", end: d?.end ?? "" };
+      // 組 10：テンプレートは時刻を持たない（欄を隠し、時刻は空で送る。stage-minutes DESIGN 1.4）
+      return { ...it, guide: d?.guide ?? "", start: "", end: "" };
     });
   const editors = Object.fromEntries(DAY_KINDS.map((k) => [
     k,
@@ -7221,7 +7596,7 @@ async function openTemplateEditor(t) {
       ? rowsEditor(k, g[k], { canStructure: true })
       : rowsEditor(k, withDefaults(k, g[k]), {
         canStructure: true,
-        guides: { options: guideMode === "8b" ? gd.lib.templateGuideOptions(k, gd.guides) : [], readFailed: guideMode === "error" },
+        guides: { options: guideMode === "8b" ? gd.lib.templateGuideOptions(k, gd.guides) : [], readFailed: guideMode === "error", times: false },
       }),
   ]));
   const snapshot = () => JSON.stringify([name.value, note.value, active.checked, DAY_KINDS.map((k) => editors[k].read())]);
@@ -7266,7 +7641,7 @@ async function openTemplateEditor(t) {
       el(
         "summary",
         {},
-        el("span", { className: "help-text strong", text: "既定の案内と時刻の目安" }),
+        el("span", { className: "help-text strong", text: "既定の案内" }),
         el("span", { className: "help-q", "aria-hidden": "true", text: "?" }),
       ),
       el("div", { className: "help-body", text: gd.lib?.TEMPLATE_GUIDE_HELP ?? "" }),
@@ -7550,8 +7925,11 @@ async function main() {
   // 確かめは管理コンソールの ask()・askDiscard() を渡す（画面の真ん中に出す。workshop-ui 組 8 の 3.9）。
   // 動的な import にして待たないので、読み込めない・失敗しても［案内］が出ないだけで、admin.js のほかの画面は止まらない。
   // 管理コンソールを閉じたら（clearAppView の appClosed）、部品が自分で窓とボタンと読んだ中身を消す
+  // 組 10：戻り値（{ open, dispose }）を持ち、「段階を編集」の［案内］から open({ cohortId, stageId, onClose }) で開く
   import("./admin-workshop.js")
-    .then(({ mountWorkshopGuide }) => mountWorkshopGuide({ supabase, menu: $("side-menu"), isClosed: () => appClosed, ask, askDiscard }))
+    .then(({ mountWorkshopGuide }) => {
+      workshopGuide = mountWorkshopGuide({ supabase, menu: $("side-menu"), isClosed: () => appClosed, ask, askDiscard }) ?? null;
+    })
     .catch((e) => console.error("ワークショップの案内を読み込めませんでした", e));
   // ヘッダーにメールは出さない（2026-10-23 田口さん：説明の文字は消す）。アカウントのボタンの読み上げの名前とシートにある
   $("account-btn").setAttribute("aria-label", `アカウントと更新（${myEmail}）`);

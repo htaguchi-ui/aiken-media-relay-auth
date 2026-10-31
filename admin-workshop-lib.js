@@ -616,9 +616,11 @@ export function activeAsk({ name, used = [], active }) {
   };
 }
 
-function timeRange(s) {
-  const a = timeField(s?.planned_start), b = timeField(s?.planned_end);
-  return a && b ? `${a}〜${b}` : "";
+/** 段階の分の表示（"90 分"。分が無ければ ""）。組 10：時刻の範囲の表示を分の表示に替えた（.orchestration/stage-minutes-20261029/DESIGN.md 2.3）
+ * @param {any} m */
+export function minutesText(m) {
+  const n = typeof m === "number" ? m : str(m).trim() === "" ? NaN : Number(m);
+  return Number.isInteger(n) && n >= 1 ? `${n} 分` : "";
 }
 
 /**
@@ -634,7 +636,7 @@ export function planApplyLoss(stages) {
   const hit = [...(stages ?? [])]
     .filter((s) => s?.guide_id)
     .sort((a, b) => (order[a.day_kind] ?? 9) - (order[b.day_kind] ?? 9) || Number(a.seq ?? 0) - Number(b.seq ?? 0));
-  const item = (/** @type {any} */ s) => `${stageShort(s)}：「${str(s.guide_name)}」${timeRange(s)}`;
+  const item = (/** @type {any} */ s) => `${stageShort(s)}：「${str(s.guide_name)}」${minutesText(s.minutes)}`;
   const detail = hit.length >= 3
     ? [item(hit[0]), `ほか ${hit.length - 1} か所（［ワークショップの案内］で確かめられます）`]
     : hit.map(item);
@@ -659,7 +661,7 @@ export function applyAsk({ cohortName, templateName, memberCount = 0, already, h
   return {
     title: `${str(cohortName)} に「${str(templateName)}」を適用しますか？`,
     lines,
-    warnings: L > 0 ? [`この回で付けた案内 ${L} か所（予定の時刻を含む）は外れます。自動では付け直しません。`] : [],
+    warnings: L > 0 ? [`この回で付けた案内 ${L} か所は外れます。自動では付け直しません。`] : [],
     detail: L > 0 ? loss.detail : [],
     note: first
       ? "Day1 が始まる前なら、「Day ごとの枠に戻す」で戻せます。始まったあとは戻せません。"
@@ -954,11 +956,14 @@ export function planApplyDiff(stages, rows, applied, curTplDefaults, newTplDefau
 
 /**
  * 包む適用 RPC の確かめ（8.2。本文 6 行まで）。diff：planApplyDiff の返り、hasRows：今の段階に割り当てが 1 つ以上あるか。
- * 7 行になるとき（lines 3・warnings 1・detail 2・note 1）だけ、detail を 1 項目にまとめて「ほか R か所」を残す
+ * 7 行になるとき（lines 3・warnings 1・detail 2・note 1）だけ、detail を 1 項目にまとめて「ほか R か所」を残す。
+ * 組 10（stage-minutes DESIGN 1.1 (b)）：minutesLost＝分を入れた段階の数（0 なら出さない・数が分からなければ "unknown"）。
+ * 分の行は warnings の後ろに 1 行。detail をまとめても 6 行を超えるときは、lines の 1 行目の括弧に入れる（N は残す）
  * @param {{ cohortName: string, templateName: string, memberCount?: number, already: boolean, hasStages: boolean, hasRows?: boolean,
- *   sameTemplate?: boolean, diff: { N: number, M: number, E: number, K: number, attach: number, items: string[] } }} o
+ *   sameTemplate?: boolean, diff: { N: number, M: number, E: number, K: number, attach: number, items: string[] },
+ *   minutesLost?: number|"unknown" }} o
  */
-export function applyDiffAsk({ cohortName, templateName, memberCount = 0, already, hasStages, hasRows = false, sameTemplate = true, diff }) {
+export function applyDiffAsk({ cohortName, templateName, memberCount = 0, already, hasStages, hasRows = false, sameTemplate = true, diff, minutesLost = 0 }) {
   /** @type {string[]} */
   const lines = [];
   const first = !already && !hasStages;
@@ -991,10 +996,19 @@ export function applyDiffAsk({ cohortName, templateName, memberCount = 0, alread
     ? "Day1 が始まる前なら、「Day ごとの枠に戻す」で戻せます。始まったあとは戻せません。"
     : null;
   const items = first ? [] : diff.items ?? [];
+  // 組 10：分の行（段階の無い回への初めての適用では、分を入れた段階が無いので出さない）
+  const lost = first ? null : minutesLostPart(minutesLost);
+  let minutesRow = lost ? `${lost}。` : null;
+  const rows = () => lines.length + warnings.length + (minutesRow ? 1 : 0) + detail.length + (note ? 1 : 0);
   let detail = items.length <= 2 ? [...items] : [items[0], `ほか ${items.length - 1} か所（［ワークショップの案内］で確かめられます）`];
-  if (detail.length && lines.length + warnings.length + detail.length + (note ? 1 : 0) > ASK_LIMITS.total) {
+  if (detail.length && rows() > ASK_LIMITS.total) {
     detail = [items.length > 1 ? `${items[0]} ほか ${items.length - 1} か所` : items[0]];
   }
+  if (minutesRow && lost && rows() > ASK_LIMITS.total && lines[0].endsWith(LINE0_TAIL)) {
+    lines[0] = `${lines[0].slice(0, -LINE0_TAIL.length)}（名前・クレジットの変更は消え、${lost}）。`;
+    minutesRow = null;
+  }
+  if (minutesRow) warnings.push(minutesRow);
   return {
     title: `${str(cohortName)} に「${str(templateName)}」を適用しますか？`,
     lines,
@@ -1004,6 +1018,17 @@ export function applyDiffAsk({ cohortName, templateName, memberCount = 0, alread
     okLabel: "適用する",
     kind: "primary",
   };
+}
+
+/** applyDiffAsk の lines の 1 行目の終わり（分の行を括弧に入れるとき、ここを差し替える） */
+const LINE0_TAIL = "（名前・クレジットの変更は消えます）。";
+
+/** 適用で未設定に戻る分の文（句点なし。0・不正なら null）
+ * @param {number|"unknown"|null|undefined} n */
+function minutesLostPart(n) {
+  if (n === "unknown") return "分を入れた段階は未設定に戻ります";
+  const k = Number(n);
+  return Number.isInteger(k) && k > 0 ? `分を入れた段階 ${k} か所は未設定に戻ります` : null;
 }
 
 /** 包む適用 RPC の結果の文（8.2）
@@ -1024,7 +1049,7 @@ export const APPLY_DIFF_READ_FAILED =
 /** テンプレートの編集の「既定の案内」の ？ の中身（8.3） */
 export const TEMPLATE_GUIDE_HELP = "回にこのテンプレートを適用すると、各段階にこの案内が付きます。回ごとに替えるときは［ワークショップの案内］の［回ごと］で行います。";
 /** テンプレートの編集のシートの下の 1 行（8.3） */
-export const TEMPLATE_GUIDE_FOOT = "既定の案内と時刻は、これから適用する回に付きます。すでに適用した回は変わりません。";
+export const TEMPLATE_GUIDE_FOOT = "既定の案内は、これから適用する回に付きます。すでに適用した回は変わりません。";
 /** 既定か案内の一覧を読めなかったとき（8.3。保存を止める） */
 export const TEMPLATE_GUIDES_READ_FAILED = "既定の案内を読めませんでした。このまま保存すると既定が消えるので、保存を止めています。［閉じる］のあと、もう一度開いてください。";
 /** 画面の書き誤り（missing_key）で DB が断ったとき（8.3） */

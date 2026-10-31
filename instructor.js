@@ -34,6 +34,7 @@ import {
   formatCredits,
   formatMonthDay,
   formatShortDateTime,
+  isMissingFunctionError,
   isNetworkFailure,
   isStageSchemaMissing,
   MSG_STAGE_NOT_READY,
@@ -78,6 +79,20 @@ import {
   createCohortCloseAction,
   normalizeCohortCloseStatus,
 } from "./cohort-close-lib.js";
+import {
+  collectMinuteChanges,
+  dayTotalView,
+  minutesErrorText,
+  MSG_MINUTES_INVALID,
+  MSG_MINUTES_LOAD_FAILED,
+  MSG_MINUTES_SAVED,
+  MSG_MINUTES_TIMER_RUNNING,
+  normalizeInstructorStageMinutes,
+  parseStageMinutes,
+  stageCreditsText,
+  stagesOfDay,
+  targetView,
+} from "./stage-minutes-lib.js";
 
 // 他のサイトに埋め込まれて操作させられるのを防ぐ（マイページ・管理コンソールと同じ）
 if (window.top !== window.self) {
@@ -190,6 +205,8 @@ const state = {
   /** cohort_close_status を読んだもの（normalizeCohortCloseStatus）。null は未読込・読めなかった（221。決定 96） */
   closeStatus: null,
   closeStatusError: "",
+  /** instructor_stage_minutes を読んだもの（normalizeInstructorStageMinutes）。null は未読込・252 が無い・読めなかった（分の表示と［時間を変える］を隠す） */
+  minutes: null,
   /** 操作の通信中（二重に押させない） */
   busy: false,
   /** 通信中の操作の種類（押したボタンの文字を変える。U3-5）と、取り消しのとき対象の追加の id。通信中でなければ null */
@@ -432,6 +449,8 @@ async function loadCohorts(first = null) {
 let statusSeq = 0;
 /** cohort_close_status の読み込みの通し番号（段階の読み込みとは別に数える） */
 let closeStatusSeq = 0;
+/** instructor_stage_minutes の読み込みの通し番号（段階・クローズとは別。保存の前にも進める） */
+let minutesSeq = 0;
 
 /** 回のクローズの状態は段階とは別に読む。未導入・欠損を 0 人や操作できるとは扱わない（0179） */
 async function loadCloseStatus() {
@@ -458,9 +477,45 @@ async function loadCloseStatus() {
   return !!status;
 }
 
+/**
+ * 段階の時間（分）を読む（252。設計 stage-minutes 2.4）。本体は全部 try の中：分の RPC が無い・投げる・形が違うときは、
+ * 分の表示と［時間を変える］を隠すだけで、段階の読み込みは落とさない（外に投げない）。誤りは loadFailure・explainError に渡さない
+ * （016 の名前が hint に入ると講師ページ全体が「まだ使えません」になるため）。古い応答（回・部品・通し番号が違う）は捨てる
+ */
+async function loadMinutes() {
+  let mine = null;
+  let requested = null;
+  try {
+    requested = state.cohortId;
+    const client = activeClient();
+    mine = ++minutesSeq;
+    if (!requested) {
+      state.minutes = null;
+      return;
+    }
+    const response = await rpc("instructor_stage_minutes", { p_cohort_id: requested });
+    if (ending || requested !== state.cohortId || client !== activeClient() || mine !== minutesSeq) return;
+    const { data, error } = response ?? {};
+    if (error) {
+      state.minutes = null;
+      if (!isMissingFunctionError(error, "instructor_stage_minutes")) console.error(`段階の時間（読み込み）：${error?.message ?? error}`);
+      return;
+    }
+    state.minutes = normalizeInstructorStageMinutes(data, requested);
+    if (!state.minutes) console.error("段階の時間（読み込み）：答えの形が違います");
+  } catch (error) {
+    try {
+      if (mine !== null && mine === minutesSeq && requested === state.cohortId) state.minutes = null;
+      console.error(`段階の時間（読み込み）：${error?.message ?? error}`);
+    } catch {
+      // 何もしない
+    }
+  }
+}
+
 /** 段階とクローズの状態を並べて読む（［最新にする］・操作のあと・回の切り替え）。返り値は段階の読み込みの成否 */
 async function loadStatusAndClose() {
-  const [ok] = await Promise.all([loadStatus(), loadCloseStatus(), stageTimer.load()]);
+  const [ok] = await Promise.all([loadStatus(), loadCloseStatus(), stageTimer.load(), loadMinutes()]);
   return ok;
 }
 
@@ -1129,6 +1184,13 @@ function dayFold(g, opened, cohortId) {
       el("span", { className: "meta tabular", text: count }),
     ),
     el("ol", { className: "wk-rows" }, ...g.rows.map(wkRow)),
+    g.isToday && minutesEditable(g.dayKind)
+      ? el(
+        "div",
+        { className: "row-actions" },
+        el("button", { type: "button", className: "btn", id: "minutes-edit", text: "時間を変える", disabled: state.busy, onclick: () => openMinutesEditor() }),
+      )
+      : null,
   );
   node.addEventListener("toggle", () => {
     // 描き直しで画面から外れた折りたたみの toggle は使わない。覚えている値と同じ（open の属性で届くもの）は触ったと数えない
@@ -1140,16 +1202,29 @@ function dayFold(g, opened, cohortId) {
   return node;
 }
 
-/** 段階の行：状態の言葉・名前・クレジット数（今の行は aria-current） */
+/** 段階の行：状態の言葉・名前・クレジット数（分があれば「90 分 · 500 クレジット」。子は 3 つのまま。今の行は aria-current） */
 function wkRow(r) {
   const word = stageStateLabel(r.state);
+  const credits = r.stage.credits === null ? "—" : `${formatCredits(r.stage.credits)} クレジット`;
   return el(
     "li",
     { className: `wk-row${r.state ? ` ${r.state}` : ""}`, "aria-current": r.state === "now" ? "step" : null },
     el("span", { className: "wk-state" }, word ? el("span", { className: `badge ${STATE_BADGE[r.state]}`, text: word }) : null),
     el("span", { className: "wk-name", text: stageName(r.stage) }),
-    el("span", { className: "wk-credits tabular", text: r.stage.credits === null ? "—" : `${formatCredits(r.stage.credits)} クレジット` }),
+    el("span", { className: "wk-credits tabular", text: stageCreditsText(shownMinutes()?.byStage.get(r.stage.id) ?? null, credits) }),
   );
+}
+
+/** 今の回の段階の時間（分）の答え。読めていない・別の回の答えなら null（分の表示と［時間を変える］を出さない） */
+function shownMinutes() {
+  const m = state.minutes ?? null;
+  return m && m.cohortId === state.cohortId ? m : null;
+}
+
+/** ［時間を変える］を出すか：分を読めて、その日が答えの editable_day（段階の回・Day1 か Day2 の期間中・クローズ前の今日）と同じ */
+function minutesEditable(dayKind) {
+  const m = shownMinutes();
+  return !!m && !!dayKind && m.editableDay === dayKind && !isClosed();
 }
 
 /** クローズ済みか（読めていないときは偽。操作の可否は DB が決める） */
@@ -1670,6 +1745,201 @@ async function revokeGrant(g, name, s) {
     notify(`${name} への追加（+${formatCredits(g.credits)}）を取り消しました。`);
     await loadStatus();
   }, "revoke", g.id);
+}
+
+// ---- 段階の時間（分）を変える（設計 stage-minutes 2.4。自分の回の、今日の段階だけ。タイマーには触れない） ----
+
+/** ［時間を変える］で読み直している途中か（読み直しを待つ間に 2 回押しても、窓は 1 枚だけ） */
+const minutesUi = { opening: false };
+
+/** 窓の行に出す段階の名前（段階の読み込みの答えから。見つからなければ「段階」） */
+function minutesStageName(stageId) {
+  const s = state.status;
+  const found = [...(s?.stagesAll ?? []), ...(s?.stagesToday ?? [])].find((x) => x.id === stageId);
+  return found ? stageName(found) : "段階";
+}
+
+/** ［時間を変える］：分を読み直してから窓を描く（ほかの講師・管理者が変えた値を、古い値で上書きしない）。読めなければ開かない */
+async function openMinutesEditor() {
+  if (minutesUi.opening || state.busy || ending || !operableCohort()) return;
+  clearNotice();
+  const cohortId = state.cohortId;
+  const client = activeClient();
+  const mine = ++minutesSeq;
+  minutesUi.opening = true;
+  let response;
+  try {
+    response = await rpc("instructor_stage_minutes", { p_cohort_id: cohortId });
+  } catch (error) {
+    response = { data: null, error };
+  } finally {
+    minutesUi.opening = false;
+  }
+  if (ending || cohortId !== state.cohortId || client !== activeClient() || mine !== minutesSeq) return;
+  const { data, error } = response ?? {};
+  const m = error ? null : normalizeInstructorStageMinutes(data, cohortId);
+  if (!m) {
+    notify(minutesErrorText(error, MSG_MINUTES_LOAD_FAILED), "error");
+    if (error && isMissingFunctionError(error, "instructor_stage_minutes")) {
+      state.minutes = null; // 252 が無い：分の表示とボタンを隠す
+      render();
+    }
+    return;
+  }
+  state.minutes = m;
+  render();
+  // 期間の外・クローズ済みになっていた：ボタンが消えるだけ（理由の文は出さない）
+  if (!m.editableDay) return;
+  showMinutesDialog(m);
+}
+
+/**
+ * 「今日の時間（分）」の窓（<dialog id="confirm"> を使う。Esc・［やめる］で閉じる）。行は今日の段階だけ（seq の順）。空は「外す」。
+ * ［保存］は、入力に誤りがある・変わった段階が無い・通信中のときは押せない。保存は変わった段階だけを 1 回で送る（withBusy を通す）
+ */
+function showMinutesDialog(m) {
+  const dialog = $("confirm");
+  const ctl = new AbortController();
+  const finish = () => {
+    if (ctl.signal.aborted) return;
+    ctl.abort();
+    if (dialog.open) dialog.close();
+  };
+  const stages = stagesOfDay(m, m.editableDay);
+  const rows = stages.map((st, i) => {
+    const id = `minutes-${i}`;
+    const name = minutesStageName(st.stageId);
+    const input = el("input", {
+      id,
+      className: "input tabular",
+      type: "text",
+      inputmode: "numeric",
+      "aria-label": `${name}（分）`,
+      value: st.minutes === null ? "" : String(st.minutes),
+    });
+    const target = m.current && m.current.stageId === st.stageId ? el("span", { className: "hint tabular", id: "minutes-target" }) : null;
+    const node = el("div", { className: "timer-row" }, el("label", { for: id, text: name }), input, el("span", { text: "分" }), target);
+    return { stageId: st.stageId, input, target, node };
+  });
+  const totalLine = el("p", { className: "tabular", id: "minutes-total" });
+  const warnLine = el("p", { className: "warn-text", id: "minutes-warn" });
+  const invalidLine = el("p", { className: "error-text", id: "minutes-invalid", role: "alert" });
+  const errorLine = el("p", { className: "error-text", id: "minutes-error", role: "alert" });
+  let saving = false;
+  let failed = false; // 保存の失敗の文を出している（次の入力で消す）
+  const save = el("button", { type: "button", className: "btn primary big", id: "minutes-save", text: "保存", onclick: () => submit() });
+  const cancel = el("button", { type: "button", className: "btn big", text: "やめる", onclick: () => finish() });
+
+  /** 入力を読み直して、合計・注意・誤り・目安・［保存］の可否を書き換える（窓は描き直さない。入力のフォーカスを保つ） */
+  const update = () => {
+    const parsed = rows.map((r) => parseStageMinutes(r.input.value));
+    const bad = parsed.some((p) => !p.ok);
+    rows.forEach((r, i) => (parsed[i].ok ? r.input.removeAttribute("aria-invalid") : r.input.setAttribute("aria-invalid", "true")));
+    const total = dayTotalView(parsed.map((p) => (p.ok ? p.minutes : null)));
+    totalLine.textContent = total.text;
+    warnLine.textContent = total.warn;
+    warnLine.hidden = !total.warn;
+    invalidLine.textContent = bad ? MSG_MINUTES_INVALID : "";
+    invalidLine.hidden = !bad;
+    errorLine.hidden = !failed;
+    for (const [i, r] of rows.entries()) {
+      if (!r.target) continue;
+      const v = targetView(m.current, parsed[i].ok ? parsed[i].minutes : null);
+      r.target.textContent = v.text;
+      r.target.title = v.title;
+      r.target.hidden = !v.text;
+    }
+    const changes = bad ? [] : collectMinuteChanges(m.byStage, rows.map((r, i) => ({ stageId: r.stageId, minutes: parsed[i].minutes })));
+    save.disabled = bad || !changes.length || saving || state.busy;
+    return { bad, changes };
+  };
+
+  const submit = async () => {
+    const { bad, changes } = update();
+    if (bad || !changes.length || saving || state.busy || ending) return;
+    saving = true;
+    failed = false;
+    update();
+    let result = null;
+    await withBusy(async () => {
+      const cohortId = state.cohortId;
+      const client = activeClient();
+      // 保存の前に始まった読み込み（loadMinutes）の答えが、保存のあとに届いても古い分で描き直さない
+      const mine = ++minutesSeq;
+      let response;
+      try {
+        response = await rpc("instructor_set_stage_minutes", { p_cohort_id: cohortId, p_items: changes });
+      } catch (error) {
+        response = { data: null, error };
+      }
+      if (ending || cohortId !== state.cohortId || client !== activeClient() || mine !== minutesSeq) {
+        result = { stale: true };
+        return;
+      }
+      const { data, error } = response ?? {};
+      if (error) {
+        result = { error };
+        return;
+      }
+      // 保存の答えは読み直しと同じ形。形が違えば読み直す
+      state.minutes = normalizeInstructorStageMinutes(data, cohortId);
+      result = { ok: true, reread: !state.minutes };
+    }, "minutes");
+    saving = false;
+    if (ending) return;
+    if (!result) {
+      // 送らなかった（ほかの操作の通信中など）
+      update();
+      return;
+    }
+    if (result.error) {
+      const message = minutesErrorText(result.error);
+      if (ctl.signal.aborted) {
+        notify(message, "error");
+        return;
+      }
+      failed = true;
+      errorLine.textContent = message;
+      update();
+      return;
+    }
+    finish();
+    if (result.ok) notify(MSG_MINUTES_SAVED);
+    if (result.stale || result.reread) {
+      await loadMinutes();
+      render();
+    }
+  };
+
+  for (const r of rows) {
+    r.input.addEventListener("input", () => {
+      failed = false;
+      update();
+    });
+  }
+  dialog.replaceChildren(
+    el(
+      "div",
+      { className: "confirm-body" },
+      el("h2", { id: "confirm-title", text: "今日の時間（分）" }),
+      ...rows.map((r) => r.node),
+      totalLine,
+      warnLine,
+      m.timerRunning ? el("p", { className: "hint", id: "minutes-timer", text: MSG_MINUTES_TIMER_RUNNING }) : null,
+      invalidLine,
+      errorLine,
+      el("div", { className: "row" }, cancel, save),
+    ),
+  );
+  update();
+  // Esc は、閉じる前に止めて、やめるとして扱う。ほかの所（ログアウトの hideContent）で閉じられたら、この窓の見張りも終える
+  dialog.addEventListener("cancel", (e) => {
+    e.preventDefault();
+    finish();
+  }, { signal: ctl.signal });
+  dialog.addEventListener("close", () => finish(), { signal: ctl.signal });
+  dialog.showModal();
+  (rows[0]?.input ?? cancel).focus();
 }
 
 // ---- 開始 ----
