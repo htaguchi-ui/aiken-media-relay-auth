@@ -16,21 +16,22 @@
 <!-- ログインの確かめ・RPC の接続先へ先につないでおく（supabase-js の fetch は資格情報なしなので crossorigin） -->
 <link rel="preconnect" href="https://tnzwhwitgnzoehbjrmoy.supabase.co" crossorigin>
 <link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=IBM+Plex+Sans+JP:wght@400;500;600;700&amp;display=swap">
-<link rel="stylesheet" href="/r/01bf51240546/site-nav.css">
-<link rel="stylesheet" href="/r/01bf51240546/gsi-button.css">
-<link rel="modulepreload" href="/r/01bf51240546/admin-lib.js">
-<link rel="modulepreload" href="/r/01bf51240546/auth-storage.js">
-<link rel="modulepreload" href="/r/01bf51240546/cohort-close-lib.js">
-<link rel="modulepreload" href="/r/01bf51240546/instructor-list-lib.js">
-<link rel="modulepreload" href="/r/01bf51240546/instructor-list.js">
-<link rel="modulepreload" href="/r/01bf51240546/mypage-lib.js">
-<link rel="modulepreload" href="/r/01bf51240546/share-lib.js">
-<link rel="modulepreload" href="/r/01bf51240546/site-nav.js">
-<link rel="modulepreload" href="/r/01bf51240546/stage-lib.js">
-<link rel="modulepreload" href="/r/01bf51240546/stage-minutes-lib.js">
-<link rel="modulepreload" href="/r/01bf51240546/stage-timer-lib.js">
-<link rel="modulepreload" href="/r/01bf51240546/stage-timer.js">
-<link rel="modulepreload" href="/r/01bf51240546/submissions-lib.js">
+<link rel="stylesheet" href="/r/39015e7c0b2b/site-nav.css">
+<link rel="stylesheet" href="/r/39015e7c0b2b/gsi-button.css">
+<link rel="modulepreload" href="/r/39015e7c0b2b/admin-lib.js">
+<link rel="modulepreload" href="/r/39015e7c0b2b/auth-storage.js">
+<link rel="modulepreload" href="/r/39015e7c0b2b/cohort-close-lib.js">
+<link rel="modulepreload" href="/r/39015e7c0b2b/instructor-list-lib.js">
+<link rel="modulepreload" href="/r/39015e7c0b2b/instructor-list.js">
+<link rel="modulepreload" href="/r/39015e7c0b2b/mypage-lib.js">
+<link rel="modulepreload" href="/r/39015e7c0b2b/poll-lib.js">
+<link rel="modulepreload" href="/r/39015e7c0b2b/share-lib.js">
+<link rel="modulepreload" href="/r/39015e7c0b2b/site-nav.js">
+<link rel="modulepreload" href="/r/39015e7c0b2b/stage-lib.js">
+<link rel="modulepreload" href="/r/39015e7c0b2b/stage-minutes-lib.js">
+<link rel="modulepreload" href="/r/39015e7c0b2b/stage-timer-lib.js">
+<link rel="modulepreload" href="/r/39015e7c0b2b/stage-timer.js">
+<link rel="modulepreload" href="/r/39015e7c0b2b/submissions-lib.js">
 <style>
   :root {
     --accent: #26396E; --accent-hover: #1B2B55; --on-accent: #FFFFFF;
@@ -259,6 +260,10 @@
   .timer-line { margin: 0; font-variant-numeric: tabular-nums; overflow-wrap: anywhere; }
   .timer-line.running { font-weight: 700; }
   .timer-line.ended { color: var(--warn-fg); font-weight: 700; }
+  /* WS のカードの右上の残り（分：秒。組 11 の (6)）。離れた所からも読める大きさ・幅が変わって見出しが揺れないように */
+  .wk-clock { font-size: 26px; font-weight: 700; line-height: 1.1; min-width: 6ch; text-align: right; white-space: nowrap; }
+  .wk-clock.ended { color: var(--warn-fg); }
+  .wk-clock-end { font-size: 13px; font-weight: 700; margin-left: 6px; }
   .timer-row { display: flex; flex-wrap: wrap; gap: 8px; align-items: center; }
   .timer-row .btn { min-height: 44px; }
   .timer-row .input { width: 6em; min-height: 44px; }
@@ -415,7 +420,7 @@
 </div>
 
 <dialog id="confirm" class="confirm" aria-labelledby="confirm-title"></dialog>
-<script type="module" src="/r/01bf51240546/topbar-height.js"></script>
-<script type="module" src="/r/01bf51240546/instructor.js"></script>
+<script type="module" src="/r/39015e7c0b2b/topbar-height.js"></script>
+<script type="module" src="/r/39015e7c0b2b/instructor.js"></script>
 </body>
 </html>

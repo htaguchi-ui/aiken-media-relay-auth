@@ -6,7 +6,7 @@
 <meta name="robots" content="noindex">
 <meta name="referrer" content="no-referrer">
 <meta name="color-scheme" content="light dark">
-<meta http-equiv="Content-Security-Policy" content="default-src 'self'; script-src 'self' https://cdn.jsdelivr.net/npm/@supabase/supabase-js@2.117.2/dist/umd/supabase.js; connect-src https://tnzwhwitgnzoehbjrmoy.supabase.co; media-src https://tnzwhwitgnzoehbjrmoy.supabase.co; style-src 'self' 'unsafe-inline' https://fonts.googleapis.com; font-src https://fonts.gstatic.com; img-src 'self' data:; object-src 'none'; base-uri 'self'; form-action 'self'">
+<meta http-equiv="Content-Security-Policy" content="default-src 'self'; script-src 'self' https://cdn.jsdelivr.net/npm/@supabase/supabase-js@2.117.2/dist/umd/supabase.js; connect-src https://tnzwhwitgnzoehbjrmoy.supabase.co; media-src https://tnzwhwitgnzoehbjrmoy.supabase.co blob:; style-src 'self' 'unsafe-inline' https://fonts.googleapis.com; font-src https://fonts.gstatic.com; img-src 'self' data:; object-src 'none'; base-uri 'self'; form-action 'self'">
 <!-- マイページ。トップ（/）で開く。/mypage・/mypage.html も vercel.json の rewrites でこの同じファイルを出す（転送しない。ログインの戻り先がどの URL でも同じページになる） -->
 <!-- supabase-js は版を固定し、改ざんされていないことを integrity（SRI）で確かめてから使う（window.supabase）。CSP もこのファイルだけを許す -->
 <!-- defer：読み込みの間も HTML の読み進め（CSS・JS の取りに行き）を止めない。実行の順は今と同じ（下の type="module" より先に、文書の順で実行される） -->
@@ -17,17 +17,21 @@
 <!-- ログインの確かめ・RPC の接続先へ先につないでおく（supabase-js の fetch は資格情報なしなので crossorigin） -->
 <link rel="preconnect" href="https://tnzwhwitgnzoehbjrmoy.supabase.co" crossorigin>
 <link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=IBM+Plex+Sans+JP:wght@400;500;600;700&amp;display=swap">
-<link rel="stylesheet" href="/r/01bf51240546/studio.css">
-<link rel="stylesheet" href="/r/01bf51240546/gsi-button.css">
-<link rel="stylesheet" href="/r/01bf51240546/site-nav.css">
-<link rel="modulepreload" href="/r/01bf51240546/auth-storage.js">
-<link rel="modulepreload" href="/r/01bf51240546/mypage-lib.js">
-<link rel="modulepreload" href="/r/01bf51240546/mypage-share.js">
-<link rel="modulepreload" href="/r/01bf51240546/mypage-submissions.js">
-<link rel="modulepreload" href="/r/01bf51240546/qr-code.js">
-<link rel="modulepreload" href="/r/01bf51240546/share-lib.js">
-<link rel="modulepreload" href="/r/01bf51240546/site-nav.js">
-<link rel="modulepreload" href="/r/01bf51240546/submissions-lib.js">
+<link rel="stylesheet" href="/r/39015e7c0b2b/studio.css">
+<link rel="stylesheet" href="/r/39015e7c0b2b/gsi-button.css">
+<link rel="stylesheet" href="/r/39015e7c0b2b/site-nav.css">
+<link rel="modulepreload" href="/r/39015e7c0b2b/auth-storage.js">
+<link rel="modulepreload" href="/r/39015e7c0b2b/mypage-lib.js">
+<link rel="modulepreload" href="/r/39015e7c0b2b/mypage-share.js">
+<link rel="modulepreload" href="/r/39015e7c0b2b/mypage-submissions.js">
+<link rel="modulepreload" href="/r/39015e7c0b2b/mypage-upload.js">
+<link rel="modulepreload" href="/r/39015e7c0b2b/poll-lib.js">
+<link rel="modulepreload" href="/r/39015e7c0b2b/qr-code.js">
+<link rel="modulepreload" href="/r/39015e7c0b2b/share-lib.js">
+<link rel="modulepreload" href="/r/39015e7c0b2b/site-nav.js">
+<link rel="modulepreload" href="/r/39015e7c0b2b/submissions-lib.js">
+<link rel="modulepreload" href="/r/39015e7c0b2b/tus-lib.js">
+<link rel="modulepreload" href="/r/39015e7c0b2b/upload-lib.js">
 <style>
   /* 固定したヘッダーの高さの初期値（--topbar-h）：ヘッダーを 1 段にした（帯を題名の右に並べた）あとの実測（2026-10-23）。
      studio.css の値は、帯の無い案内のページ（about.html）・管理コンソールと共通なので、このページの中だけで上書きする。
@@ -36,6 +40,16 @@
   @media (min-width: 900px) { :root { --topbar-h: calc(69px + env(safe-area-inset-top)); } } /* 実測 69px */
   @media (max-width: 560px) { :root { --topbar-h: calc(57px + env(safe-area-inset-top)); } } /* 実測 57px */
   @media (orientation: landscape) and (max-height: 500px) { :root { --topbar-h: 0px; } } /* 横向きは固定しない（studio.css と同じ） */
+  /* 主カードのすぐ下の「今日の段階｜提出した作品」（組 11 の (4)。mypage.js の syncPair）。既定は縦に積み、広い幅（880px 以上）だけ横並び。
+     片方だけなら 1 列（.one）。枠の見た目は折りたたみ（.fold-group）と同じで、見出しは開け閉めしない */
+  .pair { display: flex; flex-direction: column; gap: var(--s3); }
+  .pair-head { display: flex; flex-wrap: wrap; align-items: center; gap: 2px var(--s3); min-height: 52px; padding: 10px 20px 0; font-size: 16px; font-weight: 700; }
+  .pair-head .meta { margin-left: auto; font-size: 13px; font-weight: 500; color: var(--text-2); }
+  @media (max-width: 560px) { .pair-head { padding: 10px 16px 0; } }
+  @media (min-width: 880px) {
+    .pair { display: grid; grid-template-columns: minmax(0, 1fr) minmax(0, 1.4fr); align-items: start; gap: var(--s4); }
+    .pair.one { grid-template-columns: minmax(0, 1fr); }
+  }
   /* 提出した作品（mypage-submissions.js）。色・角の丸みは studio.css の変数 */
   .my-row { display: grid; grid-template-columns: minmax(0, 1fr) auto; gap: 6px 12px; align-items: center; padding: 10px 0; border-top: 1px solid var(--line-soft); }
   .my-row:first-child { border-top: 0; }
@@ -61,6 +75,27 @@
   .my-dialog-body .row { display: flex; flex-wrap: wrap; gap: 8px; justify-content: flex-end; }
   .my-consent .consent-body { white-space: pre-wrap; max-height: 200px; overflow: auto; background: var(--surface-2); border-radius: 10px; padding: 10px 12px; font-size: 13px; }
   .my-video { width: 100%; aspect-ratio: 16 / 9; background: #000; border-radius: 12px; }
+  /* マイページからの動画の提出（組 11 の (8)。mypage-upload.js）：「提出した作品」の見出しの横のボタンと、2 段のダイアログ */
+  .pair-bar { display: flex; align-items: flex-start; gap: var(--s2); padding-right: 20px; }
+  .pair-bar .pair-head { flex: 1 1 auto; min-width: 0; }
+  .pair-bar .btn { margin-top: 12px; flex: none; }
+  @media (max-width: 560px) { .pair-bar { padding-right: 16px; } }
+  dialog.upload-dialog { width: min(560px, calc(100vw - 32px)); }
+  .upload-step { display: flex; flex-direction: column; gap: 12px; }
+  .upload-fields { display: flex; flex-direction: column; gap: 6px; }
+  .upload-label { font-size: 13px; font-weight: 600; }
+  .upload-fields .input { min-height: 40px; }
+  .upload-fields textarea.input { padding: 8px 12px; min-height: 80px; resize: vertical; }
+  .upload-file-input { max-width: 100%; }
+  .upload-file-info, .upload-stage-line { overflow-wrap: anywhere; }
+  .upload-stage-line { font-weight: 600; }
+  .upload-scope { display: flex; flex-direction: column; gap: 10px; }
+  .upload-scope-item { display: flex; flex-direction: column; gap: 2px; }
+  .upload-scope-label { display: flex; gap: 8px; align-items: flex-start; }
+  .upload-scope-label input { margin-top: 4px; }
+  .upload-scope-item .small { padding-left: 24px; }
+  .upload-body progress { width: 100%; }
+  .upload-confirm { border: 1px solid var(--line-2); border-radius: 10px; padding: 10px 12px; display: flex; flex-direction: column; gap: 8px; }
   /* スマホに保存する（mypage-share.js）。狭い幅では［この端末で開く］を上に大きく、QR を下に小さく（DOM の順のまま。広い幅では QR を左に置く） */
   .share-head { display: flex; flex-wrap: wrap; gap: 8px 12px; align-items: center; }
   .share-card { display: flex; flex-direction: column; gap: 12px; padding-top: 12px; border-top: 1px solid var(--line-soft); }
@@ -209,18 +244,32 @@
       </div>
     </section>
 
-    <!-- 詳細：今日の段階・使えるモデルは初めは閉じる（広い幅だけ 2 列）。つなぎ方は最後の短い折りたたみ -->
-    <div class="folds" id="folds">
-      <div class="fold-group" id="stages-group" hidden>
-        <details class="fold" id="stages-fold">
-          <summary><span>今日の段階</span><span class="meta tabular" id="stages-meta"></span></summary>
-          <div class="fold-body">
-            <ul class="stages" id="stages"></ul>
-          </div>
-        </details>
-      </div>
+    <!-- 今日の段階と提出した作品（組 11 の (4)）：主カードのすぐ下に、折りたたまずに常に出す。広い幅は横並び、狭い幅は縦に積む。
+         今日の段階は段階の回の受講者だけ、提出した作品は受講者だけ（サーバーが受講者として登録されていないと答えたときは隠す。本体は mypage-submissions.js）。
+         どちらも無ければ段ごと隠す（mypage.js の syncPair） -->
+    <div class="pair" id="today-pair" hidden>
+      <section class="fold-group" id="stages-group" aria-labelledby="stages-title" hidden>
+        <h2 class="pair-head" id="stages-title"><span>今日の段階</span><span class="meta tabular" id="stages-meta"></span></h2>
+        <div class="fold-body">
+          <ul class="stages" id="stages"></ul>
+        </div>
+      </section>
+      <section class="fold-group" id="submissions-group" aria-labelledby="submissions-title" hidden>
+        <!-- ［動画を提出する］（組 11 の (8)。本体は mypage-upload.js）：関数 submissions の印（GET /targets の upload）が来たときだけ出す -->
+        <div class="pair-bar">
+          <h2 class="pair-head" id="submissions-title"><span>提出した作品</span><span class="meta tabular" id="submissions-meta"></span></h2>
+          <button type="button" class="btn compact" id="upload-open" hidden>動画を提出する</button>
+        </div>
+        <div class="fold-body">
+          <p class="small muted" id="submissions-status" role="status" hidden></p>
+          <div id="submissions-list"></div>
+        </div>
+      </section>
+    </div>
 
-      <div class="fold-group" id="models-group">
+    <!-- 詳細：使えるモデルは初めは閉じる。つなぎ方は最後の短い折りたたみ -->
+    <div class="folds" id="folds">
+      <div class="fold-group wide" id="models-group">
         <details class="fold" id="models-fold">
           <summary><span>使えるモデル</span><span class="meta tabular" id="models-meta"></span></summary>
           <div class="fold-body">
@@ -229,17 +278,6 @@
           </div>
         </details>
         <p class="fold-empty" id="models-empty" hidden>今は、使えるモデルがありません。講師・スタッフに知らせてください。</p>
-      </div>
-
-      <!-- 提出した作品（受講者だけ。段 1d。サーバーが受講者として登録されていないと答えたときは隠す）。本体は mypage-submissions.js -->
-      <div class="fold-group wide" id="submissions-group" hidden>
-        <details class="fold" id="submissions-fold">
-          <summary><span>提出した作品</span><span class="meta tabular" id="submissions-meta"></span></summary>
-          <div class="fold-body">
-            <p class="small muted" id="submissions-status" role="status" hidden></p>
-            <div id="submissions-list"></div>
-          </div>
-        </details>
       </div>
 
       <!-- 作品をスマホに保存する（受講者だけ。段 1D。QR の欄）。本体は mypage-share.js。サーバーが使えないと答えたときは隠す -->
@@ -534,7 +572,9 @@
   <p class="sr-only" id="live" role="status" aria-live="polite"></p>
 </div>
 <dialog id="my-dialog" class="my-dialog" aria-label="確認"></dialog>
-<script type="module" src="/r/01bf51240546/topbar-height.js"></script>
-<script type="module" src="/r/01bf51240546/mypage.js"></script>
+<!-- マイページからの動画の提出（組 11 の (8)。中身は mypage-upload.js が作る） -->
+<dialog id="upload-dialog" class="my-dialog upload-dialog" aria-label="動画を提出"></dialog>
+<script type="module" src="/r/39015e7c0b2b/topbar-height.js"></script>
+<script type="module" src="/r/39015e7c0b2b/mypage.js"></script>
 </body>
 </html>

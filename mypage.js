@@ -3,7 +3,8 @@
 // 読み取り専用（書き込みは一切しない）。ドルの金額・換算は出さない。メールアドレスは画面に出さない（2026-10-19 田口さんの決定）。
 // ただし「登録されていない」画面だけは、違うアカウントで入ったと気づけるよう、ログインしたメールアドレスを出す（同日 main の決定）。
 // 表示はすべて textContent / createElement で組み立てる（データを innerHTML に入れない）。
-// 読み直しは、初回・再試行・手動（⟳）と、タブがまた見えたとき（前回の成功から 30 秒以上・1 回だけ）。一定間隔の自動の読み直しはしない。
+// 読み直しは、初回・再試行・手動（⟳）と、約 10 秒ごと（組 11 の (3)。部品は poll-lib.js の createPoller。見えている間だけ・本人の画面のまま・
+// 失敗が続くと間隔を延ばす）。タブがまた見えたとき（前回の成功から 5 秒以上）は、その読み直しを早める。setInterval は使わない。
 // supabase-js は index.html で版を固定し、integrity（SRI）を付けて読み込む（window.supabase）
 import {
   authEventKind,
@@ -36,6 +37,8 @@ import {
 } from "./mypage-lib.js";
 import { fillIcons, renderSiteNav } from "./site-nav.js";
 import { createMySubmissions } from "./mypage-submissions.js";
+import { createMyUpload } from "./mypage-upload.js";
+import { createPoller, staleAfterThisFailure } from "./poll-lib.js";
 import { createMyShare } from "./mypage-share.js";
 import { closedNote, discardDlKey } from "./share-lib.js";
 
@@ -156,6 +159,10 @@ const requests = createRequestCounter();
 
 /** 本人のデータを画面から消して、読み込み中の表示にする（ログアウトの通信を待つ間・画面を離れるときに、前の人の画面を残さない） */
 function hideContent(message = "ログアウトしています…") {
+  // マイページからの提出のダイアログを閉じる（送っている途中なら送信を止め、cancel を 1 回試す）。ボタンも隠す
+  myUpload.clear();
+  // 約 10 秒の読み直しを止める（ログアウトのあとに予約の時刻が来ても読まない）
+  poller.stop();
   // 出ている要求の応答は、届いても画面に入れない。以後、新しい番号も取れない（ログインし直すときはページを読み直す）
   requests.close();
   lastSuccessAt = null;
@@ -184,7 +191,8 @@ function hideContent(message = "ログアウトしています…") {
   $("stages").replaceChildren();
   $("stages-meta").textContent = "";
   $("stages-group").hidden = true;
-  $("folds").classList.remove("has-stages");
+  shownNav = undefined;
+  shownModels = undefined;
   $("credits-notice").textContent = "";
   $("credits-notice").hidden = true;
   $("refresh-error-text").textContent = "";
@@ -196,6 +204,7 @@ function hideContent(message = "ログアウトしています…") {
   mySubmissions.clear();
   myShare.clear();
   closedShare.clear();
+  syncPair();
   $("live").textContent = "";
   // 開閉の状態は保存しない。次に入った人は、どれも閉じた状態から始める
   for (const d of document.querySelectorAll("#app details")) d.open = false;
@@ -245,16 +254,19 @@ function startWatch(userId) {
     const kind = authEventKind(event, session, shownUser);
     if (kind) setTimeout(() => onSessionChanged(kind), 0);
   });
-  // Canvas などから戻ったときは、条件つきで 1 回だけ読み直す
+  // Canvas などから戻ったときは、条件つきで約 10 秒の読み直しを早める
   document.addEventListener("visibilitychange", () => {
     if (document.visibilityState === "visible") onVisible();
   });
-  // タブが「見えた」知らせが届かない画面（Codex の内蔵ブラウザなど）でも、ウィンドウに戻ったときの focus で、同じ条件で 1 回読み直す（U1-6）。
-  // 一定間隔の読み直しはしない。両方が続けて届いても、読み込み中は読まないので 1 回になる
+  // タブが「見えた」知らせが届かない画面（Codex の内蔵ブラウザなど）でも、ウィンドウに戻ったときの focus で、同じ条件で早める（U1-6）。
+  // 両方が続けて届いても、読み込み中は読まないので 1 回になる
   window.addEventListener("focus", () => onVisible());
 }
 
-/** タブがまた見えたとき・ウィンドウに戻ったとき：条件を満たすときだけ 1 回読み直す（Canvas から戻ったときの残りの確認） */
+/**
+ * タブがまた見えたとき・ウィンドウに戻ったとき：条件を満たすときだけ、約 10 秒の読み直しをすぐ 1 回行う（Canvas から戻ったときの残りの確認）。
+ * 満たさなくても、読み直しの部品は見えてから 10 秒以内に読む
+ */
 async function onVisible() {
   if (ending) return;
   let signedIn = false;
@@ -272,7 +284,10 @@ async function onVisible() {
     lastSuccessAt,
     now: Date.now(),
   });
-  if (go) load({ mode: "return" });
+  if (!go) return;
+  poller.kick();
+  // QR の欄は約 10 秒ごとには読まないので、見えたときに読み直す（受講者だけ）
+  if (shownNav === "student") void myShare.refresh();
 }
 
 // ---- 読み込み ----
@@ -315,7 +330,33 @@ const mySubmissions = createMySubmissions({
     const s = await currentSession();
     return s?.user?.id && s.access_token ? { accountId: s.user.id, token: s.access_token } : null;
   },
+  // 枠を出した・隠したら「今日の段階｜提出した作品」の並べ方を合わせる
+  onLayout: () => syncPair(),
 });
+
+/**
+ * マイページからの動画の提出（組 11 の (8)。設計 kumi11-mypage-upload.md。本体は mypage-upload.js）。
+ * ［動画を提出する］は「提出した作品」の見出しの横。関数 submissions の GET /targets が印（upload.enabled）を返したときだけ出す。
+ * 本人の画面を出したとき（poll ではない）に refresh、ログアウトで clear。提出が済んだら、一覧をすぐ読み直す。
+ * （mypage_logout_race_nodetest.mjs は import を外した決まったファイルだけを同じ vm で動かすため、部品が無いときは何もしない物に替える）
+ */
+const myUpload =
+  typeof createMyUpload === "function"
+    ? createMyUpload({
+        openBtn: $("upload-open"),
+        dialog: $("upload-dialog"),
+        apiBase: SUBMISSIONS_API_URL,
+        apiKey: SUPABASE_PUBLISHABLE_KEY,
+        getSession: async () => {
+          const s = await currentSession();
+          return s?.user?.id && s.access_token ? { accountId: s.user.id, token: s.access_token } : null;
+        },
+        onSubmitted: () => {
+          void mySubmissions.refresh();
+          poller.kick();
+        },
+      })
+    : { refresh: async () => "skip", clear() {}, busy: () => false, isOpen: () => false };
 
 /** 作品をスマホに保存する QR の欄（受講者だけ。docs/design-submissions.md 4.9・段 1D）。本体は mypage-share.js。ログアウトで clear() し、QR と鍵つきの URL も捨てる */
 const myShare = createMyShare({
@@ -347,6 +388,8 @@ const closedShare = createMyShare({
 });
 
 let loading = false;
+/** 約 10 秒の読み直しで 401 が来た（まだログアウトしていない）。続く読み直しでもう一度 401 なら終える。読めたら下ろす */
+let poll401 = false;
 
 /** 更新のボタンを「更新中」にする・戻す（disabled にはしない：押したボタンからフォーカスが外れないように aria-disabled で止める） */
 function setBusy(busy) {
@@ -358,21 +401,40 @@ function setBusy(busy) {
 }
 
 /**
+ * 約 10 秒の読み直し（組 11 の (3)。設計 kumi11-site.md 2.3.2）。本人の画面を出したら start、hideContent で stop。
+ * 読むのは、本人の画面を出していて・読み込み中でなく・ログアウトの途中でなく・確認や再生の窓が開いていないときだけ（タブが隠れている間も読まない）
+ */
+const poller = createPoller({
+  run: () => load({ mode: "poll" }),
+  canRun: () => current === "app" && !loading && !ending && !$("my-dialog").open && !myUpload.isOpen(),
+  isVisible: () => document.visibilityState === "visible",
+  setTimeout: (fn, ms) => setTimeout(fn, ms),
+  clearTimeout: (id) => clearTimeout(id),
+});
+
+/**
  * 読み込んで画面を切り替える。
  * mode："initial"（初回）・"retry"（失敗の画面の［もう一度試す］）：読み込み中の画面を出し、失敗なら失敗の画面。
  *       "manual"（⟳・更新の失敗の［もう一度試す］）・"return"（タブがまた見えたとき）：本人の画面のまま更新する。
  *       失敗しても画面・開いている詳細・フォーカスはそのままにし、主カードに理由と［もう一度試す］を出す（成功の時刻は進めない）
+ *       "poll"（約 10 秒の読み直し）：本人の画面のまま、⟳ の「更新中」も「読み込み中…」も出さず、フォーカスを動かさない。
+ *       失敗の枠は続けて 3 回失敗したときに初めて出す。提出した作品も静かに読み直す（同じ中身なら描き直さない）
+ * 返り値："ok" | "fail" | "skip"（読み直しの部品に渡す。/me と作品のどちらかが失敗なら "fail"）
  */
 async function load({ mode = "initial" } = {}) {
-  if (loading) return;
+  if (loading) return "skip";
   // 番号は最初の await より前に取る。ログアウト（hideContent → requests.close()）を始めたあとは、ここで無効な番号しか取れず、
   // 画面を一切変えずに終わる。認証の確認の待ち・GET の待ちの間にログアウトしても、この番号が無効になる
   let ticket = requests.begin();
-  if (!requests.isLive(ticket)) return;
+  if (!requests.isLive(ticket)) return "skip";
   loading = true;
-  const inApp = (mode === "manual" || mode === "return") && current === "app";
+  const poll = mode === "poll";
+  const inApp = (mode === "manual" || mode === "return" || poll) && current === "app";
+  let result = "skip";
+  /** 提出した作品の読み直し（poll のときだけ、結果を待って返り値に入れる） */
+  let works = null;
   if (inApp) {
-    setBusy(true);
+    if (!poll) setBusy(true);
   } else {
     $("status").replaceChildren(el("p", { className: "muted", text: "読み込み中…" }));
     show("status");
@@ -381,23 +443,31 @@ async function load({ mode = "initial" } = {}) {
     const session = await currentSession();
     // 認証の確認（トークンの更新を待つことがある）から戻った時点で、番号がまだ有効か。有効なら、そのアカウントを結び付ける
     ticket = requests.withAccount(ticket, session?.user?.id ?? null);
-    if (!ticket) return;
+    if (!ticket) return "skip";
     const token = session?.access_token ?? null;
     const { status, body } = await fetchMe(token);
     const outcome = decideApiOutcome(status, body);
     // 応答が届いた時点で、同じ要求・同じアカウントのままか（ログアウト・別の要求・別のアカウントなら、この応答では画面を変えない）。
     // トークンが無かったとき（unauthorized になる）も、番号が有効かは必ず照らす
     const now = await currentSession();
-    if (!requests.isLive(ticket)) return;
-    if (token && !requests.isCurrent(ticket, now?.user?.id ?? null)) return;
+    if (!requests.isLive(ticket)) return "skip";
+    if (token && !requests.isCurrent(ticket, now?.user?.id ?? null)) return "skip";
     if (outcome.action === "ok") {
       const before = $("credits-value").textContent;
-      render(outcome.body);
+      const lowBefore = $("low-line-text").textContent;
+      works = render(outcome.body, { poll });
       lastSuccessAt = Date.now();
       renderCheckedAt();
       hideRefreshError();
       show("app");
-      announceUpdate(mode, before);
+      announceUpdate(mode, before, lowBefore);
+      poller.start();
+      poll401 = false;
+      result = "ok";
+    } else if (outcome.action === "unauthorized" && poll && !poll401) {
+      // 約 10 秒の読み直しの 401 は 1 回ではログアウトしない（トークンの更新の行き違いなど）。次の読み直しでもう一度だけ確かめる
+      poll401 = true;
+      result = "fail";
     } else if (outcome.action === "unauthorized") {
       hideContent();
       await endSession();
@@ -419,15 +489,22 @@ async function load({ mode = "initial" } = {}) {
         show("denied");
       }
     } else if (inApp) {
-      showRefreshError(outcome.message);
+      // 約 10 秒の読み直しの失敗は、続けて 3 回目から出す（1・2 回の一時的な失敗では赤い枠を出さない）
+      if (!poll || staleAfterThisFailure(poller.failures())) showRefreshError(outcome.message);
+      result = "fail";
     } else {
       $("failed-message").textContent = outcome.message;
       show("failed");
+      result = "fail";
     }
   } finally {
     loading = false;
-    setBusy(false);
+    if (!poll) setBusy(false);
   }
+  if (!poll || !works) return result;
+  // 提出した作品の静かな読み直しの結果も合わせる（どちらかが失敗なら失敗）
+  const w = await works;
+  return w === "fail" ? "fail" : result;
 }
 
 /** 最後に成功した時刻（「確認 13:42」）を出す。成功したときだけ呼ぶ */
@@ -454,33 +531,71 @@ function hideRefreshError() {
   $("refresh-error-text").textContent = "";
 }
 
-/** 読み上げへの知らせは必要な分だけ：手動の更新は結果を、戻ったときの読み直しは残りが変わったときだけ */
-function announceUpdate(mode, before) {
+/**
+ * 読み上げへの知らせは必要な分だけ：手動の更新は結果を、戻ったときの読み直しは残りが変わったときだけ。
+ * 約 10 秒の読み直しは、残りが「少ない」「無い」に変わったときだけ（その 1 行を読む）
+ */
+function announceUpdate(mode, before, lowBefore = "") {
   const after = $("credits-value").textContent;
   const at = checkedAtText(lastSuccessAt) ?? "";
   if (mode === "manual") {
     $("live").textContent = `最新の状態を読み込みました。残りクレジット ${after}。${at}`;
   } else if (mode === "return" && before !== after) {
     $("live").textContent = `残りクレジットが ${after} になりました。`;
+  } else if (mode === "poll") {
+    const low = $("low-line-text").textContent;
+    if (low && low !== lowBefore) $("live").textContent = low;
   }
 }
 
 // ---- 表示 ----
 
-function render(me) {
+/** 前回描いた区分（画面の間の移動）と、使えるモデルの中身（JSON）。約 10 秒の読み直しで同じなら描き直さない。hideContent で忘れる */
+let shownNav;
+let shownModels;
+
+/**
+ * 本人の画面を描く。poll（約 10 秒の読み直し）のときは、変わった所だけ描き直す（区分が同じなら移動の帯、中身が同じならモデルの一覧は触らない）。
+ * QR の欄は poll では読み直さない（初回・⟳・見えたときだけ）。
+ * 返り値：受講者なら提出した作品の読み直しの Promise（"ok" | "fail" | "skip"）、それ以外は null
+ */
+function render(me, { poll = false } = {}) {
   const role = $("me-role");
   role.textContent = me.role_label || "";
   role.className = `badge ${roleBadgeClass(me.role)}`;
   role.hidden = !me.role_label;
-  renderSiteNav($("site-nav"), me.role, "mypage");
+  if (!poll || shownNav !== me.role) renderSiteNav($("site-nav"), me.role, "mypage");
+  shownNav = me.role;
   renderCredits(me.credits, me.role);
-  renderModels(me.models);
+  const models = JSON.stringify(me.models ?? null);
+  if (!poll || shownModels !== models) renderModels(me.models);
+  shownModels = models;
+  const student = me.role === "student";
   // 提出した作品は受講者だけ（本体は mypage-submissions.js。失敗しても、この画面の残りは変えない）
-  if (me.role === "student") void mySubmissions.refresh();
+  let works = null;
+  if (student) works = mySubmissions.refresh(poll ? { quiet: true } : {});
   else mySubmissions.clear();
-  // 作品をスマホに保存する QR の欄も受講者だけ（本体は mypage-share.js。失敗しても、この画面の残りは変えない）
-  if (me.role === "student") void myShare.refresh();
+  // 作品をスマホに保存する QR の欄も受講者だけ（本体は mypage-share.js。失敗しても、この画面の残りは変えない）。
+  // 約 10 秒の読み直し（poll）では読み直さない（初回・⟳・タブが見えたときだけ）
+  if (poll) {
+    if (!student) myShare.clear();
+  } else if (me.role === "student") void myShare.refresh();
   else myShare.clear();
+  // マイページからの提出のボタンも受講者だけ（印を読むのは初回・⟳・戻ったときだけ。約 10 秒の読み直しでは読まない）
+  if (!student) myUpload.clear();
+  else if (!poll) void myUpload.refresh();
+  syncPair();
+  return works;
+}
+
+/**
+ * 主カードのすぐ下の「今日の段階｜提出した作品」（組 11 の (4)）：2 つとも出ていれば横並び（広い幅。狭い幅は縦に積む）、
+ * 片方だけなら 1 列（.one）、どちらも無ければ段ごと隠す
+ */
+function syncPair() {
+  const shown = [$("stages-group"), $("submissions-group")].filter((g) => !g.hidden).length;
+  $("today-pair").hidden = shown === 0;
+  $("today-pair").classList.toggle("one", shown === 1);
 }
 
 /** 文字を入れて、空なら隠す */
@@ -524,8 +639,7 @@ function renderStages(v) {
     $("live").textContent = "今日の段階の一覧はなくなりました。";
   }
   group.hidden = !hasList;
-  $("folds").classList.toggle("has-stages", hasList);
-  if (!hasList) $("stages-fold").open = false;
+  syncPair();
   $("stages-meta").textContent = hasList ? `${v.stages.length} 段階` : "";
   $("stages").replaceChildren(
     ...v.stages.map((s) =>

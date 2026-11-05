@@ -57,7 +57,8 @@ const num = (v) => (v === null || v === undefined || v === "" || !Number.isFinit
 const arr = (v) => (Array.isArray(v) ? v : []);
 const isObj = (v) => v !== null && typeof v === "object" && !Array.isArray(v);
 const SCOPES = ["public", "lecture", "private"];
-const ACCEPT_STATES = ["current", "grace", "until", "closed"];
+// upcoming：まだ始まっていない（受け付けない。DB 254）。知らない状態は closed として読む
+const ACCEPT_STATES = ["current", "grace", "until", "closed", "upcoming"];
 
 // A の約束 0.7：停止中の理由は、操作や画面が違っても同じ文で伝える。
 export const MSG_SUBMISSIONS_PAUSED = "いま提出の受け付けを止めています。講師の案内を待ってください。";
@@ -114,7 +115,8 @@ export function normalizeScope(v) {
 export const PRIVATE_BANNER = "完全非公開：講義では映しません。プロジェクターに映していないか確かめてください。";
 /** Opus の音の印（設計 4.8。行は「♪?」、ふれると説明） */
 export const OPUS_MARK = { text: "♪?", title: "iPhone などで音が出ないことがあります" };
-export const LIST_POLL_MS = 30000;
+/** 提出作品のページの一覧の読み直しの間隔（ミリ秒。組 11 で 30 秒から約 10 秒に。部品は poll-lib.js） */
+export const LIST_POLL_MS = 10000;
 
 function normalizeAccept(raw) {
   const a = isObj(raw) ? raw : {};
@@ -154,11 +156,13 @@ export function submissionStageName(stage) {
 
 /**
  * 段階の行の受け付けの状態（設計 4.8）。サーバーが決めた状態と終わりの時刻から、今の時刻に合わせて書く。
- * 「受け付け中・このワークショップの間」→「あと 7 分受け付けます」→「受け付けは終わりました」。ブリッジワークは「受け付け中・11/25 23:59 まで」
+ * 「受け付け中・このワークショップの間」→「あと 7 分受け付けます」→「受け付けは終わりました」。ブリッジワークは「受け付け中・11/25 23:59 まで」。
+ * まだ始まっていない段階（upcoming）は「まだ始まっていません」
  */
 export function instructorAcceptLabel(stage, nowMs = Date.now()) {
   const { state, until } = stage.accept;
   const untilMs = until ? Date.parse(until) : NaN;
+  if (state === "upcoming") return "まだ始まっていません";
   if (state === "closed") return "受け付けは終わりました";
   if (state === "current") return "受け付け中・このワークショップの間";
   if (!Number.isFinite(untilMs) || untilMs <= nowMs) return "受け付けは終わりました";
@@ -233,11 +237,10 @@ export function workRow(work) {
 
 const SCOPE_BADGE_LABELS = { public: "公開", lecture: "講義内", private: "完全非公開" };
 /**
- * 公開範囲のバッジ。ブリッジワークは作品ごとに出す（公開・講義内・完全非公開）。ワークショップは「講義内」が前提なので出さないが、
- * 完全非公開が入っていたら（本来は無い）見落とさないよう出す
+ * 公開範囲のバッジ。種類（ワークショップ・ブリッジワーク）によらず、作品ごとに出す（公開・講義内・完全非公開）。
+ * 組 11 から、ワークショップの作品も提出の直後に 3 つから選び、あとからマイページで変えられる（決定 A）（stageKind は呼び出しの形を保つために受け取るだけ）
  */
 export function scopeBadge(work, stageKind) {
-  if (stageKind !== "bridge" && work.scope !== "private") return null;
   return { label: SCOPE_BADGE_LABELS[work.scope], tone: work.scope };
 }
 
@@ -246,10 +249,13 @@ export function needsManualPlay(work) {
   return work.scope === "private";
 }
 
-/** ［前］［次］のための並び：分母に入る人（people）の作品を、人の順・作品番号の順に平らにする（止められている人・名簿にいない人は含めない） */
+/**
+ * ［前］［次］のための並び：分母に入る人（people）の作品を、人の順・作品番号の順に平らにする（止められている人・名簿にいない人は含めない）。
+ * personIndex は people の中の人の順（［次の受講者 ▶▶］で人の切れ目を見る）
+ */
 export function playbackQueue(view) {
   const out = [];
-  for (const p of view?.people ?? []) for (const w of p.works) out.push({ person: p.name, identity: p.identity, work: w });
+  for (const [personIndex, p] of (view?.people ?? []).entries()) for (const w of p.works) out.push({ person: p.name, identity: p.identity, work: w, personIndex });
   return out;
 }
 
@@ -259,6 +265,18 @@ export function neighborInQueue(queue, workId, dir) {
   if (i < 0) return null;
   const j = dir === "next" ? i + 1 : i - 1;
   return j >= 0 && j < queue.length ? queue[j] : null;
+}
+
+/**
+ * ［次の受講者 ▶▶］の行き先：並びの中で、いまの作品の人の次の人の 1 本目。
+ * 未選択・並びに無い → 並びの最初。最後の人 → null。並びが空 → null
+ */
+export function nextPersonInQueue(queue, workId) {
+  const i = workId ? queue.findIndex((q) => q.work.workId === workId) : -1;
+  if (i < 0) return queue[0] ?? null;
+  const me = queue[i].personIndex;
+  for (let j = i + 1; j < queue.length; j++) if (queue[j].personIndex !== me) return queue[j];
+  return null;
 }
 
 /**
@@ -291,7 +309,8 @@ export const MSG_CANCELLED_UPLOAD = "送信をやめました。";
 export const MY_WORKS_EMPTY = "提出した作品はまだありません。";
 export const PUBLIC_BLOCKED_LEGAL = "公開は準備中です。準備ができたら、アカウントが有効な間にマイページで選べます。";
 export const PUBLIC_BLOCKED_LINK = "公開は、アカウントが有効な間に、Google でログインしたマイページで選べます。";
-export const WORKSHOP_SCOPE_NOTE = "ワークショップの作品の公開範囲は、変えられません。";
+/** サーバーが変えられないとした作品（can_change_scope が偽）にだけ出す 1 行。種類によらない（組 11） */
+export const SCOPE_FIXED_NOTE = "この作品の公開範囲は、変えられません。";
 
 /** GET /my/works を読む。形が違えば null */
 export function normalizeMyWorks(raw) {
@@ -346,8 +365,8 @@ export function publicBlockedReason({ loginKind, consent }) {
 const SCOPE_RANK = { private: 0, lecture: 1, public: 2 };
 
 /**
- * 公開範囲を変えるときの流れ（設計 5.2）。
- * - ワークショップの作品・サーバーが変えられないとした作品は変えられない。
+ * 公開範囲を変えるときの流れ（設計 5.2）。種類（ワークショップ・ブリッジワーク）によらない（組 11。決定 A のあとの main の決め）。
+ * - サーバーが変えられないとした作品（can_change_scope が偽）は変えられない。
  * - 狭める変更（公開→講義内・完全非公開、講義内→完全非公開）は確認だけ。
  * - 「公開」にする変更は、同意の文の全文とチェックの欄（Google のログインで、法務の確認済みの版があるときだけ）。
  * - 完全非公開→講義内は、社外には出ない変更なので確認だけ。
@@ -355,7 +374,6 @@ const SCOPE_RANK = { private: 0, lecture: 1, public: 2 };
  */
 export function scopeChangePlan(work, next, ctx) {
   if (!SCOPES.includes(next) || next === work.scope) return { ok: false, reason: "公開範囲が変わっていません。" };
-  if (work.kind === "workshop") return { ok: false, reason: WORKSHOP_SCOPE_NOTE };
   if (!work.canChangeScope) return { ok: false, reason: "この作品の公開範囲は、今は変えられません。" };
   if (next === "public") {
     const blocked = publicBlockedReason(ctx);
@@ -399,7 +417,7 @@ export function myActionErrorText(code, status) {
     case "submission_closed":
       return "この段階の受け付けは終わったため、取り下げられません。";
     case "scope_fixed":
-      return WORKSHOP_SCOPE_NOTE;
+      return SCOPE_FIXED_NOTE;
     case "public_unavailable":
       return PUBLIC_BLOCKED_LEGAL;
     case "public_needs_google":
@@ -432,7 +450,7 @@ export function myPlaybackErrorText(code, status) {
 /** 受講者に見える文の一覧（試験で D12 の言葉を確かめる） */
 export function studentFacingTexts() {
   return [
-    WITHDRAW_CONFIRM_LINE, MSG_WITHDRAWN, MSG_CANCELLED_UPLOAD, MY_WORKS_EMPTY, PUBLIC_BLOCKED_LEGAL, PUBLIC_BLOCKED_LINK, WORKSHOP_SCOPE_NOTE,
+    WITHDRAW_CONFIRM_LINE, MSG_WITHDRAWN, MSG_CANCELLED_UPLOAD, MY_WORKS_EMPTY, PUBLIC_BLOCKED_LEGAL, PUBLIC_BLOCKED_LINK, SCOPE_FIXED_NOTE,
     MSG_SCOPE_CHANGED, MSG_MY_WORKS_FAILED, MSG_MY_WORKS_BUSY, MSG_MY_NETWORK, MSG_MY_STALE, MSG_SUBMISSIONS_PAUSED, MSG_SUBMISSIONS_READ_PAUSED,
     ...["submission_busy", "not_stage_student", "submission_closed", "scope_fixed", "public_unavailable", "public_needs_google", "consent_outdated", "member_disabled", "already_ready", "x"].map((c) => myActionErrorText(c, 400)),
     myActionErrorText("x", 0), myActionErrorText("x", 404), myActionErrorText("x", 503), myPlaybackErrorText("cold_unavailable", 409), myPlaybackErrorText("x", 404), myPlaybackErrorText("x", 500),

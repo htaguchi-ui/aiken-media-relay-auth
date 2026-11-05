@@ -1,5 +1,6 @@
 // マイページの「提出した作品」（docs/design-submissions.md 4.5・4.11・5.2）。出した作品の一覧・再生・取り下げ・公開範囲の変更・送っている途中の動画の［やめる］。
-// mypage.js から使う：createMySubmissions({...}) を 1 つ作り、本人の画面を出すたびに refresh()、画面の中身を消すときに clear() を呼ぶ。
+// mypage.js から使う：createMySubmissions({...}) を 1 つ作り、本人の画面を出すたびに refresh()、約 10 秒の読み直しでは refresh({ quiet: true })、
+// 画面の中身を消すときに clear() を呼ぶ。refresh の返り値は "ok" | "fail" | "skip"（読み直しの部品 poll-lib.js に渡す）。
 // 値の読み取り・判定は submissions-lib.js（試験は scripts/submissions_lib_test.mjs・scripts/mypage_submissions_nodetest.mjs）。
 // 取り下げ・公開範囲の変更の可否はサーバーが返した値（can_withdraw・can_change_scope）だけを使い、画面は締切を解釈しない。
 // 表示はすべて textContent / createElement で組み立てる（データを innerHTML に入れない）。
@@ -17,8 +18,8 @@ import {
   publicBlockedReason,
   SCOPE_LABELS,
   scopeChangePlan,
+  SCOPE_FIXED_NOTE,
   WITHDRAW_CONFIRM_LINE,
-  WORKSHOP_SCOPE_NOTE,
   formatShortDateTime,
 } from "./submissions-lib.js";
 
@@ -35,6 +36,7 @@ const SCOPE_ORDER = ["public", "lecture", "private"];
  * @param {string} o.apiKey 公開用のキー
  * @param {() => Promise<{accountId: string, token: string} | null>} o.getSession 現在の本人IDとトークン（通知を待たず共有保存先を読み直す）
  * @param {typeof fetch} [o.fetchImpl]
+ * @param {() => void} [o.onLayout] 枠（group）を出した・隠したときに呼ぶ（マイページの「今日の段階｜提出した作品」の並べ方を合わせる）
  */
 export function createMySubmissions(o) {
   const fetchImpl = o.fetchImpl ?? ((...a) => fetch(...a));
@@ -46,6 +48,16 @@ export function createMySubmissions(o) {
   let busy = false;
   let loadedOnce = false;
   let ownerId = null;
+  /** 前回描いた中身（JSON）。約 10 秒の読み直しで同じなら描き直さない */
+  let shownJson = null;
+  /**
+   * 描き直してもフォーカスを戻すための印：作った操作の部品 → 「作品の id|操作」。focusTargets は最後に描いた分の「印 → 部品」。
+   * 公開範囲の select は「…|select」（選んでいる途中なので、静かな読み直しでは描き直さない）
+   */
+  const focusKeys = new WeakMap();
+  let focusTargets = new Map();
+  /** 公開範囲の select → 描いたときの範囲（選びかけかどうかを、描き直す前に見分ける） */
+  const shownScopes = new WeakMap();
 
   const el = (tag, props = {}, ...children) => {
     const node = document.createElement(tag);
@@ -114,6 +126,31 @@ export function createMySubmissions(o) {
     return { ok: res.ok, status: res.status, code, body: json };
   }
 
+  /** 枠を出す・隠す（並べ方を合わせるため、変えたら知らせる） */
+  function setGroupHidden(hidden) {
+    if (o.group.hidden === hidden) return;
+    o.group.hidden = hidden;
+    o.onLayout?.();
+  }
+
+  /** 操作の部品に印を付けて覚える（描き直したあとフォーカスを戻す先） */
+  function mark(node, key) {
+    focusKeys.set(node, key);
+    focusTargets.set(key, node);
+    return node;
+  }
+
+  /** 今フォーカスのある、一覧の中の操作の部品の印（無ければ null） */
+  function focusedKey() {
+    const a = globalThis.document?.activeElement;
+    return a ? focusKeys.get(a) ?? null : null;
+  }
+
+  /** 静かな読み直しで描き直してはいけないとき：操作の途中・確認の窓が開いている・公開範囲を選んでいる途中 */
+  function mustNotRedraw() {
+    return busy || !!o.dialog.open || !!focusedKey()?.endsWith("|select");
+  }
+
   function say(text, tone = "ok") {
     o.statusEl.textContent = text;
     o.statusEl.className = tone === "error" ? "error-text" : "muted";
@@ -150,40 +187,57 @@ export function createMySubmissions(o) {
 
   // ---- 読み込み ----
 
-  async function refresh(expectedTicket = null) {
+  /**
+   * 一覧を読み直す。ticket：操作のあとの読み直しで、操作を始めたときの本人の印（無ければ今の本人で読む）。
+   * quiet：約 10 秒の読み直し。操作の途中・確認の窓が開いている・公開範囲を選んでいる途中なら読まずに "skip"（通し番号を進めない）。
+   * 失敗しても一覧と文をそのまま残して "fail"。中身が前回と同じなら描き直さない。描き直すときは、フォーカスのあった操作の部品へ戻す。
+   * 返り値は "ok" | "fail" | "skip"
+   */
+  async function refresh({ ticket: expectedTicket = null, quiet = false } = {}) {
+    if (quiet && mustNotRedraw()) return "skip";
     const seq = ++refreshSeq;
     const ticket = expectedTicket ? (await current(expectedTicket) ? expectedTicket : null) : await ticketFor(true);
-    if (!ticket || seq !== refreshSeq) return;
+    if (!ticket || seq !== refreshSeq) return "skip";
     const my = ticket.epoch;
-    if (!loadedOnce) {
+    if (!loadedOnce && !quiet) {
       o.listEl.replaceChildren(el("p", { className: "muted", text: "読み込み中…" }));
-      o.group.hidden = false;
+      setGroupHidden(false);
     }
     const r = await call("GET", "/my/works", undefined, ticket);
-    if (!r || my !== epoch || seq !== refreshSeq) return; // 通知未着の本人変更も、call の前後で照合する
+    if (!r || my !== epoch || seq !== refreshSeq) return "skip"; // 通知未着の本人変更も、call の前後で照合する
     if (!r.ok) {
       // 受講者として登録されていない（講師・管理者など）：この枠は出さない
       if (r.status === 403 || r.code === "not_stage_student") {
         data = null;
-        o.group.hidden = true;
-        return;
+        shownJson = null;
+        setGroupHidden(true);
+        return "ok";
       }
+      if (quiet) return "fail"; // 静かな読み直しの失敗は、一覧と文をそのまま残す（続けて失敗したときの知らせは mypage.js）
       if (!loadedOnce) {
         o.listEl.replaceChildren(el("p", { className: "error-text", text: MSG_MY_WORKS_FAILED }), el("button", { type: "button", className: "btn compact", text: "もう一度読み込む", onclick: () => void refresh() }));
       } else {
         say(MSG_MY_WORKS_FAILED, "error");
       }
-      return;
+      return "fail";
     }
     const d = normalizeMyWorks(r.body);
     if (!d) {
-      o.listEl.replaceChildren(el("p", { className: "error-text", text: MSG_MY_WORKS_FAILED }));
-      return;
+      if (!quiet) o.listEl.replaceChildren(el("p", { className: "error-text", text: MSG_MY_WORKS_FAILED }));
+      return "fail";
     }
+    const json = JSON.stringify(d);
+    if (quiet && loadedOnce && json === shownJson) return "ok"; // 変わっていない：描き直さない
+    // 待っている間に操作が始まった・窓が開いた・選び始めた：今回は描き直さない（次の読み直しで）
+    if (quiet && mustNotRedraw()) return "skip";
     data = d;
+    shownJson = json;
     loadedOnce = true;
-    o.group.hidden = false;
+    setGroupHidden(false);
+    const key = focusedKey();
     render();
+    if (key) focusTargets.get(key)?.focus?.();
+    return "ok";
   }
 
   function setMeta(text) {
@@ -197,19 +251,44 @@ export function createMySubmissions(o) {
     loadedOnce = false;
     busy = false;
     ownerId = null;
+    shownJson = null;
+    focusTargets = new Map();
     o.dialog.close?.();
     o.dialog.replaceChildren();
     o.listEl.replaceChildren();
     o.statusEl.textContent = "";
     o.statusEl.hidden = true;
-    o.group.hidden = true;
+    setGroupHidden(true);
     setMeta("");
   }
 
   // ---- 表示 ----
 
+  /** 選びかけの公開範囲（select の値が、描いたときの範囲と違う）：作品の id → 選んだ値 */
+  function pendingScopes() {
+    const out = new Map();
+    for (const [key, node] of focusTargets) {
+      if (!key.endsWith("|select")) continue;
+      const v = node.value;
+      if (typeof v === "string" && shownScopes.has(node) && v !== shownScopes.get(node)) out.set(key, v);
+    }
+    return out;
+  }
+
+  /** 描き直したあと、選びかけの値を戻す（その作品の欄がまだあり、その値を選べるときだけ） */
+  function restoreScopes(pending) {
+    for (const [key, v] of pending) {
+      const select = focusTargets.get(key);
+      const opt = select ? Array.from(select.children ?? []).find((c) => c.getAttribute?.("value") === v) : null;
+      if (opt && !opt.disabled) select.value = v;
+    }
+  }
+
   function render() {
     if (!data) return;
+    // 静かな読み直し・操作の前後で描き直しても、選びかけの公開範囲を元の範囲に戻さない（フォーカスが select から外れていても）
+    const pending = pendingScopes();
+    focusTargets = new Map();
     setMeta(data.works.length ? `${data.works.length} 本` : "");
     const parts = [];
     if (data.uploading.length) {
@@ -223,7 +302,7 @@ export function createMySubmissions(o) {
               "div",
               { className: "my-row", "data-upload": u.workId },
               el("div", { className: "my-main" }, el("div", { className: "my-title", text: u.sourceLabel ?? "動画" }), el("div", { className: "muted small", text: `${u.stageLabel}${u.begunAt ? ` · ${formatShortDateTime(u.begunAt)} に開始` : ""}` })),
-              el("button", { type: "button", className: "btn compact", "data-action": "cancel-upload", text: "やめる", disabled: busy, onclick: () => void cancelUpload(u) }),
+              mark(el("button", { type: "button", className: "btn compact", "data-action": "cancel-upload", text: "やめる", disabled: busy, onclick: () => void cancelUpload(u) }), `${u.workId}|cancel-upload`),
             ),
           ),
         ),
@@ -232,37 +311,35 @@ export function createMySubmissions(o) {
     if (!data.works.length) parts.push(el("p", { className: "muted", text: MY_WORKS_EMPTY }));
     for (const w of data.works) parts.push(workRow(w));
     o.listEl.replaceChildren(...parts);
+    restoreScopes(pending);
   }
 
   function workRow(w) {
-    const actions = [el("button", { type: "button", className: "btn compact", "data-action": "play", text: "▶ 見る", onclick: () => void play(w) })];
-    if (w.canWithdraw) actions.push(el("button", { type: "button", className: "btn compact", "data-action": "withdraw", text: "取り下げる", disabled: busy, onclick: () => void withdraw(w) }));
+    const actions = [mark(el("button", { type: "button", className: "btn compact", "data-action": "play", text: "▶ 見る", onclick: () => void play(w) }), `${w.workId}|play`)];
+    if (w.canWithdraw) actions.push(mark(el("button", { type: "button", className: "btn compact", "data-action": "withdraw", text: "取り下げる", disabled: busy, onclick: () => void withdraw(w) }), `${w.workId}|withdraw`));
     const kids = [
       el("div", { className: "my-main" }, el("div", { className: "my-title", text: myWorkHeading(w) }), el("div", { className: "muted small", text: myWorkMeta(w) }), w.kind === "bridge" && w.purpose ? el("div", { className: "small", text: w.purpose }) : null),
       el("span", { className: `scope-badge ${w.scope}`, text: SCOPE_LABELS[w.scope] }),
       el("div", { className: "my-actions" }, ...actions),
     ];
     const row = el("div", { className: "my-row", "data-work": w.workId }, ...kids);
-    if (w.kind === "bridge") {
-      const scopeBox = scopeControl(w);
-      if (scopeBox) row.append(scopeBox);
-    } else {
-      row.append(el("div", { className: "muted small my-scope-note", text: WORKSHOP_SCOPE_NOTE }));
-    }
+    // 公開範囲を変える欄は、種類（ワークショップ・ブリッジワーク）によらず、サーバーの can_change_scope だけで出す（組 11）
+    row.append(scopeControl(w) ?? el("div", { className: "muted small my-scope-note", text: SCOPE_FIXED_NOTE }));
     return row;
   }
 
-  /** ブリッジワークの公開範囲を変える欄（変えられないときは出さない。サーバーの can_change_scope に従う） */
+  /** 公開範囲を変える欄（変えられないときは出さない。サーバーの can_change_scope に従う） */
   function scopeControl(w) {
     if (!w.canChangeScope) return null;
     const ctx = { loginKind: data.loginKind, consent: data.consent };
     const blocked = publicBlockedReason(ctx);
-    const select = el(
+    const select = mark(el(
       "select",
       { className: "input compact-select", "aria-label": `${myWorkHeading(w)} の公開範囲` },
       ...SCOPE_ORDER.map((s) => el("option", { value: s, text: SCOPE_LABELS[s], ...(s === w.scope ? { selected: true } : {}), ...(s === "public" && blocked ? { disabled: true } : {}) })),
-    );
-    const btn = el("button", { type: "button", className: "btn compact", "data-action": "scope", text: "公開範囲を変える", disabled: busy, onclick: () => void changeScope(w, select.value) });
+    ), `${w.workId}|select`);
+    shownScopes.set(select, w.scope);
+    const btn = mark(el("button", { type: "button", className: "btn compact", "data-action": "scope", text: "公開範囲を変える", disabled: busy, onclick: () => void changeScope(w, select.value) }), `${w.workId}|scope`);
     return el("div", { className: "my-scope" }, select, btn, blocked ? el("div", { className: "muted small", text: blocked }) : null);
   }
 
@@ -291,11 +368,11 @@ export function createMySubmissions(o) {
       if (!r) return;
       if (r.ok) {
         say(MSG_WITHDRAWN);
-        await refresh(ticket);
+        await refresh({ ticket });
       } else {
         say(myActionErrorText(r.code, r.status), "error");
         // 状態が変わっていた（受け付けが終わった・すでに取り下げた）ときは、最新を読み直す
-        if (r.status === 404 || r.code === "submission_closed") await refresh(ticket);
+        if (r.status === 404 || r.code === "submission_closed") await refresh({ ticket });
       }
     });
   }
@@ -323,10 +400,10 @@ export function createMySubmissions(o) {
       if (!r) return;
       if (r.ok) {
         say(MSG_SCOPE_CHANGED);
-        await refresh(ticket);
+        await refresh({ ticket });
       } else {
         say(myActionErrorText(r.code, r.status), "error");
-        if (r.status === 404 || r.code === "consent_outdated") await refresh(ticket);
+        if (r.status === 404 || r.code === "consent_outdated") await refresh({ ticket });
       }
     });
   }
@@ -340,7 +417,7 @@ export function createMySubmissions(o) {
       // すでに確定していた（409 already_ready）も、最新を読み直せば「出した作品」に出る
       if (r.ok || r.code === "already_ready") {
         say(r.ok ? MSG_CANCELLED_UPLOAD : myActionErrorText(r.code, r.status));
-        await refresh(ticket);
+        await refresh({ ticket });
       } else {
         say(myActionErrorText(r.code, r.status), "error");
       }

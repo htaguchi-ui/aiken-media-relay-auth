@@ -23,15 +23,17 @@ import {
 } from "./auth-storage.js";
 import { MSG_CODE_FAILED, oauthOptions } from "./mypage-lib.js";
 import { explainError, isStageSchemaMissing, MSG_STAGE_NOT_READY, normalizeEmail, rejectionName } from "./admin-lib.js";
-import { instructorCohortLabel, normalizeInstructorCohorts } from "./stage-lib.js";
+import { clientOrder, instructorCohortLabel, normalizeInstructorCohorts } from "./stage-lib.js";
 import { fillIcons, renderSiteNav } from "./site-nav.js";
 import { discardDlKey } from "./share-lib.js";
+import { createPoller } from "./poll-lib.js";
 import {
   foldTitle,
   instructorAcceptLabel,
   LIST_POLL_MS,
   needsManualPlay,
   neighborInQueue,
+  nextPersonInQueue,
   normalizeStageOverview,
   normalizeStageWorks,
   playbackQueue,
@@ -150,6 +152,7 @@ async function endSession() {
 
 /** 本人のデータを画面から消して、読み込み中の表示にする（ログアウトの通信を待つ間・画面を離れるときに、前の人の画面を残さない） */
 function hideContent(message = "ログアウトしています…") {
+  poller.stop(); // 約 10 秒の読み直しを止める（ログアウトのあとに予約の時刻が来ても読まない）
   $("me-email").textContent = "";
   $("me-email").removeAttribute("title");
   $("me-role").textContent = "";
@@ -388,17 +391,39 @@ async function checkAdminConsole() {
 }
 
 /**
- * どの部品で動くかを決める（5.3.1 の 1〜2）。hasShared は共有のログインがあるか。
- * 返り値：{ shared: true }（講師。今どおり）・{ admin: true }（管理者として動く）・{ guide }（使えない。案内の文）・{ stale: true }
+ * どの部品で動くかを決める（5.3.1 の 1〜2・組 11 の (2)）。sharedUserId は共有のログインの人の id（無ければ null）。
+ * 2 つのログインが同じ人なら、先に管理コンソールを試す（管理者で開くたびの instructor_cohorts の 403 をなくす）。
+ * 別の人なら今どおり講師が先（共用の端末に別の人の管理コンソールのログインが残っていても、講師は講師として動く）。
+ * 返り値：{ shared: true, cohorts? }（共有のログインで動く。cohorts はもう受け取った instructor_cohorts の答え）・{ admin: true }（管理者として動く）・
+ * { guide, cohorts? }（使えない。案内の文）・{ stale: true }
  */
-async function chooseClient(hasShared) {
-  if (hasShared) {
-    const first = await supabase.rpc("instructor_cohorts");
+async function chooseClient(sharedUserId) {
+  const order = clientOrder({ sharedUserId, consoleUserId: consoleIdentity()?.userId ?? null });
+  let first = null;
+  if (order === "console-first") {
+    const r = await checkAdminConsole();
+    if (ending) return { stale: true };
+    if (r.stale) {
+      // 確かめている間に管理コンソールのログインが替わった：今の保存先で、この画面を開き直す
+      location.replace(returnUrl());
+      return { stale: true };
+    }
+    if (r.ok) {
+      enterAdminMode(r);
+      return { admin: true };
+    }
+    // 期限切れ・取り消し・断り：案内の文を覚えて、共有のログインの道へ進む
+    adminHint = r.message;
+  }
+  if (order !== "console-only") {
+    first = await supabase.rpc("instructor_cohorts");
     if (ending) return { stale: true };
     // 通った（講師の区分）・断り以外の失敗（通信など）は、今どおり共有のログインで読み込みに任せる。
     // 通ったときは、その答えを最初の読み込みでそのまま使う（同じ部品で同じ問い合わせをもう 1 回送らない。2026-10-23）
     if (!first.error) return { shared: true, cohorts: first };
     if (loadFailure(first.error).action !== "denied") return { shared: true };
+    // 管理コンソールはもう試した：断りの答えをそのまま読み込みに渡す（403 は 1 回だけ）
+    if (order === "console-first") return { shared: true, cohorts: first };
   }
   const r = await checkAdminConsole();
   if (ending) return { stale: true };
@@ -412,7 +437,8 @@ async function chooseClient(hasShared) {
     return { admin: true };
   }
   adminHint = r.message;
-  return { guide: r.message };
+  // 共有のログインで断られた答えがあれば、読み込みにそのまま渡す（同じ問い合わせをもう 1 回送らない）
+  return { guide: r.message, cohorts: first };
 }
 
 /** 管理者として動く：以後の RPC は管理コンソールの部品で呼ぶ。12 時間（admin_console_status の expires_at）と、ほかのタブを見張る */
@@ -541,7 +567,7 @@ const state = {
 };
 
 /** 画面だけの状態（描き直しても残す。hideContent が空にする） */
-const ui = { openFolds: new Set(), playerEl: null, timer: null, clock: null, now: Date.now() };
+const ui = { openFolds: new Set(), playerEl: null, worksSlots: null, clock: null, now: Date.now() };
 
 function stageById(id) {
   return state.overview?.stages.find((s) => s.stageId === id) ?? null;
@@ -715,32 +741,62 @@ async function reloadWorks() {
   renderWorks();
 }
 
-let refreshing = false;
+/** 走っている読み直し（refreshAll の Promise）。走っていなければ null */
+let refreshing = null;
+/** 走っている読み直しが、失敗を知らせない（quiet）ものか。［最新にする］がそれに相乗りしたら、呼んだ側で知らせる */
+let refreshingQuiet = true;
 
-/** 「最新にする」と 30 秒ごとの読み直し（段階の数・作品の一覧）。プレーヤーは描き直さない */
-async function refreshAll({ quiet = false } = {}) {
-  if (refreshing || ending) return;
-  refreshing = true;
-  try {
-    const a = await loadOverview();
-    const b = a ? await loadWorks() : false;
-    if (ending) return;
-    if (!(a && b) && !quiet) notify(`最新の状態を読み込めませんでした。${state.overviewError || state.worksError}`, "error");
-    ui.now = Date.now();
-    renderStages();
-    renderWorks();
-  } finally {
-    refreshing = false;
+/** 「最新にする」と 30 秒ごとの読み直し（組 11 から約 10 秒。LIST_POLL_MS・poll-lib.js）：段階の数・作品の一覧。プレーヤーは描き直さない。
+ * 走っている最中に呼ばれたら、新しく読まずに、走っている読み直しと同じ Promise を返す（［順に再生］の次へ進む前に、それが終わるのを待てる）。
+ * 走っているのが静かな読み直しで、呼んだのが［最新にする］（quiet でない）なら、失敗したときの知らせはここで出す（Promise は同じまま。知らせは 1 回だけ）。
+ * 返り値は "ok" | "fail" | "skip"
+ */
+function refreshAll({ quiet = false } = {}) {
+  if (ending) return Promise.resolve("skip");
+  if (refreshing) {
+    if (!quiet && refreshingQuiet) {
+      refreshingQuiet = false;
+      void refreshing.then((r) => {
+        if (r === "fail" && !ending) notify(`最新の状態を読み込めませんでした。${state.overviewError || state.worksError}`, "error");
+      });
+    }
+    return refreshing;
   }
+  refreshingQuiet = quiet;
+  refreshing = (async () => {
+    try {
+      const a = await loadOverview();
+      const b = a ? await loadWorks() : false;
+      if (ending) return "skip";
+      if (!(a && b) && !quiet) notify(`最新の状態を読み込めませんでした。${state.overviewError || state.worksError}`, "error");
+      ui.now = Date.now();
+      renderStages();
+      renderWorks();
+      return a && b ? "ok" : "fail";
+    } finally {
+      refreshing = null;
+    }
+  })();
+  return refreshing;
 }
 
+/**
+ * 約 10 秒の読み直し（組 11 の (3)。設計 kumi11-site.md 2.3.4）。タブが見えていて、段階を選んでいるときだけ読む（上映の画面が開いていても読む）。
+ * 始めるのは schedulePoll（load が画面を出したとき）、止めるのは hideContent
+ */
+const poller = createPoller({
+  intervalMs: LIST_POLL_MS,
+  run: () => refreshAll({ quiet: true }),
+  canRun: () => !!state.stageId && !ending,
+  isVisible: () => document.visibilityState === "visible",
+  setTimeout: (fn, ms) => setTimeout(fn, ms),
+  clearTimeout: (id) => clearTimeout(id),
+});
+
 function schedulePoll() {
-  if (ui.timer) return;
-  // 欄が開いている間（画面が前に出ている間）だけ、30 秒ごとに読み直す
-  ui.timer = setInterval(() => {
-    if (document.visibilityState !== "visible" || !state.stageId || ending) return;
-    void refreshAll({ quiet: true });
-  }, LIST_POLL_MS);
+  // 一覧の読み直し（何度呼んでもよい。予約は 1 つだけ）
+  poller.start();
+  if (ui.clock) return;
   // 「あと ○ 分受け付けます」を書き換える
   ui.clock = setInterval(() => {
     if (ending || $("app").hidden) return;
@@ -856,6 +912,7 @@ function stopPlayer() {
   player?.box.stop();
   player = null;
   ui.playerEl = null;
+  ui.worksSlots = null;
 }
 
 function render() {
@@ -904,10 +961,37 @@ function cohortCard() {
   return el("section", { className: "card" }, ...parts);
 }
 
+/**
+ * 一覧を作り直す間のフォーカス：作り直す前に、カードの中でフォーカスのある部品を覚える（id があれば id、無ければ作品・段階のボタンの印）。
+ * 作り直したあと focusBack で同じものへ戻す（約 10 秒の読み直しで、押そうとしていたボタンからフォーカスを外さない）
+ */
+function focusMark(card) {
+  const a = document.activeElement;
+  if (!a || a === card || !card?.contains?.(a)) return null;
+  if (a.id) return { id: a.id };
+  for (const attr of ["data-work", "data-stage"]) {
+    const v = a.getAttribute?.(attr);
+    if (v) return { attr, v };
+  }
+  return null;
+}
+
+function focusBack(card, mark) {
+  if (!mark) return;
+  let n = null;
+  if (mark.id) n = $(mark.id);
+  else {
+    const v = globalThis.CSS?.escape ? CSS.escape(mark.v) : mark.v.replace(/["\\]/g, "\\$&");
+    n = card.querySelector?.(`[${mark.attr}="${v}"]`) ?? null;
+  }
+  if (n && n !== document.activeElement) n.focus?.();
+}
+
 /** 段階の一覧（行を押すと、その段階の作品を開く） */
 function renderStages() {
   const card = $("stages-card");
   if (!card || !state.overview) return;
+  const mark = focusMark(card);
   const rows = state.overview.stages.map((s) => {
     const selected = s.stageId === state.stageId;
     return el(
@@ -929,6 +1013,7 @@ function renderStages() {
     );
   });
   card.replaceChildren(el("h2", { text: "段階" }), el("ul", { className: "stage-list" }, ...rows));
+  focusBack(card, mark);
 }
 
 function selectStage(stageId) {
@@ -978,34 +1063,50 @@ function personNode(p, stage) {
   return el("div", { className: "person" }, el("div", { className: "person-name", text: p.name }), ...p.works.map((w) => workButton(w, stage)));
 }
 
-/** 一覧とプレーヤー。rebuildPlayer：プレーヤーも作り直す（段階を替えた・初回）。30 秒ごとの読み直しでは作り直さず、再生を止めない */
+/**
+ * 一覧とプレーヤー。rebuildPlayer：プレーヤーも作り直す（段階を替えた・初回）。約 10 秒の読み直しでは作り直さず、再生を止めない。
+ * 読み直しでは、見出し・一覧・ボタンの段の中身だけを入れ替え、プレーヤーとその親（.works-layout）は文書から外さない
+ * （外すと、プレーヤーの全画面が解け、プレーヤーのフォーカスも外れる。Fullscreen の removing steps）
+ */
 function renderWorks({ rebuildPlayer = false } = {}) {
   const card = $("works-card");
   const stage = stageById(state.stageId);
   if (!card || !stage) return;
   const v = state.works;
-  const head = el(
-    "div",
-    { className: "card-head" },
+  const headKids = [
     el("h2", { text: submissionStageName(stage) }),
     el("span", { className: "muted small", text: `${instructorAcceptLabel(stage, ui.now)} · ${stageCountsLabel(stage)}` }),
-  );
-  const list = el("div", { className: "works-list", id: "works-list" });
-  if (state.worksError) list.append(el("p", { className: "error-text", role: "alert", text: state.worksError }));
-  else if (!v) list.append(el("p", { className: "muted", text: "読み込み中…" }));
+  ];
+  const listKids = [];
+  if (state.worksError) listKids.push(el("p", { className: "error-text", role: "alert", text: state.worksError }));
+  else if (!v) listKids.push(el("p", { className: "muted", text: "読み込み中…" }));
   else {
-    if (!v.people.length && !v.pending.length) list.append(el("p", { className: "muted", text: "まだ提出はありません。" }));
-    for (const p of v.people) list.append(personNode(p, stage));
+    if (!v.people.length && !v.pending.length) listKids.push(el("p", { className: "muted", text: "まだ提出はありません。" }));
+    for (const p of v.people) listKids.push(personNode(p, stage));
     // 「まだ」：ワークショップだけ。ブリッジワークは分母と「まだ」を出さない（自主的な制作の扱い。助成金の注意）
-    if (stage.kind === "workshop") for (const p of v.pending) list.append(el("div", { className: "person" }, el("div", { className: "person-name", text: p.name }), el("span", { className: "muted", text: "まだ" })));
+    if (stage.kind === "workshop") for (const p of v.pending) listKids.push(el("div", { className: "person" }, el("div", { className: "person-name", text: p.name }), el("span", { className: "muted", text: "まだ" })));
     for (const [key, group] of [["stopped", v.stopped], ["unknown", v.unknown]]) {
-      if (group.length) list.append(foldNode(key, foldTitle(key, group), group.map((p) => personNode(p, stage))));
+      if (group.length) listKids.push(foldNode(key, foldTitle(key, group), group.map((p) => personNode(p, stage))));
     }
   }
   const screeningBtn = el("button", { type: "button", className: "btn compact", id: "screening-btn", text: "上映の画面を開く", onclick: openScreening });
   if (!v || screeningQueue(v).length === 0) screeningBtn.disabled = true;
-  const playerNode = ui.playerEl && !rebuildPlayer ? ui.playerEl : buildPlayer();
-  card.replaceChildren(head, el("div", { className: "works-layout" }, list, playerNode), el("div", { className: "row-actions" }, screeningBtn));
+  const mark = focusMark(card);
+  const slots = ui.worksSlots;
+  if (!rebuildPlayer && ui.playerEl && slots && card.contains(slots.layout) && slots.layout.contains(ui.playerEl)) {
+    slots.head.replaceChildren(...headKids);
+    slots.list.replaceChildren(...listKids);
+    slots.actions.replaceChildren(screeningBtn);
+  } else {
+    const playerNode = ui.playerEl && !rebuildPlayer ? ui.playerEl : buildPlayer();
+    const head = el("div", { className: "card-head" }, ...headKids);
+    const list = el("div", { className: "works-list", id: "works-list" }, ...listKids);
+    const layout = el("div", { className: "works-layout" }, list, playerNode);
+    const actions = el("div", { className: "row-actions" }, screeningBtn);
+    card.replaceChildren(head, layout, actions);
+    ui.worksSlots = { head, list, layout, actions };
+  }
+  focusBack(card, mark);
   syncPlayerButtons();
 }
 
@@ -1021,8 +1122,10 @@ function buildPlayer() {
   const prev = el("button", { type: "button", className: "btn compact", text: "◀ 前", id: "prev-btn", onclick: () => stepWork("prev") });
   const play = el("button", { type: "button", className: "btn compact primary", text: "▶ 再生", id: "play-btn", onclick: () => playSelected() });
   const next = el("button", { type: "button", className: "btn compact", text: "次 ▶", id: "next-btn", onclick: () => stepWork("next") });
-  const wrap = el("div", { className: "player" }, banner, box.video, caption, msg, el("div", { className: "row-actions" }, prev, play, next));
-  player = { box, caption, msg, banner, prev, play, next, selectedPolicy: null };
+  // 次の人の 1 本目へ飛ぶ。自動で再生しない（完全非公開なら URL も求めない。selectWork の決まりのまま）
+  const nextPerson = el("button", { type: "button", className: "btn compact", text: "次の受講者 ▶▶", id: "next-person-btn", onclick: () => stepPerson() });
+  const wrap = el("div", { className: "player" }, banner, box.video, caption, msg, el("div", { className: "row-actions" }, prev, play, next, nextPerson));
+  player = { box, caption, msg, banner, prev, play, next, nextPerson, selectedPolicy: null };
   ui.playerEl = wrap;
   return wrap;
 }
@@ -1045,6 +1148,7 @@ function syncPlayerButtons() {
   const q = playbackQueue(state.works);
   player.prev.disabled = !neighborInQueue(q, state.selectedWorkId, "prev");
   player.next.disabled = !neighborInQueue(q, state.selectedWorkId, "next");
+  player.nextPerson.disabled = !nextPersonInQueue(q, state.selectedWorkId);
   player.play.disabled = !entry;
   // 読み直しで、選んでいた作品が取り下げられて一覧から消えたとき：選びを外し、再生を止める
   if (state.selectedWorkId && !entry) {
@@ -1091,6 +1195,15 @@ function stepWork(dir) {
   if (n) selectWork(n.work.workId);
 }
 
+function stepPerson() {
+  const n = nextPersonInQueue(playbackQueue(state.works), state.selectedWorkId);
+  if (!n) return;
+  selectWork(n.work.workId);
+  // 一覧を作り直すと、押したボタンからフォーカスが外れることがある。［次の受講者 ▶▶］へ戻す（最後の人で押せなくなったら［▶ 再生］へ）
+  const back = player && (player.nextPerson.disabled ? player.play : player.nextPerson);
+  if (back && back !== document.activeElement) back.focus?.();
+}
+
 // ---- 上映の画面（全画面。公開と講義内に限り公開の、出している作品だけ。設計 4.8） ----
 
 function openScreening() {
@@ -1101,6 +1214,8 @@ function openScreening() {
   let index = 0;
   let auto = false;
   let currentId = null;
+  /** go で作品を出した回数（作品が終わったあとの読み直しを待つ間に、作品が動いたかを見る） */
+  let moves = 0;
   let closed = false;
   const msg = el("p", { className: "error-text", role: "alert", hidden: true });
   const box = createVideoBox((t) => {
@@ -1110,6 +1225,8 @@ function openScreening() {
   const caption = el("div", { className: "screen-caption" });
   const prev = el("button", { type: "button", className: "btn", text: "前へ", onclick: () => step(-1) });
   const next = el("button", { type: "button", className: "btn", text: "次へ", onclick: () => step(1) });
+  // 次の人の 1 本目へ。［順に再生］の途中なら、飛んだ先から自動で続ける（go が auto のまま読み込む）
+  const nextPerson = el("button", { type: "button", className: "btn", text: "次の受講者 ▶▶", onclick: () => stepPerson() });
   const seq = el("button", {
     type: "button",
     className: "btn primary",
@@ -1130,25 +1247,46 @@ function openScreening() {
     caption.textContent = playerCaption(queue[index]);
     prev.disabled = index === 0;
     next.disabled = index === queue.length - 1;
+    nextPerson.disabled = !nextPersonInQueue(queue, queue[index].work.workId);
     return true;
   }
   function step(dir) {
     if (refreshQueue()) go(index + dir);
   }
+  function stepPerson() {
+    if (!refreshQueue()) return;
+    const n = nextPersonInQueue(queue, queue[index].work.workId);
+    if (n) go(queue.indexOf(n));
+  }
   function go(i) {
     if (!refreshQueue()) return;
+    moves++;
     index = Math.max(0, Math.min(queue.length - 1, i));
     currentId = queue[index].work.workId;
     caption.textContent = playerCaption(queue[index]);
     prev.disabled = index === 0;
     next.disabled = index === queue.length - 1;
+    nextPerson.disabled = !nextPersonInQueue(queue, currentId);
     void box.load(queue[index].work.workId, { autoplay: auto });
   }
-  box.video.addEventListener("ended", () => {
+  box.video.addEventListener("ended", async () => {
+    // ［順に再生］：次の作品へ進む前に 1 回読み直す（約 10 秒の読み直しが走っている最中なら、それが終わるのを待つ）。
+    // 途中で完全非公開に変わった作品を流さない。読み直しに失敗しても（投げても）、前の並びで進む
+    // 待つ前の今の作品を覚え、待つ間に作品が動いた（［前へ］［次へ］など。同じ作品へ戻った場合も）なら、ここでは進めない
+    const endedId = currentId;
+    const endedMoves = moves;
+    if (auto && !closed) {
+      try {
+        await refreshAll({ quiet: true });
+      } catch {
+        // 前の並びで進む
+      }
+    }
+    if (currentId !== endedId || moves !== endedMoves) return;
     if (auto && refreshQueue() && index < queue.length - 1) go(index + 1);
     else auto = false;
   });
-  dialog.replaceChildren(el("div", { className: "screen-body" }, box.video, caption, msg, el("div", { className: "row-actions" }, prev, next, seq, close)));
+  dialog.replaceChildren(el("div", { className: "screen-body" }, box.video, caption, msg, el("div", { className: "row-actions" }, prev, next, nextPerson, seq, close)));
   dialog.addEventListener(
     "close",
     () => {
@@ -1194,7 +1332,7 @@ async function main() {
   }
   if (!session) {
     // 共有のログインが無い：管理コンソールの有効なセッションがあれば管理者として動く（5.3.1 の 2）。無ければ今どおりログインの画面
-    const chosen = await chooseClient(false);
+    const chosen = await chooseClient(null);
     if (chosen.stale) return;
     if (chosen.admin) {
       if (location.search || location.hash) history.replaceState(null, "", returnUrl());
@@ -1213,11 +1351,11 @@ async function main() {
   startWatch(session.user?.id ?? null);
   // 戻ってきた直後の URL に残る code などを消す
   if (location.search || location.hash) history.replaceState(null, "", returnUrl());
-  // 講師の区分なら今どおり。区分が講師でない（管理者）なら、管理コンソールのセッションを試す（5.3.1 の 1〜2）
-  const chosen = await chooseClient(true);
+  // 2 つのログインが同じ人なら管理コンソールが先・別の人なら講師が先（5.3.1 の 1〜2・組 11 の (2)）
+  const chosen = await chooseClient(session.user?.id ?? null);
   if (chosen.stale) return;
-  // 講師の区分（共有のログインで通った）なら、確かめに使った担当の回の答えをそのまま使う。管理者として動くときは管理コンソールの部品で読み直す
-  await load(chosen.shared ? { cohorts: chosen.cohorts ?? null } : {});
+  // 管理者として動くときは管理コンソールの部品で読み直す。それ以外は、確かめに使った担当の回の答え（断りも）をそのまま使う
+  await load(chosen.admin ? {} : { cohorts: chosen.cohorts ?? null });
 }
 
 /** 管理コンソールを新しいタブで開く（講師の画面からはログインを始めない） */

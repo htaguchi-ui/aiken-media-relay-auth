@@ -128,14 +128,17 @@ export function checkedAtText(ms) {
   return `${parts.hour}:${parts.minute} 時点`;
 }
 
-/** Canvas から戻ったとき（タブがまた見えたとき）に読み直すまでの最短の間（ミリ秒）。前回の成功からこれ未満なら読み直さない */
-export const RETURN_RELOAD_MIN_MS = 30 * 1000;
+/**
+ * Canvas から戻ったとき（タブがまた見えたとき）に、約 10 秒の読み直しを早めるまでの最短の間（ミリ秒）。前回の成功からこれ未満なら早めない
+ * （組 11 で 30 秒から 5 秒に。早めなくても、読み直しの部品 poll-lib.js が見えてから 10 秒以内に読む）
+ */
+export const RETURN_RELOAD_MIN_MS = 5 * 1000;
 
 /**
- * タブがまた見えたときに、1 回だけ読み直すか。次をすべて満たすときだけ true：
+ * タブがまた見えたときに、約 10 秒の読み直しをすぐ 1 回行うか。次をすべて満たすときだけ true：
  * - タブが見えている（visible）・ログインが有効（signedIn）・本人の画面を出している（showingApp）・読み込み中でない（loading が false）
  * - 前回の成功の時刻（lastSuccessAt）があり、そこから minMs 以上たっている（時計が戻って差が負のときは読み直さない）
- * 一定間隔の自動の読み直しはしない（この判断は、見えたときの 1 回だけに使う）
+ * 一定間隔の読み直しそのものは poll-lib.js の createPoller が行う（この判断は、見えたときに早めるかだけに使う）
  */
 export function shouldReloadOnReturn({ visible, signedIn, showingApp, loading, lastSuccessAt, now, minMs = RETURN_RELOAD_MIN_MS }) {
   if (visible !== true || signedIn !== true || showingApp !== true || loading === true) return false;

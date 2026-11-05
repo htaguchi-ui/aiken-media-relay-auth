@@ -8,6 +8,9 @@
 // supabase-js は instructor.html で版を固定し、integrity（SRI）を付けて読み込む（window.supabase）
 // ページは 2 つ：回の一覧（/instructor）と、ある回の操作（/instructor/c/<回の ID>）。同じ instructor.html・instructor.js が、道（ROUTE）を見て描き分ける
 // （設計書 docs/design-instructor-split.md）。ログイン・ログアウト・管理者として使う部分は道に関わらず同じ
+// 回の操作のページは約 10 秒ごとに読み直す（組 11 の (3)。部品は poll-lib.js。見えている・通信中でない・ダイアログが無いときだけ）。
+// 形（今の段階・受講者の顔ぶれ）が同じなら文字だけ書き換え、変わったら全体を描き直す（フォーカスとダイアログを壊さない）。
+// 今の段階の提出数と、提出した受講者の名前も出す（submission_stage_overview・submission_stage_works）
 import { backToListLink, cohortListView, cohortMissingView, submissionsLink } from "./instructor-list.js";
 import { extraTargets, groupCohorts, instructorRoute } from "./instructor-list-lib.js";
 import {
@@ -47,6 +50,7 @@ import {
 import {
   BUSY_BUTTON_TEXT,
   BUSY_SLOW_MS,
+  clientOrder,
   grantAvailability,
   grantConfirmText,
   instructorCohortLabel,
@@ -70,6 +74,8 @@ import {
 } from "./stage-lib.js";
 import { fillIcons, renderSiteNav } from "./site-nav.js";
 import { createStageTimer } from "./stage-timer.js";
+import { createPoller, staleAfterThisFailure } from "./poll-lib.js";
+import { normalizeStageOverview, normalizeStageWorks, stageCountsLabel, SUBMISSION_RPC, submissionStageName } from "./submissions-lib.js";
 import {
   cohortCloseCanAct,
   cohortCloseError,
@@ -219,6 +225,12 @@ const state = {
   /** 追加の入力欄の値（描き直しても残す） */
   creditsText: "",
   noteText: "",
+  /** 今の段階の提出の段（組 11 の (3)）：{ stageId, title, countText, names（読めなければ null） }。null は段を出さない */
+  submitPanel: null,
+  /** 約 10 秒の読み直しで全体の描き直しを見送った（ダイアログ・id の無い部品にフォーカス）。次の読み直しで先に片付ける */
+  pendingFullRender: false,
+  /** 全体の描き直しを続けて見送った回数（pendingFullRender を立てた回を 1 と数える）。2 回続いたら、次はフォーカスを見出しへ移して描き直す */
+  fullRenderMisses: 0,
 };
 
 /**
@@ -229,6 +241,18 @@ const state = {
  * folds：クレジットの追加の欄で開いている折りたたみ（"limits" | "mine" | "revoked"）
  */
 const ui = { openDays: new Map(), folds: new Set() };
+
+/**
+ * 約 10 秒の読み直し（組 11 の (3)。設計 kumi11-site.md 2.3.3）。始めるのは load（画面を出したとき）、止めるのは hideContent だけ。
+ * 読むのは回の操作のページで、見えている・読み込み中でない・通信中でない・ダイアログが無いときだけ（canPoll）。1 回の中身は pollTick
+ */
+const poller = createPoller({
+  run: () => pollTick(),
+  canRun: () => canPoll(),
+  isVisible: () => document.visibilityState === "visible",
+  setTimeout: (fn, ms) => setTimeout(fn, ms),
+  clearTimeout: (id) => clearTimeout(id),
+});
 
 /** 制作時間のタイマー（KT。束 K の stage_timer_* を呼ぶ）。壊れても札を隠すだけで、ほかの操作は止めない（stage-timer.js） */
 const stageTimer = createStageTimer({
@@ -248,6 +272,8 @@ const stageTimer = createStageTimer({
   // 時計はこの画面の setInterval（取り消しの 60 秒の箱と同じ）
   setInterval: (fn, ms) => setInterval(fn, ms),
   clearInterval: (id) => clearInterval(id),
+  // 始める分の既定：その段階の回の WS の分（組 11 の (6)。読めていない・別の回の答えなら null）
+  getStageMinutes: (stageId) => shownMinutes()?.byStage.get(stageId) ?? null,
 });
 
 // ---- ログイン・ログアウト ----
@@ -272,6 +298,7 @@ async function endSession() {
 
 /** 本人のデータを画面から消して、読み込み中の表示にする（ログアウトの通信を待つ間・画面を離れるときに、前の人の画面を残さない） */
 function hideContent(message = "ログアウトしています…") {
+  poller.stop(); // ログアウトのあとに予約の時刻が来ても読まない
   stageTimer.reset();
   $("me-email").textContent = "";
   $("me-email").removeAttribute("title");
@@ -285,6 +312,8 @@ function hideContent(message = "ログアウトしています…") {
   $("confirm").replaceChildren();
   stopUndoTimer();
   state.status = null;
+  state.submitPanel = null;
+  state.pendingFullRender = false;
   state.closeStatus = null;
   state.closeStatusError = "";
   closeStatusSeq++;
@@ -692,6 +721,10 @@ async function load({ fromApp = false, cohorts = null } = {}) {
     }
     if (ending) return;
     if (!ok && fromApp) notify(`最新の状態を読み込めませんでした。${state.statusError}`, "error");
+    // 今の段階の提出の段（組 11 の (3)）：開いた直後から出すため、描く前に 1 回読む。失敗しても読み込みは失敗にしない（段を出さないだけ）
+    await loadSubmitPanel();
+    if (ending) return;
+    state.pendingFullRender = false; // これから全体を描く
     $("me-email").textContent = adminSession ? adminWho() : state.myEmail;
     $("me-email").title = state.myEmail;
     const role = $("me-role");
@@ -705,6 +738,7 @@ async function load({ fromApp = false, cohorts = null } = {}) {
     renderSiteNav($("site-nav"), state.isAdmin ? "admin" : "instructor", "instructor", ...navArgs);
     render();
     show("app");
+    poller.start(); // 一覧のページ・開けない回でも呼んでよい（canPoll が偽なので読まない）
   } finally {
     loading = false;
   }
@@ -716,6 +750,126 @@ async function reloadStatus() {
   if (ending) return;
   if (!ok) notify(`最新の状態を読み込めませんでした。${state.statusError}`, "error");
   render();
+}
+
+// ---- 約 10 秒の読み直しと提出の段（組 11 の (3)。設計 kumi11-site.md 2.3.3） ----
+
+/** 提出の段の読み込みの通し番号（古い応答は捨てる） */
+let submitSeq = 0;
+/** 提出の機能（RPC）が無いと分かった。以後は読みに行かない */
+let submitMissing = false;
+/** 最後に読めた submission_stage_overview の段階の一覧 { cohortId, ids }（提出のある段階の id）。読み直し（poll）で、提出の無い段階を読まないために使う */
+let submitStages = null;
+
+/**
+ * 今の段階の提出数と、提出した受講者の名前を読む（submission_stage_overview と submission_stage_works を並べて）。
+ * 段階の回で今の段階があるときだけ。結果は state.submitPanel。数が読めなければ前に読めた文を残し（一度も読めていなければ出さない）、
+ * 名前だけ読めない・答えの段階が今の段階と違うときは名前を出さない。どちらかの RPC が無ければ段ごと出さず、以後は読まない。
+ * poll（約 10 秒の読み直しの、形が同じときの読み）なら、前に読めた段階の一覧に今の段階が無い（提出の無い段階）とき RPC を呼ばない
+ * （段階が変わったとき・開いたとき・［最新にする］は poll にせず、一覧も読み直す）。
+ * 投げても外へ出さない（講師ページのほかの読み込みを落とさない）
+ */
+async function loadSubmitPanel({ poll = false } = {}) {
+  const s = state.status;
+  const requested = state.cohortId;
+  const stageId = s?.creditMode === "stage" ? s.current?.id ?? null : null;
+  if (!requested || !stageId || submitMissing) {
+    state.submitPanel = null;
+    return;
+  }
+  if (poll && submitStages?.cohortId === requested && !submitStages.ids.has(stageId)) {
+    state.submitPanel = null;
+    return;
+  }
+  const seq = ++submitSeq;
+  const client = activeClient();
+  const ask = async (name, args) => {
+    try {
+      return (await rpc(name, args)) ?? { data: null, error: { message: "no_response" } };
+    } catch (error) {
+      return { data: null, error };
+    }
+  };
+  const [ov, wk] = await Promise.all([
+    ask(SUBMISSION_RPC.stageOverview, { p_cohort_id: requested }),
+    ask(SUBMISSION_RPC.stageWorks, { p_cohort_id: requested, p_stage_id: stageId }),
+  ]);
+  if (ending || seq !== submitSeq || requested !== state.cohortId || client !== activeClient()) return;
+  if (isMissingFunctionError(ov.error) || isMissingFunctionError(wk.error)) {
+    submitMissing = true;
+    state.submitPanel = null;
+    return;
+  }
+  const prev = state.submitPanel?.stageId === stageId ? state.submitPanel : null;
+  let row = null;
+  try {
+    const overview = ov.error ? null : normalizeStageOverview(ov.data);
+    if (overview) submitStages = { cohortId: requested, ids: new Set(overview.stages.map((x) => x.stageId)) };
+    row = overview?.stages.find((x) => x.stageId === stageId) ?? null;
+  } catch {
+    row = null;
+  }
+  if (!row) {
+    state.submitPanel = prev;
+    return;
+  }
+  let names = null;
+  try {
+    const works = wk.error ? null : normalizeStageWorks(wk.data);
+    names = works && works.stageId === stageId ? works.people.map((p) => p.name) : null;
+  } catch {
+    names = null;
+  }
+  state.submitPanel = { stageId, title: `提出（${submissionStageName(row)}）`, countText: stageCountsLabel(row), names };
+}
+
+/** 約 10 秒の読み直しで今読んでよいか：回の操作のページ・開ける回・読み込み中でない・通信中でない・ログアウトの途中でない・画面を出している・ダイアログが無い */
+function canPoll() {
+  return ROUTE.kind === "cohort" && !routeMissing && state.cohortId !== null && !loading && !state.busy && !ending &&
+    $("app")?.hidden === false && !$("confirm")?.open;
+}
+
+/**
+ * 約 10 秒の読み直しの 1 回：段階の状態と提出の段を並べて読む。形（今の段階・受講者の顔ぶれなど）が同じなら文字だけ書き換え、
+ * 変わったら［最新にする］と同じ道（クローズ・タイマー・分も）で読み直して全体を描き直す。描き直せない（ダイアログ・id の無い部品に
+ * フォーカス）ときは見送り、次の回で先に片付ける。続けて 3 回失敗したら「更新できていません」。返り値は "ok" | "fail" | "skip"
+ */
+async function pollTick() {
+  const cohort = state.cohortId;
+  const before = statusShape(state.status);
+  const [ok] = await Promise.all([loadStatus(), loadSubmitPanel({ poll: true })]);
+  if (ending || cohort !== state.cohortId) return "skip";
+  if (!ok) {
+    if (staleAfterThisFailure(poller.failures())) markStale();
+    return "fail";
+  }
+  if (state.pendingFullRender) {
+    // id の無い部品（受講者のチェック・Day の折りたたみなど）にフォーカスが残り続けると、いつまでも古い段階のままになる。
+    // 見送りが 2 回続いたら、フォーカスをその部品のカードの見出しへ移して描き直す
+    if (fullRenderSafely({ force: state.fullRenderMisses >= 2 })) {
+      state.pendingFullRender = false;
+      state.fullRenderMisses = 0;
+      return "ok";
+    }
+    state.fullRenderMisses++;
+    patchView();
+    return "ok";
+  }
+  if (statusShape(state.status) !== before) {
+    await loadStatusAndClose();
+    if (ending || cohort !== state.cohortId) return "skip";
+    // 段階が変わったときは、提出の段の段階の一覧も読み直す（poll の見送りを使わない）
+    void loadSubmitPanel().then(() => {
+      if (!ending) patchSubmitPanel();
+    });
+    if (!fullRenderSafely()) {
+      state.pendingFullRender = true;
+      state.fullRenderMisses = 1;
+    }
+    return "ok";
+  }
+  patchView();
+  return "ok";
 }
 
 // ---- 管理者として使う（設計書 5.3.1。管理コンソールのログイン） ----
@@ -788,17 +942,39 @@ async function checkAdminConsole() {
 }
 
 /**
- * どの部品で動くかを決める（5.3.1 の 1〜2）。hasShared は共有のログインがあるか。
- * 返り値：{ shared: true }（講師。今どおり）・{ admin: true }（管理者として動く）・{ guide }（使えない。案内の文）・{ stale: true }
+ * どの部品で動くかを決める（5.3.1 の 1〜2・組 11 の (2)）。sharedUserId は共有のログインの人の id（無ければ null）。
+ * 2 つのログインが同じ人なら、先に管理コンソールを試す（管理者で開くたびの instructor_cohorts の 403 をなくす）。
+ * 別の人なら今どおり講師が先（共用の端末に別の人の管理コンソールのログインが残っていても、講師は講師として動く）。
+ * 返り値：{ shared: true, cohorts? }（共有のログインで動く。cohorts はもう受け取った instructor_cohorts の答え）・{ admin: true }（管理者として動く）・
+ * { guide, cohorts? }（使えない。案内の文）・{ stale: true }
  */
-async function chooseClient(hasShared) {
-  if (hasShared) {
-    const first = await supabase.rpc("instructor_cohorts");
+async function chooseClient(sharedUserId) {
+  const order = clientOrder({ sharedUserId, consoleUserId: consoleIdentity()?.userId ?? null });
+  let first = null;
+  if (order === "console-first") {
+    const r = await checkAdminConsole();
+    if (ending) return { stale: true };
+    if (r.stale) {
+      // 確かめている間に管理コンソールのログインが替わった：今の保存先で、この画面を開き直す
+      location.replace(returnUrl());
+      return { stale: true };
+    }
+    if (r.ok) {
+      enterAdminMode(r);
+      return { admin: true };
+    }
+    // 期限切れ・取り消し・断り：案内の文を覚えて、共有のログインの道へ進む
+    adminHint = r.message;
+  }
+  if (order !== "console-only") {
+    first = await supabase.rpc("instructor_cohorts");
     if (ending) return { stale: true };
     // 通った（講師の区分）・断り以外の失敗（通信など）は、今どおり共有のログインで読み込みに任せる。
     // 通ったときは、その答えを最初の読み込みでそのまま使う（同じ部品で同じ問い合わせをもう 1 回送らない。2026-10-23）
     if (!first.error) return { shared: true, cohorts: first };
     if (loadFailure(first.error).action !== "denied") return { shared: true };
+    // 管理コンソールはもう試した：断りの答えをそのまま読み込みに渡す（403 は 1 回だけ）
+    if (order === "console-first") return { shared: true, cohorts: first };
   }
   const r = await checkAdminConsole();
   if (ending) return { stale: true };
@@ -812,7 +988,8 @@ async function chooseClient(hasShared) {
     return { admin: true };
   }
   adminHint = r.message;
-  return { guide: r.message };
+  // 共有のログインで断られた答えがあれば、読み込みにそのまま渡す（同じ問い合わせをもう 1 回送らない）
+  return { guide: r.message, cohorts: first };
 }
 
 /** 管理者として動く：以後の RPC は管理コンソールの部品で呼ぶ。12 時間（admin_console_status の expires_at）と、ほかのタブを見張る */
@@ -983,7 +1160,7 @@ function render() {
   }
   const here = state.cohorts.find((x) => x.id === state.cohortId);
   document.title = `${here?.name ?? here?.id ?? "回の操作"} – A.I.KEN Studio 講師の画面`;
-  const parts = [backToListLink({ el }), submissionsLink({ el }), cohortCard()];
+  const parts = [backToListLink({ el }), submissionsLink({ el }), submitPanel(), cohortCard()];
   const s = state.status;
   if (!s) {
     parts.push(
@@ -1103,7 +1280,8 @@ function stageCard(s) {
   return el(
     "section",
     { className: "card", "aria-labelledby": "wk-h" },
-    el("h2", { id: "wk-h", text: "ワークショップ" }),
+    // 右上に制作時間の残り（分：秒。組 11 の (6)）。動いている・終わったときだけ
+    el("div", { className: "card-head" }, el("h2", { id: "wk-h", text: "ワークショップ" }), stageTimer.clock()),
     tl.groups.length ? el("div", { className: "wk-list", role: "group", "aria-label": "ワークショップの一覧" }, ...tl.groups.map((g) => dayFold(g, opened, cohortId))) : null,
     undo.available && !closed
       ? el(
@@ -1274,13 +1452,10 @@ function undoJobsText(undo) {
   return undo.jobsSince === null ? "" : `移してからの生成 ${formatCredits(undo.jobsSince)} 件は、戻しても今の段階の使用として残ります。`;
 }
 
-/** 取り消せる間に、段階と「この間の生成」の件数を読み直す間隔（秒） */
-const UNDO_POLL_SEC = 10;
-
 /**
  * 取り消せる間だけ、1 秒ごとに残りの秒数の文を書き換える（入力中の欄を作り直さない）。
  * 時間は、読み込んだときのサーバーとの時刻の差を足した今の時刻で数え（undoView）、60 秒を過ぎたら取り消しの箱だけを消す。
- * 10 秒ごとに cohort_stage_status を読み直し、「この間の生成」の件数も新しくする
+ * 「この間の生成」の件数は、約 10 秒の読み直し（poll-lib.js。組 11 の (3)）が読んだ state.status から書き換える（この箱のためには読まない）
  */
 function updateUndoTimer() {
   const s = state.status;
@@ -1289,18 +1464,7 @@ function updateUndoTimer() {
     return;
   }
   if (undoTimer) return;
-  let ticks = 0;
-  undoTimer = setInterval(async () => {
-    ticks++;
-    if (ticks % UNDO_POLL_SEC === 0 && !state.busy) {
-      const before = { current: state.status?.current?.id ?? null, selected: state.selected.size };
-      await loadStatus();
-      // 今の段階が変わった（ほかの人が動かした）・選んだ人が記録から外れたときだけ、画面を描き直す（チェックと人数を合わせる）
-      if ((state.status?.current?.id ?? null) !== before.current || state.selected.size !== before.selected) {
-        render();
-        return;
-      }
-    }
+  undoTimer = setInterval(() => {
     const undo = state.status ? undoView(state.status, Date.now()) : { available: false };
     if (!undo.available) {
       // 60 秒が過ぎた：画面全体は描き直さず、取り消しの箱だけを消す（入力中の欄のフォーカスを外さない）
@@ -1318,8 +1482,27 @@ function updateUndoTimer() {
   }, 1000);
 }
 
+/**
+ * 受講者の行の、約 10 秒の読み直しで書き換える部品（email → { remSpan, remB, bar, fill, num, last }）。studentsCard が描くたびに作り直す。
+ * 並びと、チェック・入力は読み直しでは変えない（patchStudents）
+ */
+const studentRows = new Map();
+
+/** 受講者の行の、読み直しで変わる値：残り・使用の割合・「使用 / 上限」 */
+function studentNumbers(r) {
+  const pct = r.limit !== null && r.used !== null ? usagePct(r.used, r.limit) : 0;
+  const low = r.remaining !== null && r.limit !== null && isLow(r.remaining, r.limit);
+  return { pct, low, rem: r.remaining === null ? "—" : formatCredits(r.remaining), use: `${formatCredits(r.used)} / ${formatCredits(r.limit)}` };
+}
+
+/** 「最後の生成 11/27 13:41」か「まだ生成していません」 */
+function lastUsedNodes(r) {
+  return r.lastUsedAt ? [el("span", { className: "st-last-label", text: "最後の生成 " }), el("span", { text: formatShortDateTime(r.lastUsedAt) })] : [el("span", { text: "まだ生成していません" })];
+}
+
 /** 受講者：1 人 1 行（チェック・名前・残り・今の段階の使用 / 上限と棒・最後の生成）。残りの少ない順 */
 function studentsCard(s) {
+  studentRows.clear();
   const rows = [...s.students].sort((a, b) => (a.remaining ?? Infinity) - (b.remaining ?? Infinity) || (a.name ?? a.email).localeCompare(b.name ?? b.email, "ja"));
   const activeEmails = rows.filter((r) => r.active).map((r) => r.email);
   const allOn = activeEmails.length > 0 && activeEmails.every((e) => state.selected.has(e));
@@ -1333,11 +1516,17 @@ function studentsCard(s) {
       else state.selected.delete(r.email);
       updateGrantButton();
     });
-    const pct = r.limit !== null && r.used !== null ? usagePct(r.used, r.limit) : 0;
-    const low = r.remaining !== null && r.limit !== null && isLow(r.remaining, r.limit);
+    const { pct, low, rem, use } = studentNumbers(r);
+    const remB = el("b", { text: rem });
+    const remSpan = el("span", { className: `st-rem tabular${low ? " low" : ""}` }, el("span", { className: "st-rem-label", text: "残り " }), remB);
+    const fill = el("span", { style: `width:${pct}%` });
+    const bar = r.limit !== null ? el("span", { className: `bar ${low ? "low" : ""}`, role: "img", "aria-label": `使用 ${pct}%` }, fill) : null;
+    const num = el("span", { className: "st-use-num", text: use });
+    const last = el("span", { className: "st-last small muted tabular" }, ...lastUsedNodes(r));
+    studentRows.set(r.email, { remSpan, remB, bar, fill, num, last, hasLimit: r.limit !== null });
     return el(
       "li",
-      {},
+      { "data-email": r.email },
       el(
         "label",
         { className: `st-row${r.active ? "" : " disabled"}`, title: r.email },
@@ -1349,23 +1538,9 @@ function studentsCard(s) {
           r.active ? null : el("span", { className: "badge stopped", text: "停止中" }),
           r.name && nameCount.get(r.name) > 1 ? el("span", { className: "st-mail small muted ellipsis tabular", text: r.email }) : null,
         ),
-        el(
-          "span",
-          { className: `st-rem tabular${low ? " low" : ""}` },
-          el("span", { className: "st-rem-label", text: "残り " }),
-          el("b", { text: r.remaining === null ? "—" : formatCredits(r.remaining) }),
-        ),
-        el(
-          "span",
-          { className: "st-use tabular" },
-          r.limit !== null ? el("span", { className: `bar ${low ? "low" : ""}`, role: "img", "aria-label": `使用 ${pct}%` }, el("span", { style: `width:${pct}%` })) : null,
-          el("span", { className: "st-use-num", text: `${formatCredits(r.used)} / ${formatCredits(r.limit)}` }),
-        ),
-        el(
-          "span",
-          { className: "st-last small muted tabular" },
-          ...(r.lastUsedAt ? [el("span", { className: "st-last-label", text: "最後の生成 " }), el("span", { text: formatShortDateTime(r.lastUsedAt) })] : [el("span", { text: "まだ生成していません" })]),
-        ),
+        remSpan,
+        el("span", { className: "st-use tabular" }, bar, num),
+        last,
       ),
     );
   });
@@ -1407,6 +1582,162 @@ function studentsCard(s) {
       )
       : el("p", { className: "muted", text: "受講者がいません。" }),
   );
+}
+
+// ---- 約 10 秒の読み直しの書き換え（組 11 の (3)。設計 kumi11-site.md 2.3.3） ----
+
+/** 今の状態の「形」：これが変わったら全体を描き直す（今の段階・受講者の顔ぶれと停止・上限の有無・期間・追加の記録・上限の設定） */
+function statusShape(s) {
+  if (!s) return "";
+  return JSON.stringify([
+    s.current?.id ?? null,
+    s.current?.credits ?? null,
+    s.creditMode,
+    s.period,
+    s.students.map((r) => [r.email, r.active, r.limit === null]),
+    (s.grants ?? []).map((g) => [g.id, g.revokedAt ?? null]),
+    s.limits ?? null,
+  ]);
+}
+
+/** 今の段階の提出の段に出す中身（段階の回で、読めた段階が今の段階と同じときだけ。それ以外は null） */
+function shownSubmitPanel() {
+  const p = state.submitPanel ?? null;
+  return p && state.status?.creditMode === "stage" && p.stageId === (state.status.current?.id ?? null) ? p : null;
+}
+
+/** 提出の段の 2 行目 */
+function submitNamesText(names) {
+  return names.length ? `出した人：${names.join("・")}` : "まだ誰も出していません。";
+}
+
+/**
+ * 今の段階の提出の段（組 11 の (3)）：「提出（ワークショップ 2「台本と生成」）  7 / 10 人 · 作品 9 本」と「出した人：…」。
+ * 「提出された作品（別のページ）」のすぐ下。文は textContent だけ。読み上げの知らせ（aria-live）は付けない
+ */
+function submitPanel() {
+  const p = shownSubmitPanel();
+  if (!p) return null;
+  return el(
+    "section",
+    { className: "card", id: "submit-panel", "aria-labelledby": "submit-title" },
+    el("div", { className: "card-head" }, el("h2", { id: "submit-title", text: p.title }), el("span", { className: "tabular", id: "submit-count", text: p.countText })),
+    el("p", { id: "submit-names", text: p.names ? submitNamesText(p.names) : "", hidden: p.names === null }),
+  );
+}
+
+/** 提出の段だけを書き換える（無ければ足し、出さなくなったら外す） */
+function patchSubmitPanel() {
+  if (ending) return;
+  const node = document.getElementById("submit-panel");
+  const p = shownSubmitPanel();
+  if (!p) {
+    node?.remove();
+    return;
+  }
+  if (!node) {
+    document.getElementById("submissions-row")?.after?.(submitPanel());
+    return;
+  }
+  const title = document.getElementById("submit-title");
+  const count = document.getElementById("submit-count");
+  const names = document.getElementById("submit-names");
+  if (title) title.textContent = p.title;
+  if (count) count.textContent = p.countText;
+  if (names) {
+    names.textContent = p.names ? submitNamesText(p.names) : "";
+    names.hidden = p.names === null;
+  }
+}
+
+/** 受講者の行の文字だけを書き換える（残り・low の印・使用の数・棒の幅と読み上げの名前・最後の生成）。チェック・入力・並びは触らない */
+function patchStudents(s) {
+  for (const r of s?.students ?? []) {
+    const row = studentRows.get(r.email);
+    if (!row || !row.remB.isConnected) continue;
+    const { pct, low, rem, use } = studentNumbers(r);
+    row.remB.textContent = rem;
+    row.remSpan.className = `st-rem tabular${low ? " low" : ""}`;
+    if (row.bar) {
+      row.bar.className = `bar ${low ? "low" : ""}`;
+      row.bar.setAttribute("aria-label", `使用 ${pct}%`);
+      row.fill.setAttribute("style", `width:${pct}%`);
+    }
+    row.num.textContent = use;
+    row.last.replaceChildren(...lastUsedNodes(r));
+  }
+}
+
+/** 回の見出しの「10:42 時点」を、読めた時刻にする（失敗の印を外す） */
+function patchStatusAt() {
+  const at = document.getElementById("status-at");
+  if (!at) return;
+  at.textContent = checkedAtText(state.statusAt) ?? "";
+  at.className = "small muted tabular";
+}
+
+/** 続けて読めないとき：回の見出しを「10:42 時点・更新できていません」にする（表示は前に読めた時点のまま） */
+function markStale() {
+  const at = document.getElementById("status-at");
+  const time = checkedAtText(state.statusAt);
+  if (!at || !time) return;
+  at.textContent = `${time}・更新できていません`;
+  at.className = "small warn-text tabular";
+}
+
+/** 形が同じときの書き換え（受講者の数・提出の段・時刻） */
+function patchView() {
+  patchStudents(state.status);
+  patchSubmitPanel();
+  patchStatusAt();
+}
+
+/** その部品を含むカードの見出しの id（aria-labelledby の先）。カードの外なら回の見出し */
+function cardHeadingId(node, view) {
+  for (let n = node; n && n !== view; n = n.parentElement) {
+    const id = n.getAttribute?.("aria-labelledby");
+    if (id) return id;
+  }
+  return "cohort-h";
+}
+
+/**
+ * 全体を描き直す（読み直しで形が変わったとき）。ダイアログが開いている・画面の中の id の無い部品（受講者のチェックなど）に
+ * フォーカスがあるときは描き直さずに false。それ以外は、フォーカスのある部品の id と入力の選択の位置を覚えて描き直し、同じ id に戻す。
+ * force（見送りが続いたとき）なら、id の無い部品にフォーカスがあっても、その部品のカードの見出し（aria-labelledby の先。無ければ回の見出し）へ
+ * フォーカスを移して描き直す（ダイアログが開いている間は force でも描き直さない）
+ */
+function fullRenderSafely({ force = false } = {}) {
+  if ($("confirm")?.open) return false;
+  const view = $("view");
+  const a = document.activeElement;
+  const inView = !!a && a !== view && !!view?.contains?.(a);
+  if (inView && !a.id && !force) return false;
+  const headingId = inView && !a.id ? cardHeadingId(a, view) : null;
+  const focusId = inView && a.id ? a.id : null;
+  const sel = focusId && typeof a.selectionStart === "number" ? [a.selectionStart, a.selectionEnd] : null;
+  render();
+  if (headingId) {
+    const h = document.getElementById(headingId) ?? document.getElementById("cohort-h");
+    if (h) {
+      h.tabIndex = -1; // 見出しはふつうフォーカスを受けない。スクリプトから置けるようにする（Tab の順には入れない）
+      h.focus?.();
+    }
+  }
+  if (focusId) {
+    const n = document.getElementById(focusId);
+    if (n && n !== document.activeElement) {
+      n.focus?.();
+      if (sel) {
+        try {
+          n.setSelectionRange?.(sel[0], sel[1]);
+        } catch {
+          // 選択の位置を持たない欄
+        }
+      }
+    }
+  }
+  return true;
 }
 
 /** 追加の上限の行（単位は「クレジット」を各行に書く。B-8 と同じ呼び名。C-4） */
@@ -1970,7 +2301,7 @@ async function main() {
   }
   if (!session) {
     // 共有のログインが無い：管理コンソールの有効なセッションがあれば管理者として動く（5.3.1 の 2）。無ければ今どおりログインの画面
-    const chosen = await chooseClient(false);
+    const chosen = await chooseClient(null);
     if (chosen.stale) return;
     if (chosen.admin) {
       if (location.search || location.hash) history.replaceState(null, "", returnUrl());
@@ -1989,11 +2320,11 @@ async function main() {
   startWatch(session.user?.id ?? null);
   // 戻ってきた直後の URL に残る code などを消す
   if (location.search || location.hash) history.replaceState(null, "", returnUrl());
-  // 講師の区分なら今どおり。区分が講師でない（管理者）なら、管理コンソールのセッションを試す（5.3.1 の 1〜2）
-  const chosen = await chooseClient(true);
+  // 2 つのログインが同じ人なら管理コンソールが先・別の人なら講師が先（5.3.1 の 1〜2・組 11 の (2)）
+  const chosen = await chooseClient(session.user?.id ?? null);
   if (chosen.stale) return;
-  // 講師の区分（共有のログインで通った）なら、確かめに使った担当の回の答えをそのまま使う。管理者として動くときは管理コンソールの部品で読み直す
-  await load(chosen.shared ? { cohorts: chosen.cohorts ?? null } : {});
+  // 管理者として動くときは管理コンソールの部品で読み直す。それ以外は、確かめに使った担当の回の答え（断りも）をそのまま使う
+  await load(chosen.admin ? {} : { cohorts: chosen.cohorts ?? null });
 }
 
 /** 管理コンソールを新しいタブで開く（講師の画面からはログインを始めない） */

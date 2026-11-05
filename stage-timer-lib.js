@@ -93,12 +93,40 @@ export function timerStageLine(status) {
 }
 
 /**
- * 札の見た目：{ visible, state: "idle" | "running" | "ended", remainingSec, line, stageLine, extendable: [分...], canCancel }。
+ * WS のカードの右上の残り（分：秒。組 11 の (6)）。60 分以上も時間に繰り上げない（75:00・240:00）。
+ * 60 分を切る瞬間に形が変わって読み違えないため。負・数でない値は 00:00
+ */
+export function formatRemaining(sec) {
+  const n = Number.isFinite(sec) && sec > 0 ? Math.floor(sec) : 0;
+  return `${String(Math.floor(n / 60)).padStart(2, "0")}:${String(n % 60).padStart(2, "0")}`;
+}
+
+/**
+ * タイマーを始める分の既定（組 11 の (6)。組 10 の J6 を改める＝決定 C）：回の WS の分（cohort_stage_minutes）を 5〜180 に切り詰める。
+ * 返り値：{ value: 分 | null（既定なし）, clamped: 切り詰める前の分 | null（切り詰めていない） }
+ */
+export function defaultTimerMinutes(m) {
+  if (!Number.isSafeInteger(m) || m <= 0) return { value: null, clamped: null };
+  const v = Math.min(TIMER_MAX, Math.max(TIMER_MIN, m));
+  return { value: v, clamped: v !== m ? m : null };
+}
+
+/** 既定の分を切り詰めたときだけ、入力の下に出す 1 行（切り詰めていなければ空） */
+export function defaultMinutesNote(d) {
+  if (!d || d.clamped === null || d.value === null) return "";
+  return d.clamped > TIMER_MAX
+    ? `予定は ${d.clamped} 分です。タイマーは ${TIMER_MAX} 分までです。`
+    : `予定は ${d.clamped} 分です。タイマーは ${TIMER_MIN} 分からです。`;
+}
+
+/**
+ * 札の見た目：{ visible, state: "idle" | "running" | "ended", remainingSec, line, stageLine, extendable: [分...], canCancel, clock }。
+ * clock：WS のカードの右上に出す残り（動いている・終わったときだけ。始まっていない・札を出さないときは空）。
  * visible は、段階の回の今のワークショップの段階があり（can_start）、回がクローズ済みでないとき。
  * now：端末の時計（Date.now()）。サーバーの時刻に直してから数える
  */
 export function timerView(status, now, { closed = false } = {}) {
-  const hidden = { visible: false, state: "idle", remainingSec: null, line: "", stageLine: "", extendable: [], canCancel: false };
+  const hidden = { visible: false, state: "idle", remainingSec: null, line: "", stageLine: "", extendable: [], canCancel: false, clock: "" };
   if (!status || !status.canStart || !status.stage || closed) return hidden;
   const stageLine = timerStageLine(status);
   const t = status.timer;
@@ -107,7 +135,7 @@ export function timerView(status, now, { closed = false } = {}) {
   const remainingSec = Math.max(0, Math.ceil((t.endsAt - serverNow) / 1000));
   const extendable = TIMER_EXTENDS.filter((m) => t.minutesTotal + m <= TIMER_TOTAL_MAX);
   if (remainingSec <= 0) {
-    return { visible: true, state: "ended", remainingSec: 0, line: `制作時間が終わりました（${formatClock(t.endsAt)}）`, stageLine, extendable, canCancel: true };
+    return { visible: true, state: "ended", remainingSec: 0, line: `制作時間が終わりました（${formatClock(t.endsAt)}）`, stageLine, extendable, canCancel: true, clock: formatRemaining(0) };
   }
   const minutes = Math.ceil(remainingSec / 60);
   return {
@@ -118,6 +146,7 @@ export function timerView(status, now, { closed = false } = {}) {
     stageLine,
     extendable,
     canCancel: true,
+    clock: formatRemaining(remainingSec),
   };
 }
 

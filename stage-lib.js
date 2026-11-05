@@ -338,6 +338,21 @@ export function instructorCohortLabel(c) {
   return [c?.id, c?.name, c?.venueName].filter((v) => String(v ?? "").trim()).join(" · ");
 }
 
+/**
+ * 講師ページ・提出作品のページで、どちらのログインを先に試すか（組 11 の (2)。管理者で開くたびの instructor_cohorts の 403 をなくす）。
+ * sharedUserId：共有のログインの人の id（無ければ null）。consoleUserId：管理コンソールの鍵に保存されている人の id（無ければ null）。
+ *   "console-only"：共有のログインが無い（管理コンソールだけを試す。今と同じ）
+ *   "console-first"：2 つのログインが同じ人（先に管理コンソールを試す）
+ *   "shared-first"：それ以外（今と同じ。別の人の管理コンソールのログインが残っていても、講師は講師として動く）
+ * @param {{ sharedUserId?: string | null, consoleUserId?: string | null }} [ids]
+ * @returns {"console-first" | "shared-first" | "console-only"}
+ */
+export function clientOrder({ sharedUserId = null, consoleUserId = null } = {}) {
+  if (!sharedUserId) return "console-only";
+  if (consoleUserId && consoleUserId === sharedUserId) return "console-first";
+  return "shared-first";
+}
+
 // ---- ワークショップの一覧（講師の画面。設計 docs/design-instructor-page-v2.md 2.3） ----
 // 「済み／今／これから」は位置（今より前・今・今より後）。段階は戻せるので「本当に終わったか」の記録ではない。
 

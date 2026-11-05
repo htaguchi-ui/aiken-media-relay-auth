@@ -5,7 +5,10 @@
 // 30 秒ごとの読み直しは、札が画面にある間だけ（ほかの人の延長・取り消し・管理コンソールからの段階の移動を拾う）。
 // 一時的な失敗（通信など）で読めなくても札は消さず、前に読んだ表示を残す。続けて読めないときだけ「つながりません」と［最新にする］を出す。
 // 読み直しで段階が変わったと分かったら、講師ページ全体を読み直す（reload。「今」の行と札を同じ段階にそろえる）。
+// 組 11 の (6)：WS のカードの右上に残りを分：秒で出す（clock。1 秒ごとに書き換える）。始める分の既定は回の WS の分（5〜180 に切り詰め）。
 import {
+  defaultMinutesNote,
+  defaultTimerMinutes,
   extendDoneText,
   extendLabel,
   isTransientTimerError,
@@ -21,11 +24,15 @@ const TICK_MS = 1000;
 const POLL_TICKS = 30;
 /** 続けてこの回数だけ読めなかったら「つながりません」を出す（30 秒ごとなので、およそ 1 分） */
 const FAILS_TO_WARN = 2;
+/** 右上の残りの札の class（終わったら警告の色） */
+const clockClass = (state) => `wk-clock tabular${state === "ended" ? " ended" : ""}`;
 
 /**
  * deps：{ rpc(name, args), el(tag, props, ...children), getCohortId(), getClient(), isClosed(), isBusy(), withBusy(fn),
- *         confirm({ title, lines, okText }), notify(message, kind), render(), reload(), byId(id), setInterval, clearInterval, now() }
+ *         confirm({ title, lines, okText }), notify(message, kind), render(), reload(), byId(id), setInterval, clearInterval, now(),
+ *         getStageMinutes(stageId) }
  * reload：講師ページの［最新にする］と同じ読み直し（段階・クローズ・札を並べて読み、描き直す）
+ * getStageMinutes：その段階の回の WS の分（cohort_stage_minutes。未設定・読めないときは null）。始める分の既定に使う
  */
 export function createStageTimer(deps) {
   const now = deps.now ?? (() => Date.now());
@@ -34,6 +41,11 @@ export function createStageTimer(deps) {
   let status = null; // normalizeTimerStatus の答え。null は「読めていない・使えない」（札を隠す）
   let seq = 0;
   let minutesText = "";
+  // 講師が分の欄に一度でも打ったか（真の間は、空にした場合も含めて講師の値が先。既定の分で上書きしない）。
+  // 始めた・回を替えた（reset）・札が見ている段階が変わったときに偽に戻す
+  let touched = false;
+  /** 札が最後に見た段階の id（段階が変わったら既定の分に戻すため） */
+  let seenStageId = null;
   let tick = null;
   let lastState = "";
   let failures = 0; // 続けて読めなかった回数（一時的な失敗だけ数える）
@@ -56,6 +68,8 @@ export function createStageTimer(deps) {
     seq++;
     status = null;
     minutesText = "";
+    touched = false;
+    seenStageId = null;
     lastState = "";
     failures = 0;
     stopTick();
@@ -91,6 +105,15 @@ export function createStageTimer(deps) {
       }
       status = normalizeTimerStatus(response?.data, cohortId, now());
       failures = 0;
+      if (status) {
+        const stageId = status.stage?.id ?? null;
+        if (stageId !== seenStageId) {
+          // 段階が変わった：講師が打った値を捨て、新しい段階の既定の分に戻す
+          touched = false;
+          minutesText = "";
+        }
+        seenStageId = stageId;
+      }
       return !!status;
     } catch (error) {
       if (current()) failures++;
@@ -168,6 +191,17 @@ export function createStageTimer(deps) {
             if (b) b.textContent = extendLabel(m, v.state);
           }
         }
+        // WS のカードの右上の残り（分：秒）も同じ 1 秒で書き換える
+        const clock = deps.byId("wk-clock");
+        if (clock) {
+          const time = deps.byId("wk-clock-time");
+          if (time && time.textContent !== v.clock) time.textContent = v.clock;
+          if (v.state !== lastState) {
+            clock.className = clockClass(v.state);
+            const end = deps.byId("wk-clock-end");
+            if (end) end.hidden = v.state !== "ended";
+          }
+        }
         lastState = v.state;
       } catch (error) {
         warn("書き換え", error);
@@ -185,7 +219,10 @@ export function createStageTimer(deps) {
           deps.notify(timerErrorText(error), "error");
         } else {
           deps.notify(typeof done === "function" ? done(data) : done);
-          if (name === "stage_timer_start") minutesText = "";
+          if (name === "stage_timer_start") {
+            minutesText = "";
+            touched = false;
+          }
         }
       } catch (error) {
         deps.notify(timerErrorText(error), "error");
@@ -235,6 +272,11 @@ export function createStageTimer(deps) {
         );
       }
       if (v.state === "idle") {
+        // 講師が打っていなければ、回の WS の分（5〜180 に切り詰め）を入れておく
+        const preset = defaultTimerMinutes(deps.getStageMinutes?.(status.stage.id) ?? null);
+        const shownText = touched ? minutesText : preset.value === null ? "" : String(preset.value);
+        const note = touched ? "" : defaultMinutesNote(preset);
+        const currentText = () => (touched ? minutesText : shownText);
         const input = el("input", {
           id: "timer-minutes",
           className: "input tabular",
@@ -242,13 +284,16 @@ export function createStageTimer(deps) {
           inputmode: "numeric",
           "aria-label": "制作時間（分。5〜180）",
           placeholder: "分",
-          value: minutesText,
+          value: shownText,
           disabled: busy,
         });
         input.addEventListener("input", () => {
           minutesText = input.value;
+          touched = true;
           const go = deps.byId("timer-start");
           if (go) go.disabled = busy || parseTimerMinutes(minutesText) === null;
+          const noteEl = deps.byId("timer-default-note");
+          if (noteEl) noteEl.hidden = true;
         });
         parts.push(
           el(
@@ -267,13 +312,14 @@ export function createStageTimer(deps) {
               className: "btn primary",
               id: "timer-start",
               text: "始める",
-              disabled: busy || parseTimerMinutes(minutesText) === null,
+              disabled: busy || parseTimerMinutes(currentText()) === null,
               onclick: () => {
-                const m = parseTimerMinutes(minutesText);
+                const m = parseTimerMinutes(currentText());
                 if (m !== null) start(m);
               },
             }),
           ),
+          note ? el("p", { className: "hint", id: "timer-default-note", text: note }) : null,
         );
       } else {
         parts.push(
@@ -298,10 +344,32 @@ export function createStageTimer(deps) {
     }
   }
 
+  /**
+   * WS のカードの右上の残り（分：秒）。動いている・終わったときだけ出す（始まっていない・札を出さないときは null）。
+   * 読み上げは札の中の timer-line に任せる（aria-hidden。毎秒は読ませない）。書き換えは card() が始める 1 秒ごとの tick
+   */
+  function clock() {
+    try {
+      const v = view();
+      if (!v.visible || v.state === "idle") return null;
+      const { el } = deps;
+      return el(
+        "span",
+        { id: "wk-clock", className: clockClass(v.state), "aria-hidden": "true" },
+        el("span", { id: "wk-clock-time", text: v.clock }),
+        el("small", { id: "wk-clock-end", className: "wk-clock-end", text: "終了", hidden: v.state !== "ended" }),
+      );
+    } catch (error) {
+      warn("右上の残り", error);
+      return null;
+    }
+  }
+
   return {
     load,
     reset,
     card,
+    clock,
     /** 試験用：今の状態 */
     get status() {
       return status;
