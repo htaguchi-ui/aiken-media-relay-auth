@@ -1,10 +1,10 @@
-// 管理コンソールの［fal の確かめ］（docs/design-fal-price-watch.md 第 1.4.1 版 2.6・3.7）。
+// 管理コンソールの［fal の確認］（docs/design-fal-price-watch.md 第 1.4.1 版 2.6・3.7）。
 // 画面の上（main.content の先頭）に常設の 1 行と帯を差し込み、押すと自分の <dialog> で一覧（5 つのつまみ）を開く。
 // admin.js の内部の状態には依存しない。受け取るのは Supabase の client と、差し込む親の要素と、閉じたかを返す関数（isClosed）だけ
 // （admin.js の入口は数行の独立の差分）。管理コンソールが閉じたら（isClosed が真・host が外れた・#app が隠れた）、開いている窓を閉じて消し、
 // 常設の 1 行と読んだ中身（メールを含む）も消す。閉じたあとに戻った遅い読み込みは描かない（世代の確かめ。Codex TASK-0237 F237-01）。
 // 表示はすべて createElement / textContent で組み立てる（データを innerHTML に入れない）。読み込みは DB の admin_fal_watch_summary
-// （中で is_admin()）、［確かめた］は admin_fal_watch_ack（知らせを閉じるだけ。突き合わせの表の判定・保留は変えない）。
+// （中で is_admin()）、［確認済みにする］は admin_fal_watch_ack（知らせを閉じるだけ。突き合わせの表の判定・保留は変えない）。
 import {
   actualCreditsText,
   ALERT_KIND_LABELS,
@@ -22,6 +22,7 @@ import {
   summarize,
   VERDICT_LABELS,
 } from "./admin-fal-watch-lib.js";
+import { errorInfo } from "./admin-lib.js";
 
 const STYLE_ID = "fal-watch-style";
 const CSS = `
@@ -54,11 +55,13 @@ dialog.fw-dialog::backdrop { background: var(--scrim, rgba(26, 30, 38, 0.62)); }
 .fw-body h3 { font-size: 14px; margin: 14px 0 6px; }
 .fw-foot { padding: 8px 16px 14px; color: var(--muted, #4C525F); font-size: 12px; border-top: 1px solid var(--line, #E3E6EB); }
 .fw-foot p { margin: 2px 0; }
-.fw-ack { display: flex; gap: 6px; align-items: center; }
-.fw-ack input { min-width: 0; flex: 1; height: 30px; border: 1px solid var(--input-line, #C9CED6); border-radius: 8px; padding: 0 8px; font: inherit; }
+.fw-ack { display: flex; flex-wrap: wrap; gap: 6px; align-items: center; }
+.fw-ack input { min-width: 0; flex: 1 1 8em; height: 30px; border: 1px solid var(--input-line, #C9CED6); border-radius: 8px; padding: 0 8px; font: inherit; }
 .fw-ack button, .fw-head button { min-height: 30px; padding: 0 10px; border-radius: 8px; border: 1px solid var(--line-2, #DDE1E7);
   background: var(--surface, #fff); font: inherit; font-size: 12.5px; cursor: pointer; }
-.fw-err { color: var(--danger, #96413A); }
+.fw-err { color: var(--danger, #96413A); white-space: pre-line; }
+.fw-wrap .err-code, dialog.fw-dialog .err-code { margin-left: 2px; font-size: 12px; font-weight: 400; color: var(--muted, #4C525F);
+  white-space: nowrap; }
 `;
 
 function el(tag, attrs = {}, ...children) {
@@ -77,7 +80,7 @@ function el(tag, attrs = {}, ...children) {
 function table(headers, rows) {
   const t = el("table");
   const tr = el("tr");
-  for (const h of headers) tr.append(el("th", { scope: "col", className: h.num ? "num" : undefined, text: h.label }));
+  for (const h of headers) tr.append(el("th", { scope: "col", className: h.num ? "num" : undefined, title: h.title, text: h.label }));
   t.append(el("thead", {}, tr));
   const body = el("tbody");
   for (const r of rows) {
@@ -110,6 +113,18 @@ function oldestCommitted(summary) {
   return times.length ? times.reduce((a, b) => (Date.parse(b) < Date.parse(a) ? b : a)) : null;
 }
 
+/**
+ * 失敗の文（文の決まり 3.7）。op は操作の名前。前置きは admin-lib.js の errorInfo が付け、コードは文に入れず小さく別に出す（決まり 3.2）。
+ * サーバーの message は画面に出さない
+ * @param {string} op
+ * @param {any} error
+ * @returns {any[]}
+ */
+function errorParts(op, error) {
+  const info = errorInfo(op, error ?? { message: "" });
+  return info.code ? [info.text, el("span", { className: "err-code", text: `（${info.code}）` })] : [info.text];
+}
+
 /** 閉じたかを確かめる間隔（ミリ秒） */
 const CLOSE_CHECK_MS = 300;
 
@@ -121,7 +136,7 @@ const CLOSE_CHECK_MS = 300;
 export async function mountFalWatch({ supabase, host, isClosed }) {
   if (!host || !supabase) return { reload: async () => {}, dispose: () => {} };
   if (!document.getElementById(STYLE_ID)) document.head.append(el("style", { id: STYLE_ID, text: CSS }));
-  const wrap = el("section", { className: "fw-wrap", "aria-label": "fal の確かめ" });
+  const wrap = el("section", { className: "fw-wrap", "aria-label": "fal の確認" });
   const band = el("div", { className: "fw-band", role: "status", hidden: true });
   const line = el("button", { type: "button", className: "fw-line", "aria-haspopup": "dialog" });
   wrap.append(band, line);
@@ -131,12 +146,12 @@ export async function mountFalWatch({ supabase, host, isClosed }) {
   const body = el("div", { className: "fw-body" });
   const tabs = el("div", { className: "fw-tabs", role: "tablist", "aria-label": "一覧の分類" });
   const closeBtn = el("button", { type: "button", text: "閉じる", onclick: () => dialog.close() });
-  const reloadBtn = el("button", { type: "button", text: "読み直す", onclick: () => reload() });
+  const reloadBtn = el("button", { type: "button", text: "最新にする", onclick: () => reload() });
   dialog.append(
-    el("div", { className: "fw-head" }, el("h2", { id: "fw-title", text: "fal の確かめ" }), reloadBtn, closeBtn),
+    el("div", { className: "fw-head" }, el("h2", { id: "fw-title", text: "fal の確認" }), reloadBtn, closeBtn),
     tabs,
     body,
-    el("div", { className: "fw-foot" }, ...FOOT_NOTES.map((t) => el("p", { text: t }))),
+    el("div", { className: "fw-foot" }, ...FOOT_NOTES.map((t) => el("p", { title: t.title || undefined, text: t.text }))),
   );
   document.body.append(dialog);
 
@@ -177,7 +192,8 @@ export async function mountFalWatch({ supabase, host, isClosed }) {
 
   const load = async (view) => {
     const { data, error } = await supabase.rpc("admin_fal_watch_summary", { p_view: view });
-    if (error) throw new Error(error.message || "読み込めませんでした");
+    // 元の error をそのまま投げる（包み直すと code を失う。文は errorInfo が作る）
+    if (error) throw error;
     return data;
   };
 
@@ -185,7 +201,7 @@ export async function mountFalWatch({ supabase, host, isClosed }) {
     if (!summary) return;
     const s = summarize(summary);
     // 問題が無いとき（s.allVerified）は短い 1 行。時刻は単価・請求の最後の反映のうち古い方（照らし済みの時刻）。数はホバーと窓で見る（管理の構成 0b の P1）
-    line.replaceChildren(el("span", { className: "fw-title", text: "［fal の確かめ］" }), s.allVerified ? `問題なし ${jstText(oldestCommitted(summary))}` : s.line);
+    line.replaceChildren(el("span", { className: "fw-title", text: "［fal の確認］" }), s.allVerified ? `問題なし ${jstText(oldestCommitted(summary))}` : s.line);
     line.title = s.allVerified ? s.line : "";
     line.classList.toggle("fw-ok", s.allVerified);
     if (s.band.length) {
@@ -255,7 +271,7 @@ export async function mountFalWatch({ supabase, host, isClosed }) {
         p.reason,
       ]);
       body.replaceChildren(
-        el("p", { className: "fw-more", text: `記録の日：${summary.price?.checked_on ?? "まだ無い"}` }),
+        el("p", { className: "fw-more", text: `記録の日：${summary.price?.checked_on ?? "まだない"}` }),
         table([
           { label: "endpoint" },
           { label: "モデル" },
@@ -270,14 +286,14 @@ export async function mountFalWatch({ supabase, host, isClosed }) {
     }
     if (requested === "recent" || requested === "past") {
       if (!views[requested]) {
-        body.replaceChildren(el("p", { text: "読み込んでいます…" }));
+        body.replaceChildren(el("p", { text: "読み込み中…" }));
         try {
           const v = requested === "recent" ? summary : await load("past");
           if (stale()) return;
           views[requested] = v;
         } catch (e) {
           if (stale() || moved()) return;
-          body.replaceChildren(el("p", { className: "fw-err", text: `読み込めませんでした：${e.message}` }));
+          body.replaceChildren(el("p", { className: "fw-err" }, ...errorParts("読み込み", e)));
           return;
         }
         if (moved()) return;
@@ -294,7 +310,7 @@ export async function mountFalWatch({ supabase, host, isClosed }) {
           if (moved()) return;
         } catch (e) {
           if (stale() || moved()) return;
-          body.replaceChildren(el("p", { className: "fw-err", text: `読み込めませんでした：${e.message}` }));
+          body.replaceChildren(el("p", { className: "fw-err" }, ...errorParts("読み込み", e)));
           return;
         }
       }
@@ -327,7 +343,7 @@ export async function mountFalWatch({ supabase, host, isClosed }) {
           { label: "印" },
         ], orphans),
         el("p", { className: "fw-more", text: moreText(summary.orphans_total, orphans.length) }),
-        el("h3", { text: "照合できない生成（request_id の無い生成）" }),
+        el("h3", { text: "照合できない生成（request_id のない生成）" }),
         table([
           { label: "日時" },
           { label: "利用者" },
@@ -365,22 +381,22 @@ export async function mountFalWatch({ supabase, host, isClosed }) {
       ], rows));
       return;
     }
-    // 知らせ（確かめていないもの）と［確かめた］
+    // 知らせ（確認していないもの）と［確認済みにする］
     const rows = (summary.alerts ?? []).map((a) => {
       const note = el("input", { type: "text", maxlength: 200, "aria-label": "メモ（200 字まで）", placeholder: "メモ（任意）" });
-      const btn = el("button", { type: "button", text: "確かめた" });
+      const btn = el("button", { type: "button", text: "確認済みにする" });
       const msg = el("span", { role: "status" });
       btn.addEventListener("click", async () => {
         btn.disabled = true;
         const { data, error } = await supabase.rpc("admin_fal_watch_ack", { p_alert_id: a.id, p_note: note.value || null });
         if (disposed) return;
         if (error) {
-          msg.textContent = `できませんでした：${error.message || ""}`;
+          msg.replaceChildren(...errorParts("保存", error));
           msg.className = "fw-err";
           btn.disabled = false;
           return;
         }
-        msg.textContent = data ? "確かめました" : "すでに確かめ済みです";
+        msg.textContent = data ? "確認しました。" : "確認済みです。";
         await reload();
       });
       return [
@@ -396,7 +412,7 @@ export async function mountFalWatch({ supabase, host, isClosed }) {
       { label: "種類" },
       { label: "対象" },
       { label: "最後に見た" },
-      { label: "［確かめた］（知らせを閉じるだけ。判定・保留は変わりません）" },
+      { label: "［確認済みにする］は知らせを閉じます。", title: "判定・保留は変わりません。メモは残ります。" },
     ], rows));
   }
 
@@ -430,12 +446,12 @@ export async function mountFalWatch({ supabase, host, isClosed }) {
       if (disposed || myGen !== gen) return;
       line.title = "";
       line.replaceChildren(
-        el("span", { className: "fw-title", text: "［fal の確かめ］" }),
-        el("span", { className: "fw-err", text: `読み込めませんでした：${e.message}` }),
+        el("span", { className: "fw-title", text: "［fal の確認］" }),
+        el("span", { className: "fw-err" }, ...errorParts("読み込み", e)),
       );
     }
   }
-  line.replaceChildren(el("span", { className: "fw-title", text: "［fal の確かめ］" }), "読み込んでいます…");
+  line.replaceChildren(el("span", { className: "fw-title", text: "［fal の確認］" }), "読み込み中…");
   await reload();
   return { reload, dispose };
 }

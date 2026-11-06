@@ -2,12 +2,12 @@
 // 画面（ダイアログ・<video> での確かめ）は mypage-upload.js。試験は scripts/upload_lib_test.mjs。
 //   - ファイルの確かめ（段 1〜4。設計 2.4）：checkFileName・checkSize・checkHead・judgeProbe
 //   - 送る値：metaFields・labelOf・buildUploadBody
-//   - 段 2「公開範囲を選んでください」：scopeStepReducer・scopeStepView（Canvas の submit/scopeStep.ts と同じ規則）
+//   - 段 2「公開範囲を選んでください」：scopeStepReducer・scopeStepView（Canvas の submit/scopeStep.ts と同じ規則）・allowedScopes（Canvas の submit/scopeRules.ts と同じ規則。D-1106-120x）
 //   - 提出先：stageOptions・acceptText・stillAccepting（Canvas の submit/messages.ts と同じ規則。upcoming は「受付前」）
 //   - 同じ動画の確かめ（dup-confirm-20261105/DESIGN.md・D-1105-183x・191x）：sameFileWorkNos・dupConfirmBody（題は TEXT.dupTitle）
 //   - 断りの文と動き：uploadErrorText・uploadErrorCode・uploadTip・errorAction・failedFrom
 //   - 流れ（begin → TUS → complete・［キャンセル］・［再送信］）：createUploadFlow（Canvas の submit/flow.ts の決まりを写した物）
-// Canvas の tus.ts・flow.ts・scopeStep.ts・messages.ts を直すときは、この写しも同じ commit で直す（設計 2.8）。
+// Canvas の tus.ts・flow.ts・scopeStep.ts・scopeRules.ts・messages.ts を直すときは、この写しも同じ commit で直す（設計 2.8）。
 // 締切・上限・権限はサーバーが決める。画面は、サーバーが返した受け付けの状態と、断りの名前（code）を文にするだけ。
 import { TusError, tusDelete, tusUpload } from "./tus-lib.js";
 import {
@@ -280,7 +280,8 @@ export function labelOf(name) {
   return Array.from(fixed).slice(0, 200).join("");
 }
 
-const isBridge = (stage) => stage?.kind === "bridge" || stage?.survey_required === true;
+/** ブリッジワークか（アンケートが要る段階もブリッジワークとして扱う。kind が無い・知らない値はワークショップ。Canvas の scopeRules.ts の isBridgeStage と同じ） */
+export const isBridge = (stage) => stage?.kind === "bridge" || stage?.survey_required === true;
 
 /**
  * POST /my/uploads の本体（設計 4.2）。経路・出どころ（via・source）と Canvas の欄は送らない（関数が決める・拾わない）。
@@ -331,7 +332,8 @@ export function validateSend(input) {
     if (len(sv.title) > 60) return TEXT.titleTooLong;
     if (len(sv.purpose) > 400) return TEXT.purposeTooLong;
   }
-  if (input.scope === null || input.scope === undefined) return TEXT.scopeMissing;
+  // 選べない範囲（ワークショップの完全非公開）は、選んでいないのと同じ（画面にその丸は無い。送らない。D-1106-120x）
+  if (input.scope === null || input.scope === undefined || !scopeAllowed(input.stage, input.scope)) return TEXT.scopeMissing;
   if (input.scope === "public" && (!input.consented || !input.consentTextId)) return TEXT.consentMissing;
   return null;
 }
@@ -450,21 +452,41 @@ export function publicBlockedReason({ loginKind, legalReviewed }) {
   return null;
 }
 
-/** 段 2 の丸の並び（講義内 → 完全非公開 → 公開）。note は丸の下に常に出す 1 行（D-1104-130x-c） */
+/** 段 2 の丸の並び（講義内 → 完全非公開 → 公開）。note は丸の下に常に出す 1 行（D-1104-130x-c）。見せるのは allowedScopes の物だけ（D-1106-120x） */
 export const SCOPE_ORDER = [
   { value: "lecture", label: TEXT.scopeLecture, note: TEXT.scopeLectureNote },
   { value: "private", label: TEXT.scopePrivate, note: TEXT.scopePrivateNote },
   { value: "public", label: TEXT.scopePublic, note: TEXT.scopePublicNote },
 ];
 
+const BRIDGE_SCOPES = Object.freeze(["lecture", "private", "public"]);
+const WORKSHOP_SCOPES = Object.freeze(["lecture", "public"]);
+
+/**
+ * 選べる公開の範囲（D-1106-120x。Canvas の submit/scopeRules.ts の写し）。ワークショップは講義内・公開の 2 つ、
+ * 完全非公開はブリッジワークだけ。並びは SCOPE_ORDER のまま（講義内 → 完全非公開 → 公開）
+ */
+export function allowedScopes(stage) {
+  return isBridge(stage) ? BRIDGE_SCOPES : WORKSHOP_SCOPES;
+}
+
+/** その提出先で選べる範囲か */
+export function scopeAllowed(stage, scope) {
+  return allowedScopes(stage).includes(scope);
+}
+
 export function initialScopeStep() {
   return { step: "form", stage: null, scope: null, consented: false };
 }
 
-/** ［戻る］は固定を外すだけ（選んだ範囲と同意のチェックは、同じダイアログの間は残す）。範囲を替えたら同意のチェックは外す */
+/**
+ * ［戻る］は固定を外すだけ（選んだ範囲と同意のチェックは、同じダイアログの間は残す）。範囲を替えたら同意のチェックは外す。
+ * ［次へ］で固定した提出先で選べない範囲が残っていたら、何も選ばれていない状態に戻す（ブリッジワークで完全非公開 →［戻る］→ ワークショップ。D-1106-120x）
+ */
 export function scopeStepReducer(s, a) {
   switch (a.type) {
     case "next":
+      if (s.scope !== null && s.scope !== undefined && !scopeAllowed(a.stage, s.scope)) return { ...s, step: "scope", stage: a.stage, scope: null, consented: false };
       return { ...s, step: "scope", stage: a.stage };
     case "back":
       return { ...s, step: "form", stage: null };
@@ -483,7 +505,8 @@ export function scopeStepView(s, c) {
   const stageOpen = s.stage !== null && stillAccepting(s.stage, c.nowMs);
   let reason = null;
   if (!stageOpen) reason = TEXT.stageEnded;
-  else if (s.scope === null) reason = TEXT.scopeMissing;
+  // 選べない範囲（ワークショップの完全非公開）は、選んでいないのと同じ（画面にその丸は無い。最後の守り。D-1106-120x）
+  else if (s.scope === null || !scopeAllowed(s.stage, s.scope)) reason = TEXT.scopeMissing;
   else if (s.scope === "public" && publicBlocked) reason = publicBlocked;
   else if (s.scope === "public" && (!c.consent || !s.consented)) reason = TEXT.consentMissing;
   return {

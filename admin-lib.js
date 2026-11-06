@@ -33,10 +33,10 @@ export function normalizeEmail(value) {
 
 /** 登録できる email か。できなければ理由（日本語）、できれば null */
 export function emailProblem(email) {
-  if (!email) return "メールアドレスが空です";
-  if ((email.match(/@/g) || []).length !== 1) return "メールアドレスの形式が正しくありません";
+  if (!email) return "メールアドレスが未入力です。";
+  if ((email.match(/@/g) || []).length !== 1) return "メールアドレスの形式が正しくありません。";
   if (!EMAIL_RE.test(email)) {
-    return `許可されていないドメインです（${ALLOWED_DOMAINS.map((d) => "@" + d).join(" / ")} のみ）`;
+    return `許可されていないドメインです（${ALLOWED_DOMAINS.map((d) => "@" + d).join(" / ")} のみ）。`;
   }
   return null;
 }
@@ -93,21 +93,21 @@ export function adminAddConfirmView(emails) {
     title: "管理者として追加しますか？",
     lines: [`次の ${list.length} 人を管理者にします。`, "名簿・回・クレジット・設定をすべて操作できるようになります。"],
     detail: list,
-    cancelLabel: "やめる",
+    cancelLabel: "キャンセル",
     okLabel: "管理者として追加",
   };
 }
 
 /**
- * まとめて追加した結果の文（U3-12）。「8 人を追加しました。登録済みのため 2 人を追加していません。」
+ * まとめて追加した結果の文（U3-12）。「8 人を追加しました。登録済みの 2 人は追加していません。」
  * skipped：登録済みで追加しなかった人数、duplicates：入力内の重複、invalid：送らなかった行の数。
  * 返り値：{ message, kind }（kind は "ok"・"warn"・"error"。登録済みの人がいるときは閉じるまで残す warn）
  */
 export function bulkAddResult({ added, skipped = 0, duplicates = 0, invalid = 0 }) {
   const parts = [`${added} 人を追加しました。`];
-  if (skipped) parts.push(`登録済みのため ${skipped} 人を追加していません。`);
+  if (skipped) parts.push(`登録済みの ${skipped} 人は追加していません。`);
   if (duplicates) parts.push(`入力内の重複 ${duplicates} 件を除きました。`);
-  if (invalid) parts.push(`次の ${invalid} 行は送らずに除きました。`);
+  if (invalid) parts.push(`次の ${invalid} 行は除きました。`);
   return { message: parts.join(""), kind: invalid ? "error" : skipped ? "warn" : "ok" };
 }
 
@@ -221,34 +221,35 @@ export function isMissingFunctionError(error, name) {
 
 /**
  * 016 の DB が当たっているか（画面が知っている判定を、admin.js・instructor.js が入れる）。
- * 組 13 から、表の文がある理由（grant_outside_window・016 の拒否）は DB の hint に置き換えない（hint は console だけ。決まり 3.7）
+ * 組 13（文の決まり 3.7）から、拒否の名前に表の文がある物は DB の hint より先に表の文を出す（hint は console だけ）ので、
+ * 文の選び方はこの値によらない。呼び出し側の互換のために残す
  */
 let stageDbReady = false;
 export function setStageDbReady(value) {
   stageDbReady = !!value;
 }
 
-/** 016 の DB が当たっていないときの文（「まだ使えません」と分かる形） */
-export const MSG_STAGE_NOT_READY = "DB の更新（セミナーの段階：016）がまだ適用されていないため、この操作はまだ使えません。";
+/** 016 の DB が当たっていないときの文（サーバーの更新が未適用。コードは E-ADM-50） */
+export const MSG_STAGE_NOT_READY = "サーバーの更新が未適用です。";
 
 /**
- * 016 の DB が返す拒否の名前（message が名前だけのとき）と、画面に出す文。
- * DB の日本語の hint より先にこの文を選ぶ（hint は console だけ。11-04g）。名前は message と「完全に同じ」ときだけ拾う
+ * 016 の DB が返す拒否の名前（message が名前だけのとき）の文（前置きの無い原因の文。呼び出し側が errorText で「〇〇エラー：」を付ける）。
+ * DB の hint より先にこの文を出す（hint は console だけ）。名前は message と「完全に同じ」ときだけ拾う
  * （部分一致で拾うと、ほかの誤りの文や将来の名前を取り違える）
  */
 export const STAGE_REJECTIONS = {
-  instructor_only: "講師または管理者の権限がありません。担当する回の講師として登録されているか、管理者に確かめてください。",
-  stage_changed: "ほかの人が先に段階を動かしていました。最新の状態を読み込み直したので、確かめてからもう一度操作してください。",
-  stage_not_today: "移れるのは、今日の段階だけです。別の日の段階へは移せません。",
-  stage_outside_course: "Day1 より前、または Day2 が終わったあとは、段階を動かせません。",
-  stage_mode_off: "この回は、段階ごとの枠になっていません（Day ごとの枠です）。",
-  stage_cohort_locked: "この日の段階は、もう始まっているため、順番や数を変えられません（名前・題名・クレジットは変えられます）。",
+  instructor_only: "この回の担当ではありません。",
+  stage_changed: "段階はすでに変わっています。\n「今」の段階を確認してください。",
+  stage_not_today: "今日の段階ではありません。",
+  stage_outside_course: "回の期間外です。",
+  stage_mode_off: "この回には段階がありません。",
+  stage_cohort_locked: "この項目は、開始後は変更できません。",
   stage_cohort_dates_via_rpc:
-    "テンプレートを当てた回の日付は、この画面では変えられません。新しい管理コンソールの回の画面で変えてください（Day1 が始まったあとは、Day1 と枠の種類は変えられません）。",
+    "この画面では日付を変えられません。\nページを再読み込みしてから、［回］で変えてください。",
   stage_grant_via_rpc:
-    "段階の回の受講者への一時追加は、この画面からはできません。新しい管理コンソール（または講師の画面）から追加してください。",
+    "この画面からは追加できません。\nページを再読み込みしてから、再度追加してください。",
   stage_grant_not_deletable:
-    "段階の回の一時追加は記録として残すため、削除できません。追加を無効にするときは新しい管理コンソールの「取り消す」を、受講者を外すときは名簿の「停止」を使ってください。",
+    "段階の回の追加は削除できません。\n［取り消す］を使ってください。",
   grant_target_not_in_cohort: "追加できるのは、担当する回の有効な受講者だけです。",
   grant_instructor_limit_exceeded: "講師の追加の上限を超えます。",
   job_transition_not_allowed: "ジョブの状態を、この向きには変えられません。",
@@ -256,21 +257,48 @@ export const STAGE_REJECTIONS = {
 };
 
 /**
- * 講師の追加の上限を超えたときの文（detail の scope ごと。量の上限なので前置きを付けず単独で出す：決まり 3.7）。
- * 押す前の確かめ（stage-lib.js）と同じ文。scope が分からないときは STAGE_REJECTIONS の 1 行だけ
+ * stage_cohort_locked の detail.field ごとの文（seminar_stages.sql の 5 か所）。field が分からないときは STAGE_REJECTIONS の文
+ */
+const STAGE_COHORT_LOCKED_FIELDS = {
+  stage_template_id: "Day1 が始まった回には、テンプレートを当てられません。",
+  credit_mode: "Day1 が始まった回は、枠の種類を変えられません。",
+  day1_date: "Day1 は、今の Day1 と新しい日付がどちらも明日以降のときだけ変えられます。",
+  day2_date: "Day2 は、今の Day2 と新しい日付がどちらも明日以降のときだけ変えられます。",
+  stages: "始まった日の段階は、順番と数を変えられません。\n名前・題名・クレジットは変えられます。",
+};
+
+/** stage_input_invalid の detail.field を画面の欄の名前にする（無い・空・知らない名前は null。DB の名前を画面に出さない） */
+const STAGE_INPUT_FIELD_LABELS = {
+  name: "名前",
+  items: "段階",
+  stages: "段階",
+  changes: "段階",
+  stage: "段階",
+  stage_id: "段階",
+  template_id: "テンプレート",
+  stage_template_id: "テンプレート",
+  cohort_id: "回",
+  mode: "枠の種類",
+  credit_mode: "枠の種類",
+  day1_date: "Day1 の日付",
+  day2_date: "Day2 の日付",
+  day_kind: "Day",
+  credits: "クレジット",
+  emails: "メールアドレス",
+  grant_id: "追加の記録",
+};
+
+/**
+ * 講師の追加の上限を超えたときの、どの上限かの文（detail の scope。DB の値の名前が違っても、文は崩れない）。
+ * withCurrent：2 行目の括弧に「取り消した分を含む追加済み」を入れるか（1 回の追加の上限は今回の分だけ）
  */
 const INSTRUCTOR_LIMIT_SCOPES = {
-  per_grant: "grant",
-  grant: "grant",
-  per_student_stage: "student_stage",
-  student_stage: "student_stage",
-  per_cohort_day: "cohort_day",
-  cohort_day: "cohort_day",
-};
-const INSTRUCTOR_LIMIT_FIRST_LINES = {
-  grant: "1 回の追加の上限を超えます。",
-  student_stage: "この人のこの段階の追加上限を超えます。",
-  cohort_day: "この回の 1 日の追加上限を超えます。",
+  per_grant: { head: "1 回の追加の上限を超えます。", withCurrent: false },
+  grant: { head: "1 回の追加の上限を超えます。", withCurrent: false },
+  per_student_stage: { head: "この人のこの段階の追加上限を超えます。", withCurrent: true },
+  student_stage: { head: "この人のこの段階の追加上限を超えます。", withCurrent: true },
+  per_cohort_day: { head: "この回の 1 日の追加上限を超えます。", withCurrent: true },
+  cohort_day: { head: "この回の 1 日の追加上限を超えます。", withCurrent: true },
 };
 
 /** 拒否の名前（message が小文字・数字・下線だけの名前そのもののとき）。そうでなければ "" */
@@ -288,24 +316,33 @@ function parseErrorDetail(error) {
   }
 }
 
-/** 016 の拒否の名前に対する、hint が無いときの文。名前が一致しなければ null */
+/** 数として読める値か（null・undefined・数でない文字は false） */
+function knownNumber(v) {
+  return v !== null && v !== undefined && v !== "" && Number.isFinite(Number(v));
+}
+
+/** 016 の拒否の名前に対する文（前置きの無い原因の文）。名前が一致しなければ null */
 export function stageRejectionText(error) {
   const name = rejectionName(error);
   if (!name || !Object.hasOwn(STAGE_REJECTIONS, name)) return null;
   if (name === "stage_input_invalid") {
     const field = parseErrorDetail(error).field;
-    if (typeof field === "string" && field) return `入力の内容を受け付けられませんでした（${field}）。値を確かめてください。`;
+    const label = typeof field === "string" && Object.hasOwn(STAGE_INPUT_FIELD_LABELS, field) ? STAGE_INPUT_FIELD_LABELS[field] : null;
+    if (label) return `${label}の値が正しくありません。`;
+  }
+  if (name === "stage_cohort_locked") {
+    const field = parseErrorDetail(error).field;
+    if (typeof field === "string" && Object.hasOwn(STAGE_COHORT_LOCKED_FIELDS, field)) return STAGE_COHORT_LOCKED_FIELDS[field];
   }
   if (name === "grant_instructor_limit_exceeded") {
     const d = parseErrorDetail(error);
-    const known = (v) => v !== null && v !== undefined && Number.isFinite(Number(v));
-    const kind = INSTRUCTOR_LIMIT_SCOPES[d.scope];
-    if (kind && known(d.limit)) {
-      // 1 回の追加は今回の分だけ。合計の上限（1 人・1 段階、回の 1 日）は取り消した分を含む追加済みも出す
+    const scope = INSTRUCTOR_LIMIT_SCOPES[d.scope];
+    if (scope && knownNumber(d.limit)) {
+      // 数（current・request）の無い項は出さず、全部無いときは括弧ごと出さない
       const parts = [];
-      if (kind !== "grant" && known(d.current)) parts.push(`取り消した分を含む追加済み ${formatCredits(d.current)}`);
-      if (known(d.request)) parts.push(`今回 ${formatCredits(d.request)}`);
-      return `${INSTRUCTOR_LIMIT_FIRST_LINES[kind]}\n${formatCredits(d.limit)} クレジットまでです${parts.length ? `（${parts.join("・")}）` : ""}。`;
+      if (scope.withCurrent && knownNumber(d.current)) parts.push(`取り消した分を含む追加済み ${formatCredits(d.current)}`);
+      if (knownNumber(d.request)) parts.push(`今回 ${formatCredits(d.request)}`);
+      return `${scope.head}\n${formatCredits(d.limit)} クレジットまでです${parts.length ? `（${parts.join("・")}）` : ""}。`;
     }
   }
   return STAGE_REJECTIONS[name];
@@ -313,7 +350,8 @@ export function stageRejectionText(error) {
 
 /**
  * 通信の失敗（応答が届かなかった）か。サーバーが答えた拒否（code や名前つきの message）は含めない。
- * 応答が失われたときは、操作が済んでいるかどうかが分からない（U3-1。押し直す前に一覧で確かめてもらう）
+ * 応答が失われたときは、操作が済んでいるかどうかが分からない（U3-1。押し直す前に一覧で確かめてもらう）。
+ * explainErrorInfo の通信の失敗の文もこの判定で選ぶ（Chrome「Failed to fetch」・Firefox「NetworkError …」・Safari「Load failed」）
  */
 export function isNetworkFailure(error) {
   if (!error) return false;
@@ -322,185 +360,213 @@ export function isNetworkFailure(error) {
   return /fetch|network|load failed|timed? ?out|timeout|aborted/i.test(String(error.message ?? ""));
 }
 
-/** DB の日本語の hint は画面に出さず console だけに出す（決まり 3.7・11-04g。表の文を先に選ぶ） */
-function logHint(error) {
-  const hint = String(error?.hint ?? "");
-  if (/[^\x00-\x7F]/.test(hint)) console.info(`DB の hint：${hint}`);
+/** 文の中に日本語があるか */
+function hasJapanese(t) {
+  return /[^\x00-\x7F]/.test(String(t ?? ""));
 }
 
-/**
- * 前置き「〇〇エラー：」を付けずに単独で出す理由（決まり 3.7）：通信の失敗・ログインの期限切れ・量の上限（「〇〇の上限を超えます」）。
- * admin_only は errorText が E-LOG-54 の完成した文にする
- */
-const STANDALONE_REASONS = new Set(["network", "jwt_expired", "grant_instructor_limit_exceeded", "grant_total_exceeded"]);
+/** 表の文を選んだときの DB の hint は console だけに出す（画面には出さない。文の決まり 3.7） */
+function logHint(error) {
+  const hint = String(error?.hint ?? "");
+  if (hasJapanese(hint)) console.info("DB の説明:", hint);
+}
 
-/** 通信の失敗の文（前置きを付けずに単独で出す。決まり 3.7） */
+/** 通信の失敗の文（前置きを付けずに単独で出す） */
 export const MSG_NETWORK_FAILURE = "通信エラー：接続できませんでした。\nインターネット接続を確認してください。";
-/** ログインの期限切れの文（前置きを付けずに単独で出す。決まり 3.7） */
+/** ログインの期限切れの文（前置きを付けずに単独で出す） */
 export const MSG_LOGIN_EXPIRED = "ログインの有効期限が切れました。\nページを再読み込みしてください。";
-/** admin_only（42501 を含む）の完成した文（E-LOG-54。管理コンソールの explainApiError と同じ。決まり 3.7） */
+/** 管理者の権限が無いときの完成した文（E-LOG-54。原因の部品は「管理者の権限がありません。」） */
 export const MSG_ADMIN_ONLY = "権限エラー：管理者の権限がありません。\n再度ログインしてください。";
 
-/** 理由の名前 → エラーコード（決まり 3.2。コードは文と別の値で持つ）。原因が分からない unknown は操作の領域の 99（errorCode の area） */
-const REASON_CODES = { admin_only: "E-LOG-54", permission_denied: "E-LOG-54" };
-
 /**
- * Supabase（PostgREST）のエラーの、前置きの無い原因の文と理由の名前（{ text, reason }）。
- * reason：DB の拒否の名前（admin_only・grant_outside_window など）・network・jwt_expired・unknown（どれにも当たらない）など。
- * DB の日本語の hint は、表の文がある理由（STAGE_REJECTIONS・grant_instructor_limit_exceeded・grant_outside_window）では出さず console だけ（11-04g）
+ * Supabase（PostgREST）のエラーの原因（文の決まり 3.7）。返り値：{ text, kind, code }
+ * - text：前置きの無い原因の文（kind が alone なら、そのまま出す完成した文）
+ * - kind："cause"（呼び出し側が「〇〇エラー：」を付ける）・"perm"（権限。「権限エラー：」を付ける）・
+ *   "alone"（通信の失敗・ログインの期限切れ・量の上限。前置きを付けない）・"unknown"（原因が分からない）
+ * - code：エラーコード（決まり 3.1 に当たる物だけ。unknown は呼び出した操作の領域の 99 を errorInfo が付ける）
+ * ctx.op：操作の名前（unknown の文に使う）。ctx.target が "member" のときは名簿の削除の文を選ぶ
+ * @param {any} error
+ * @param {{ op?: string, target?: string | null }} [ctx]
+ * @returns {{ text: string, kind: "cause" | "perm" | "alone" | "unknown", code: string | null }}
  */
-export function explainErrorInfo(error, { quiet = false } = {}) {
-  if (!error) return { text: "", reason: "" };
+export function explainErrorInfo(error, ctx = {}) {
+  const op = typeof ctx?.op === "string" ? ctx.op : "";
+  const unknown = () => {
+    // サーバーの message・code は console だけ（画面に出さない）
+    if (error) console.warn("原因が分からないエラー:", error?.code ?? "", error?.message ?? "");
+    return { text: op ? `${op}エラーが発生しました。` : "エラーが発生しました。", kind: "unknown", code: null };
+  };
+  if (!error) return { text: "", kind: "cause", code: null };
   const message = String(error.message ?? "");
   const code = String(error.code ?? "");
-  const r = (text, reason) => ({ text, reason });
   if (message.includes("last_admin_protected")) {
-    return r("最後の有効な管理者は、停止・役割の変更・削除ができません。先に別の管理者を追加してください。", "last_admin_protected");
+    return { text: "最後の有効な管理者です。\n先に別の管理者を追加してください。", kind: "cause", code: null };
   }
-  if (message.includes("admin_only")) return r("管理者の権限がありません。", "admin_only");
+  if (message.includes("admin_only")) return { text: "管理者の権限がありません。", kind: "perm", code: "E-LOG-54" };
   if (message.includes("grant_outside_window")) {
-    // 段階の回（detail の credit_mode が stage）は表の文。DB の hint は console だけ（11-04g）
-    if (!quiet) logHint(error);
-    if (parseErrorDetail(error).credit_mode === "stage") return r("今の段階がありません。", "grant_outside_window");
-    return r(
-      "今の枠が無いため、クレジットを追加できません（受講者は Day1〜Day2 の期間内でクレジットが設定されているとき、AIKENメンバーは月額が設定されているときだけ追加できます）。",
-      "grant_outside_window",
-    );
+    logHint(error);
+    if (parseErrorDetail(error).credit_mode === "stage") return { text: "今の段階がありません。", kind: "cause", code: null };
+    return {
+      text: "今の枠がありません。\n受講者は Day1〜Day2 の期間内、AIKENメンバーは月額があるときだけ追加できます。",
+      kind: "cause",
+      code: null,
+    };
   }
-  if (message.includes("grant_immutable")) return r("追加したクレジットは変更できません。削除して追加し直してください。", "grant_immutable");
-  // 014：1 人・同じ枠への追加の合計の天井（detail は {granted, request, limit}）。量の上限なので前置きを付けず単独で出す
+  if (message.includes("grant_immutable")) {
+    return {
+      text: "追加したクレジットは変更できません。\n不要な追加を削除するか取り消してから、再度追加してください。",
+      kind: "cause",
+      code: null,
+    };
+  }
+  // 014：1 人・同じ枠への追加の合計の天井（detail は {granted, request, limit}）。量の上限なので前置きを付けない
   if (message.includes("grant_total_exceeded")) {
-    let d = {};
-    try {
-      d = JSON.parse(error.details ?? error.detail ?? "{}") ?? {};
-    } catch {
-      d = {};
-    }
-    const limit = Number.isFinite(Number(d.limit)) && d.limit !== null ? Number(d.limit) : MAX_GRANT_TOTAL;
-    const granted = Number.isFinite(Number(d.granted)) && d.granted !== null;
-    const request = Number.isFinite(Number(d.request)) && d.request !== null;
+    const d = parseErrorDetail(error);
+    const limit = knownNumber(d.limit) ? Number(d.limit) : MAX_GRANT_TOTAL;
+    const granted = knownNumber(d.granted) ? formatCredits(d.granted) : null;
+    const request = knownNumber(d.request) ? formatCredits(d.request) : null;
     // 段階の回（scope が cohort）：上限は「今の枠」ではなく「この回での合計」。取り消した追加も数える。
     // detail に email があれば（まとめての追加で誰が超えたかが分かる）、その人の名前の代わりに入れる
     if (d.scope === "cohort") {
       const who = typeof d.email === "string" && d.email ? d.email : "この人";
       const parts = [];
-      if (granted) parts.push(`取り消した分を含む追加済み ${formatCredits(d.granted)}`);
-      if (request) parts.push(`今回 ${formatCredits(d.request)}`);
-      return r(
-        `${who}：回の追加上限を超えます。\n合計 ${formatCredits(limit)} クレジットまでです${parts.length ? `（${parts.join("・")}）` : ""}。`,
-        "grant_total_exceeded",
-      );
+      if (granted !== null) parts.push(`取り消した分を含む追加済み ${granted}`);
+      if (request !== null) parts.push(`今回 ${request}`);
+      return {
+        text: `${who}：回の追加上限を超えます。\n合計 ${formatCredits(limit)} クレジットまでです${parts.length ? `（${parts.join("・")}）` : ""}。`,
+        kind: "alone",
+        code: null,
+      };
     }
     const parts = [];
-    if (granted) parts.push(`追加済み ${formatCredits(d.granted)}`);
-    if (request) parts.push(`今回 ${formatCredits(d.request)}`);
-    return r(
-      `この人への追加上限を超えます。\n${formatCredits(limit)} クレジットまでです${parts.length ? `（${parts.join("・")}）` : ""}。`,
-      "grant_total_exceeded",
-    );
+    if (granted !== null) parts.push(`追加済み ${granted}`);
+    if (request !== null) parts.push(`今回 ${request}`);
+    return {
+      text: `この人への追加上限を超えます。\n${formatCredits(limit)} クレジットまでです${parts.length ? `（${parts.join("・")}）` : ""}。`,
+      kind: "alone",
+      code: null,
+    };
   }
   if (message.includes("cohort_id_mismatch")) {
-    return r("回の ID が会場番号と Day1 の日付に合いません。読み込み直してからやり直してください。", "cohort_id_mismatch");
+    return { text: "回の ID が会場番号と Day1 の日付に合いません。\n再読み込みしてください。", kind: "cause", code: null };
   }
-  // 016 の拒否（名前だけの message）：表の文を DB の日本語の hint より先に選ぶ（hint は console だけ。11-04g）
-  const stageText = stageRejectionText(error);
-  if (stageText) {
-    if (!quiet) logHint(error);
-    return r(stageText, rejectionName(error));
+  // 016 の拒否（名前だけの message）。表の文を DB の hint より先に選ぶ（hint は console だけ）
+  const name = rejectionName(error);
+  if (name && Object.hasOwn(STAGE_REJECTIONS, name)) {
+    logHint(error);
+    if (name === "instructor_only") return { text: STAGE_REJECTIONS.instructor_only, kind: "perm", code: "E-LOG-53" };
+    if (name === "stage_grant_not_deletable" && ctx?.target === "member") {
+      return { text: "段階の回の追加がある人は削除できません。", kind: "cause", code: null };
+    }
+    return { text: stageRejectionText(error), kind: name === "grant_instructor_limit_exceeded" ? "alone" : "cause", code: null };
   }
   // 設定の誤り（014 の admin_update_settings。message は日本語で、範囲・項目名を含む）
-  if (code === "22023" && /[^\x00-\x7F]/.test(message)) return r(message, "settings_invalid");
-  // DB が日本語の説明を返したとき（天井を超える追加など）は、そのまま出す
-  const japanese = [message, error.hint].find((t) => /[^\x00-\x7F]/.test(String(t ?? "")));
-  if (japanese && code !== "42501") return r(String(japanese), "db_text");
-  // DB の更新がまだ適用されていない：関数・テーブル・列が見つからない（段階は 016、設定は 014、回と会場は 013）
-  if (isStageSchemaMissing(error)) return r(MSG_STAGE_NOT_READY, "stage_schema_missing");
+  if (code === "22023" && hasJapanese(message)) return { text: message, kind: "cause", code: null };
+  // DB が日本語の説明を返したとき（表に文の無い物）は、そのまま出す
+  const japanese = [message, error.hint].find((t) => hasJapanese(t));
+  if (japanese && code !== "42501") return { text: String(japanese), kind: "cause", code: null };
+  // DB の更新がまだ適用されていない：関数・テーブル・列が見つからない（段階は 016、設定は 014、回と会場は 013。番号は画面に出さない）
+  if (isStageSchemaMissing(error)) return { text: MSG_STAGE_NOT_READY, kind: "cause", code: "E-ADM-50" };
   if (isMissingSchemaError(error)) {
     if (/admin_get_settings|admin_update_settings|admin_settings_history|app_settings/.test(message)) {
-      return r("DB の更新（設定：014）がまだ適用されていないため、この操作はできません。", "schema_missing");
+      return { text: "サーバーの更新が未適用です。", kind: "cause", code: "E-ADM-50" };
     }
-    return r("DB の更新（回と会場：013）がまだ適用されていないため、この操作はできません。", "schema_missing");
+    return { text: "サーバーの更新が未適用です。", kind: "cause", code: "E-ADM-50" };
   }
   if (code === "42501" || /row-level security|permission denied/i.test(message)) {
-    return r("この操作をする権限がありません（管理者だけが操作できます）。", "permission_denied");
+    return { text: "管理者の権限がありません。", kind: "perm", code: "E-LOG-54" };
   }
   if (code === "23503") {
     const deleting = /update or delete/i.test(message);
     if (/members_cohort_id_fkey/.test(message)) {
-      return r(
-        deleting
-          ? "所属している受講者がいるため、この回は削除できません。先に別の回へ移すか、名簿から外してください。"
-          : "選んだ回が見つかりません（削除された可能性があります）。読み込み直してください。",
-        "fk_cohort",
-      );
+      return deleting
+        ? { text: "受講者がいる回は削除できません。\n先に受講者を別の回へ移すか、名簿から外してください。", kind: "cause", code: null }
+        : { text: "回が見つかりません。\n再読み込みしてください。", kind: "cause", code: null };
     }
     if (/cohorts_venue_no_fkey/.test(message)) {
-      return r(deleting ? "この会場には回があるため削除できません。" : "選んだ会場が見つかりません。読み込み直してください。", "fk_venue");
+      return deleting
+        ? { text: "回がある会場は削除できません。", kind: "cause", code: null }
+        : { text: "会場が見つかりません。\n再読み込みしてください。", kind: "cause", code: null };
     }
-    return r("ほかのデータから参照されているため、この操作はできません。", "fk_other");
+    return { text: "ほかのデータから参照されています。", kind: "cause", code: "E-ADM-52" };
   }
-  if (code === "23514" && /dates_order/.test(message)) return r("Day2 は Day1 より後の日付にしてください。", "check_dates_order");
-  if (code === "23514" && /cohorts_day1_range/.test(message)) return r("Day1 は 2000〜2099 年の日付にしてください。", "check_day1_range");
-  if (code === "23514" && /venues_no_check/.test(message)) return r("会場番号は 2 桁の数字にしてください（例：06）。", "check_venue_no");
-  if (code === "23514" && /venues_name_check/.test(message)) return r("会場名を入力してください。", "check_venue_name");
+  if (code === "23514" && /dates_order/.test(message)) return { text: "Day2 は Day1 より後の日付です。", kind: "cause", code: null };
+  if (code === "23514" && /cohorts_day1_range/.test(message)) return { text: "Day1 は 2000〜2099 年の日付です。", kind: "cause", code: null };
+  if (code === "23514" && /venues_no_check/.test(message)) return { text: "会場番号は 2 桁の数字です（例：06）。", kind: "cause", code: null };
+  if (code === "23514" && /venues_name_check/.test(message)) return { text: "会場名を入力してください。", kind: "cause", code: null };
   // クレジットの範囲（014 の天井）。制約は NOT VALID なので、天井を超える古い行は、ほかの列を変えるだけでも拒否される
   if (code === "23514" && /credits/.test(message)) {
-    return r(
-      `クレジットの値が上限 ${formatCredits(MAX_CREDITS)} を超えています（0〜${formatCredits(MAX_CREDITS)}、追加は 1〜${formatCredits(MAX_CREDITS)}）。` +
-        `入力した値か、保存済みの古い値が ${formatCredits(MAX_CREDITS)} を超えている場合は、まずその値を ${formatCredits(MAX_CREDITS)} 以下に直してください。`,
-      "check_credits",
-    );
+    return {
+      text: `クレジットは 0〜${formatCredits(MAX_CREDITS)} までです（追加は 1〜${formatCredits(MAX_CREDITS)}）。\n` +
+        `保存済みの値が ${formatCredits(MAX_CREDITS)} を超えているときは、先にその値を ${formatCredits(MAX_CREDITS)} 以下にしてください。`,
+      kind: "cause",
+      code: null,
+    };
   }
   if (code === "23514") {
-    return r(
-      `メールアドレスの形式・ドメイン、または区分・状態の値が正しくありません（${
-        ALLOWED_DOMAINS.map((d) => "@" + d).join(" / ")
-      } の小文字のアドレスのみ）。`,
-      "check_other",
-    );
+    return {
+      text: "メールアドレス・区分・状態の値が正しくありません。\n" +
+        `メールアドレスは ${ALLOWED_DOMAINS.map((d) => "@" + d).join(" / ")} の小文字だけ使えます。`,
+      kind: "cause",
+      code: null,
+    };
   }
-  if (code === "23505" && /cohorts_pkey/.test(message)) return r("同じ会場・同じ Day1 の回が既にあります（回の ID が重なります）。", "dup_cohort");
-  if (code === "23505" && /venues_pkey/.test(message)) return r("その会場番号は既に使われています。", "dup_venue");
-  if (code === "23505") return r("このメールアドレスは既に登録されています。", "dup_member");
-  if (/JWT|session|token/i.test(message)) return r(MSG_LOGIN_EXPIRED, "jwt_expired");
-  if (/fetch|network/i.test(message)) return r(MSG_NETWORK_FAILURE, "network");
-  // どれにも当たらない：サーバーの英語の message・code は画面に出さず console だけ（決まり 3.7）。前置きは errorText が付ける
-  if (!quiet) console.info(`エラー：${message || code || "不明"}`);
-  return r("エラーが発生しました。", "unknown");
-}
-
-/** Supabase（PostgREST）のエラーを日本語の説明にする（前置きの無い原因の文。通信の失敗・ログインの期限切れ・量の上限は単独で出せる文） */
-export function explainError(error) {
-  return explainErrorInfo(error).text;
+  if (code === "23505" && /cohorts_pkey/.test(message)) return { text: "同じ会場・同じ Day1 の回がすでにあります。", kind: "cause", code: null };
+  if (code === "23505" && /venues_pkey/.test(message)) return { text: "その会場番号はすでに使われています。", kind: "cause", code: null };
+  if (code === "23505") return { text: "このメールアドレスはすでに登録されています。", kind: "cause", code: null };
+  if (/JWT|session|token/i.test(message)) return { text: MSG_LOGIN_EXPIRED, kind: "alone", code: null };
+  if (isNetworkFailure(error)) return { text: MSG_NETWORK_FAILURE, kind: "alone", code: null };
+  return unknown();
 }
 
 /**
- * 画面に出す完成した文とエラーコード（決まり 3.7・3.2）。op は操作の名前（「読み込み」「移動」「追加」など）。返り値：{ text, code }。
- * 通信の失敗・ログインの期限切れ・量の上限は前置きを付けず単独、admin_only（42501 を含む）は E-LOG-54 の完成した文、
- * 原因が分からない物は「{op}エラーが発生しました。」（op が無いときは「エラーが発生しました。」。コードは操作の領域の 99：
- * area の既定は管理コンソール＝ADM、講師ページ＝INS、提出作品＝WRK）、ほかは「{op}エラー：原因」。code は文に入れず、小さく別に出す
+ * Supabase（PostgREST）のエラーを日本語の原因の文にする（前置きの無い原因の文。画面に出すときは errorText・errorInfo を通す）。
+ * 原因が分からないときは「{op}エラーが発生しました。」（op が無ければ「エラーが発生しました。」）
  */
-export function errorInfo(op, error, { area = "ADM" } = {}) {
-  if (!error) return { text: "", code: null };
-  const { text, reason } = explainErrorInfo(error);
-  const code = reason === "unknown" ? `E-${area}-99` : REASON_CODES[reason] ?? null;
-  if (reason === "admin_only" || reason === "permission_denied") return { text: MSG_ADMIN_ONLY, code };
-  if (reason === "unknown") return { text: op ? `${op}エラーが発生しました。` : "エラーが発生しました。", code };
-  if (STANDALONE_REASONS.has(reason) || !op) return { text, code };
-  return { text: `${op}エラー：${text}`, code };
+export function explainError(error, op = "") {
+  return explainErrorInfo(error, { op }).text;
 }
 
-/** errorInfo の文だけ */
+/**
+ * 画面に出す完成した文とエラーコード（文の決まり 3.7）。op は操作の名前（「保存」「追加」「名簿の読み込み」など）。
+ * 通信の失敗・ログインの期限切れ・量の上限は前置きを付けずに単独、権限は「権限エラー：」、原因が分かる物は「{op}エラー：原因」、
+ * 原因が分からない物は「{op}エラーが発生しました。」（コードは操作の領域の 99。area の既定は管理コンソール＝ADM）。
+ * ctx.target は explainErrorInfo と同じ。返り値：{ text, code }（code はコードが無ければ null。文に入れず、小さく別に出す）
+ * @param {string} op
+ * @param {any} error
+ * @param {{ area?: string, target?: string | null }} [opts]
+ * @returns {{ text: string, code: string | null }}
+ */
+export function errorInfo(op, error, { area = "ADM", target = null } = {}) {
+  const info = explainErrorInfo(error, { op, target });
+  if (!error) return { text: "", code: null };
+  if (info.kind === "unknown") return { text: info.text, code: `E-${area}-99` };
+  if (info.kind === "alone") return { text: info.text, code: info.code };
+  if (info.kind === "perm") {
+    if (info.code === "E-LOG-54") return { text: MSG_ADMIN_ONLY, code: info.code };
+    return { text: `権限エラー：${info.text}`, code: info.code };
+  }
+  return { text: op ? `${op}エラー：${info.text}` : info.text, code: info.code };
+}
+
+/**
+ * errorInfo の文だけ
+ * @param {string} op
+ * @param {any} error
+ * @param {{ area?: string, target?: string | null }} [opts]
+ */
 export function errorText(op, error, opts = {}) {
   return errorInfo(op, error, opts).text;
 }
 
-/** errorInfo のコードだけ（無ければ null。console に 2 回出さないよう、文は作らずに理由だけ見る） */
-export function errorCode(op, error, { area = "ADM" } = {}) {
-  if (!error) return null;
-  const { reason } = explainErrorInfo(error, { quiet: true });
-  if (reason === "unknown") return `E-${area}-99`;
-  return REASON_CODES[reason] ?? null;
+/**
+ * errorInfo のコードだけ（無ければ null）
+ * @param {string} op
+ * @param {any} error
+ * @param {{ area?: string, target?: string | null }} [opts]
+ */
+export function errorCode(op, error, opts = {}) {
+  return errorInfo(op, error, opts).code;
 }
 
 // ---- クレジットの枠（DB：20261015000007_credit_periods.sql と同じ境界・換算） ----
@@ -700,7 +766,7 @@ export function parseCreditForm(raw, { partial = false, fields = CREDIT_FIELDS }
     if (v === "") {
       if (!partial) patch[key] = null;
     } else if (!isValidDate(v)) {
-      problems.push(`${key === "day1_date" ? "Day1" : "Day2"} の日付が正しくありません`);
+      problems.push(`${key === "day1_date" ? "Day1" : "Day2"} の日付が正しくありません。`);
     } else {
       patch[key] = v;
     }
@@ -710,7 +776,7 @@ export function parseCreditForm(raw, { partial = false, fields = CREDIT_FIELDS }
     const v = String(raw?.[key] ?? "").trim();
     const n = parseCredits(v);
     if (n === undefined) {
-      problems.push(`${labels[key]}のクレジットは 0〜${formatCredits(MAX_CREDITS)} の整数で入力してください`);
+      problems.push(`${labels[key]}のクレジットは 0〜${formatCredits(MAX_CREDITS)} の整数です。`);
     } else if (n !== null || !partial) {
       patch[key] = n;
     }
@@ -722,7 +788,7 @@ export function parseCreditForm(raw, { partial = false, fields = CREDIT_FIELDS }
 
 /** Day2 は Day1 より後（両方あるときだけ確認する）。問題があれば理由、なければ null */
 export function datesProblem(day1, day2) {
-  if (day1 && day2 && day2 <= day1) return "Day2 は Day1 より後の日付にしてください";
+  if (day1 && day2 && day2 <= day1) return "Day2 は Day1 より後の日付です。";
   return null;
 }
 
@@ -789,9 +855,54 @@ export function canGrant(row) {
 /** 今の枠に credits を足せるか。合計の上限（MAX_GRANT_TOTAL）を超えるなら理由（日本語）、足せるなら null */
 export function grantTotalProblem(row, credits) {
   const granted = Number(row?.current_granted_credits ?? 0);
-  if (granted + Number(credits) <= MAX_GRANT_TOTAL) return null;
-  const room = Math.max(0, MAX_GRANT_TOTAL - granted);
-  return `今の枠への追加は、1 人あたり合計 ${formatCredits(MAX_GRANT_TOTAL)} クレジットまでです（追加済み ${formatCredits(granted)}。あと ${formatCredits(room)} まで）`;
+  const request = Number(credits);
+  if (granted + request <= MAX_GRANT_TOTAL) return null;
+  // 数が分からない・数でないときは、数の括弧と 2 行目を出さない（「あと N まで」は出さない）
+  if (!Number.isFinite(granted) || !Number.isFinite(request)) return "この人への追加上限を超えます。";
+  return `この人への追加上限を超えます。\n${formatCredits(MAX_GRANT_TOTAL)} クレジットまでです（追加済み ${formatCredits(granted)}・今回 ${formatCredits(request)}）。`;
+}
+
+/**
+ * 追加の欄の下に出す「あといくつ足せるか」（組 13 U-05・A-03）。段階の回は回の合計（T − G。取り消した追加も G に数える）、
+ * ほかは今の枠の合計（MAX_GRANT_TOTAL − 追加済み。grantTotalProblem と同じ計算）。段階の回で granted か limit が分からなければ null（行を出さない）
+ */
+export function grantRoom({ stage = false, row = null, granted = null, limit = null } = {}) {
+  if (!stage) return Math.max(0, MAX_GRANT_TOTAL - Number(row?.current_granted_credits ?? 0));
+  if (limit === null || limit === undefined || granted === null || granted === undefined) return null;
+  if (!Number.isFinite(Number(limit)) || !Number.isFinite(Number(granted))) return null;
+  return Math.max(0, Number(limit) - Number(granted));
+}
+
+/** 「あと 8,500 まで」。room が null なら空 */
+export function grantRoomText(room) {
+  return room === null || room === undefined ? "" : `あと ${formatCredits(room)} クレジットまで`;
+}
+
+/** 「あと N まで」の ？ の中身。取り消しても減らない決まりは段階の回だけ */
+export function grantRoomHelp(stage, limit) {
+  const max = formatCredits(stage && limit !== null && limit !== undefined ? limit : MAX_GRANT_TOTAL);
+  return stage
+    ? `1 人あたり、この回の追加は合計 ${max} クレジットまでです。取り消した分も数えます。`
+    : `1 人あたり、今の枠への追加は合計 ${max} クレジットまでです。`;
+}
+
+/** 追加の確かめ・お知らせの相手。表示名があれば「受講者Aさん」、withEmail なら「受講者Aさん（a@…）」。表示名が無ければメールだけ */
+export function grantWho(row, withEmail = false) {
+  const name = String(row?.display_name ?? "").trim();
+  const email = String(row?.email ?? "");
+  if (!name) return email;
+  return withEmail ? `${name}さん（${email}）` : `${name}さん`;
+}
+
+/** grantWho に「の」を付ける。メールのときは今までどおり間を 1 字空ける（「a@… の」） */
+export function grantWhoNo(row, withEmail = false) {
+  return `${grantWho(row, withEmail)}${String(row?.display_name ?? "").trim() ? "" : " "}の`;
+}
+
+/** まとめての追加の合計の 1 行「10 人 × 500 ＝ 合計 5,000 クレジット（約 7,500 円）」 */
+export function bulkGrantTotalLine(count, credits) {
+  const total = Number(count) * Number(credits);
+  return `${count} 人 × ${formatCredits(credits)} ＝ 合計 ${formatCredits(total)} クレジット（${formatYen(total)}）`;
 }
 
 /** 一時追加の一覧の 1 行「10/15 20:31 ・ +500 ・「メモ」 ・ 付与：h.taguchi@…」 */
@@ -861,7 +972,7 @@ export function windowView(row) {
       return {
         ...base,
         state: "unset",
-        text: noCohort ? "回が未設定のため、生成できません" : "日付が未設定のため、生成できません",
+        text: noCohort ? "回が未設定です（生成できません）" : "日付が未設定です（生成できません）",
       };
     }
     if (period === "before") {
@@ -879,8 +990,8 @@ export function windowView(row) {
       label,
       shortLabel,
       text: isStudent
-        ? `${PERIOD_LABELS[period] ?? period}のクレジットが未設定のため、生成できません`
-        : "月額が未設定のため、生成できません",
+        ? `${PERIOD_LABELS[period] ?? period}のクレジットが未設定です（生成できません）`
+        : "月額が未設定です（生成できません）",
     };
   }
   const used = Number(row.current_used_credits ?? 0);
@@ -1084,23 +1195,23 @@ export function parseCohortForm(raw) {
   const patch = {};
   const problems = [];
   const venue = String(raw?.venue_no ?? "").trim();
-  if (!VENUE_NO_RE.test(venue)) problems.push("会場を選んでください");
+  if (!VENUE_NO_RE.test(venue)) problems.push("会場を選んでください。");
   else patch.venue_no = venue;
   for (const [key, label] of [["day1_date", "Day1"], ["day2_date", "Day2"]]) {
     const v = String(raw?.[key] ?? "").trim();
-    if (v === "") problems.push(`${label} の日付を入力してください`);
-    else if (!isValidDate(v)) problems.push(`${label} の日付が正しくありません`);
+    if (v === "") problems.push(`${label} の日付を入力してください。`);
+    else if (!isValidDate(v)) problems.push(`${label} の日付が正しくありません。`);
     else patch[key] = v;
   }
   if (patch.day1_date && (patch.day1_date < "2000-01-01" || patch.day1_date >= "2100-01-01")) {
-    problems.push("Day1 は 2000〜2099 年の日付にしてください");
+    problems.push("Day1 は 2000〜2099 年の日付です。");
   }
   const order = datesProblem(patch.day1_date, patch.day2_date);
   if (order) problems.push(order);
   const labels = { day1_credits: "Day1", bridge_credits: "ブリッジワーク期間", day2_credits: "Day2" };
   for (const key of ["day1_credits", "bridge_credits", "day2_credits"]) {
     const n = parseCredits(raw?.[key]);
-    if (n === undefined) problems.push(`${labels[key]}のクレジットは 0〜${formatCredits(MAX_CREDITS)} の整数で入力してください`);
+    if (n === undefined) problems.push(`${labels[key]}のクレジットは 0〜${formatCredits(MAX_CREDITS)} の整数です。`);
     else patch[key] = n;
   }
   for (const key of ["name", "note"]) {
@@ -1116,10 +1227,10 @@ export function parseVenueForm(raw) {
   const problems = [];
   let no = String(raw?.no ?? "").trim();
   if (/^[0-9]$/.test(no)) no = `0${no}`;
-  if (!VENUE_NO_RE.test(no)) problems.push("会場番号は 2 桁の数字で入力してください（例：06）");
+  if (!VENUE_NO_RE.test(no)) problems.push("会場番号は 2 桁の数字です（例：06）。");
   else patch.no = no;
   const name = String(raw?.name ?? "").trim();
-  if (!name) problems.push("会場名を入力してください");
+  if (!name) problems.push("会場名を入力してください。");
   else patch.name = name;
   patch.note = String(raw?.note ?? "").trim() || null;
   patch.active = raw?.active !== false;
@@ -1154,7 +1265,8 @@ export const SETTING_LIMITS = [
     integer: true,
     usd: false,
     confirm: false,
-    desc: "受講者・メンバー・管理者の全員に、1 人ずつ効きます（直近 24 時間）。",
+    desc: "直近 24 時間に 1 人が生成できる回数の上限です。",
+    tip: "受講者・メンバー・管理者のすべてが対象です。",
   },
   {
     key: "user_daily_cost_limit_usd",
@@ -1164,7 +1276,7 @@ export const SETTING_LIMITS = [
     integer: false,
     usd: true,
     confirm: false,
-    desc: "クレジットの枠の無い管理者だけに効きます（見積額。受講者・メンバーはクレジットの枠が代わり）。",
+    desc: "クレジットの枠がない管理者だけに効きます（見積額）。",
   },
   {
     key: "global_daily_cost_limit_usd",
@@ -1179,7 +1291,7 @@ export const SETTING_LIMITS = [
   {
     // 015（区分ごとのモデルの制限）で足された項目。null は「上限なし」（環境変数の既定は無い）。古いサーバーには列が無いので、行に無ければ出さない
     key: "job_max_credits",
-    label: "1 回の生成の上限（クレジット）",
+    label: "生成 1 件あたりの上限（クレジット）",
     min: 1,
     max: 10000,
     integer: true,
@@ -1190,7 +1302,8 @@ export const SETTING_LIMITS = [
     nullText: "上限なし",
     resetLabel: "上限なしに戻す",
     confirm: true,
-    desc: "すべての人（管理者を含む）の 1 回の生成に効きます。講師・メンバーの通常の生成（例：Seedance 2.0 の 1080p・15 秒は約 1,023 クレジット）が止まらない値にしてください。空欄で保存すると「上限なし」になります。",
+    desc: "全員の生成 1 件ごとに効きます（管理者を含む）。",
+    tip: "通常の生成が止まらない値にしてください。例：Seedance 2.0 の 1080p・15 秒は約 1,023 クレジット。",
   },
   // 016（セミナーの段階）で足された 4 項目。null は既定の値（defaultValue。DB の stage_grant_limits と同じ。講師の 3 つは仮の値）。
   // 古いサーバー（016 の前）には列が無いので、行に無ければ出さない
@@ -1200,28 +1313,32 @@ export const SETTING_LIMITS = [
       label: "段階の回：1 人あたりのこの回の追加の合計",
       max: 50000,
       defaultValue: 10000,
-      desc: "段階の回の受講者 1 人につき、その回で追加できるクレジットの合計です。講師の追加も含み、取り消した追加も数えます。",
+      desc: "1 人がこの回で追加を受けられる合計です。",
+      tip: "段階の回の受講者が対象です。講師の追加と、取り消した追加も数えます。",
     },
     {
       key: "instructor_grant_max_credits",
       label: "講師：1 回の追加の上限",
       max: 10000,
       defaultValue: 300,
-      desc: "講師が 1 回の操作で、1 人に追加できるクレジットです。0 にすると、講師は追加できません。",
+      desc: "講師が 1 回の操作で 1 人に追加できる量です。",
+      tip: "0 にすると、講師は追加できません。",
     },
     {
       key: "instructor_grant_max_per_student_stage",
-      label: "講師：1 人・1 段階への追加の合計",
+      label: "講師：1 つの段階の 1 人への追加の合計",
       max: 50000,
       defaultValue: 600,
-      desc: "講師が、1 人に対して 1 つの段階で追加できるクレジットの合計です（取り消した追加も数えます）。",
+      desc: "講師が 1 人の受講者の 1 つの段階に追加できる合計です。",
+      tip: "取り消した追加も数えます。",
     },
     {
       key: "instructor_grant_max_per_cohort_day",
       label: "講師：この回の 1 日の追加の合計",
       max: 100000,
       defaultValue: 3000,
-      desc: "講師が、1 つの回の 1 日（日本時間）で追加できるクレジットの合計です（取り消した追加も数えます）。",
+      desc: "講師が 1 つの回に 1 日で追加できる合計です。",
+      tip: "1 日は日本時間です。取り消した追加も数えます。",
     },
   ].map((s) => ({
     min: 0,
@@ -1249,7 +1366,8 @@ export const SETTING_LIMITS = [
     nullText: "既定（60 秒）",
     resetLabel: "既定に戻す",
     confirm: false,
-    desc: "口パクの動画に使える音声の長さ（秒）です。これより長い音声は、次の生成から断られます。空欄で保存すると既定の 60 秒になります。",
+    desc: "口パクに使える音声の長さ（秒）です。",
+    tip: "これより長い音声は、次の生成から断られます。空欄で保存すると既定の 60 秒になります。",
   },
   // 019（Canvas）で足された 5 項目（短い時間の上限・その時間の長さ・Canvas の 1 回の実行の上限）。null は既定の値
   // （defaultValue。DB の effective_limits と同じ）。列が無い 019 の前の DB では、行に無いので出さない。
@@ -1261,16 +1379,18 @@ export const SETTING_LIMITS = [
       label: "2 分の上限（受講者）",
       burst: "受講者",
       defaultValue: 800,
-      lowerNote: "短い時間に大量に使う受講者は、次の生成から止まります（Canvas・ChatGPT・Codex のどこからでも）。",
-      desc: "受講者 1 人が、{time}の間に使えるクレジットの上限です。短い時間に大量に使うのを止めます。Canvas と、ChatGPT・Codex からの生成の両方に効きます。",
+      lowerNote: "短時間に大量に使うと、次の生成から断られます。",
+      desc: "受講者 1 人が{time}に使える上限です。",
+      tip: "Canvas・ChatGPT・Codex のどれにも効きます。",
     },
     {
       key: CANVAS_COLUMNS.burstMember,
       label: "2 分の上限（メンバー・講師・管理者）",
       burst: "メンバー・講師・管理者",
       defaultValue: 3000,
-      lowerNote: "短い時間に大量に使うメンバー・講師・管理者は、次の生成から止まります（Canvas・ChatGPT・Codex のどこからでも）。",
-      desc: "メンバー・講師・管理者 1 人が、{time}の間に使えるクレジットの上限です。Canvas と、ChatGPT・Codex からの生成の両方に効きます。",
+      lowerNote: "短時間に大量に使うと、次の生成から断られます。",
+      desc: "メンバー・講師・管理者 1 人が{time}に使える上限です。",
+      tip: "Canvas・ChatGPT・Codex のどれにも効きます。",
     },
     {
       key: CANVAS_COLUMNS.burstWindow,
@@ -1282,23 +1402,23 @@ export const SETTING_LIMITS = [
       unit: "秒",
       credits: false,
       higherIsStricter: true,
-      lowerNote: "時間を長くすると、短い時間の上限は長い時間分の合計で数えるので、止まりやすくなります。",
-      desc: "短い時間の上限（上の 2 欄）で、使った量を数える時間（秒）です。",
+      lowerNote: "数える時間を長くすると、上限に達しやすくなります。",
+      desc: "上の 2 欄の上限を数える時間（秒）です。",
       defaultText: (d) => `${d} 秒`,
     },
     {
       key: CANVAS_COLUMNS.runStudent,
       label: "Canvas の 1 回の実行の上限（受講者）",
       defaultValue: 500,
-      lowerNote: "この値を超える受講者の Canvas の実行は、次の操作から断られます。",
-      desc: "受講者が Canvas で 1 回の実行に使えるクレジットの上限です。",
+      lowerNote: "この値を超える実行は、次の操作から断られます。",
+      desc: "受講者の 1 回の実行の上限です。",
     },
     {
       key: CANVAS_COLUMNS.runMember,
       label: "Canvas の 1 回の実行の上限（メンバー・講師・管理者）",
       defaultValue: 2000,
-      lowerNote: "この値を超えるメンバー・講師・管理者の Canvas の実行は、次の操作から断られます。",
-      desc: "メンバー・講師・管理者が Canvas で 1 回の実行に使えるクレジットの上限です。",
+      lowerNote: "この値を超える実行は、次の操作から断られます。",
+      desc: "メンバー・講師・管理者の 1 回の実行の上限です。",
     },
   ].map(({ defaultText: toText, ...s }) => {
     const defaultText = toText ? toText(s.defaultValue) : `${formatCredits(s.defaultValue)} クレジット`;
@@ -1315,7 +1435,8 @@ export const SETTING_LIMITS = [
       confirm: false,
       ...s,
       nullText: `既定（${defaultText}）`,
-      desc: `${s.desc}空欄で保存すると、既定の ${defaultText} になります。`,
+      desc: s.desc,
+      tip: [s.tip, `空欄で保存すると、既定の ${defaultText} になります。`].filter(Boolean).join(""),
     };
   }),
 ];
@@ -1357,6 +1478,11 @@ export function settingDesc(key, row) {
   return (spec?.desc ?? "").replaceAll("{time}", `上限を数える時間（${burstTimeText(burstSeconds(row))}）`);
 }
 
+/** 欄の説明の続き（ホバーの title に出す。常に出す説明は 1 行にする：文の決まり 1・4）。無ければ "" */
+export function settingTip(key) {
+  return settingSpec(key)?.tip ?? "";
+}
+
 /** ドルの表示「$300」「$12.50」（null・不正は「—」） */
 export function formatUsdShort(value) {
   if (value === null || value === undefined || value === "") return "—";
@@ -1396,21 +1522,21 @@ export function settingSource(value, key = "") {
  */
 export function parseSettingInput(key, text, label = settingSpec(key)?.label) {
   const spec = settingSpec(key);
-  if (!spec) return { problem: "変更できる項目ではありません" };
+  if (!spec) return { problem: "変更できる項目ではありません。" };
   const s = String(text ?? "")
     .replace(/[０-９．]/g, (c) => String.fromCharCode(c.charCodeAt(0) - 0xFEE0))
     .replace(/[,，\s$＄]|回|秒|ドル|USD|クレジット/gi, "");
   // 空欄が「上限なし」の項目は、空欄をそのまま null（上限なし）にする
   if (s === "" && spec.emptyIsNull) return { value: null };
-  if (s === "") return { problem: `${label}を入力してください（既定に戻すときは「既定に戻す」を押します）` };
-  if (!/^\d+(\.\d+)?$/.test(s)) return { problem: `${label}は数値で入力してください` };
+  if (s === "") return { problem: `${label}を入力してください。\n既定に戻すときは［既定に戻す］を押します。` };
+  if (!/^\d+(\.\d+)?$/.test(s)) return { problem: `${label}は数値です。` };
   // 小数の末尾の 0 は落とす（1.500 → 1.5）
   const t = s.includes(".") ? s.replace(/0+$/, "").replace(/\.$/, "") : s;
-  if (spec.integer && t.includes(".")) return { problem: `${label}は整数で入力してください` };
-  if (spec.usd && /\.\d{3,}$/.test(t)) return { problem: `${label}は小数 2 桁（セント）までで入力してください` };
+  if (spec.integer && t.includes(".")) return { problem: `${label}は整数です。` };
+  if (spec.usd && /\.\d{3,}$/.test(t)) return { problem: `${label}は小数 2 桁（セント）までです。` };
   const value = Number(t);
   if (value < spec.min || value > spec.max) {
-    return { problem: `${label}は ${settingRangeText(key)} の範囲で入力してください` };
+    return { problem: `${label}は ${settingRangeText(key)}です。` };
   }
   return { value };
 }
@@ -1425,20 +1551,20 @@ export function limitChangeCheck(key, current, next, info) {
   if (key === "global_daily_cost_limit_usd") {
     const used = Number(info?.global_cost_usd_24h ?? 0);
     if (next <= used) {
-      warnings.push(`直近 24 時間の使用額（${formatUsdShort(used)}）以下のため、保存するとすぐに全員が生成できなくなります。`);
+      warnings.push(`新しい上限が直近 24 時間の使用額（${formatUsdShort(used)}）以下です。保存すると、すぐに全員が生成できなくなります。`);
     }
     return { confirm: true, warnings };
   }
   if (key === "job_max_credits") {
     // 値を入れる・下げるとき、上限をなくすときは確認する（超える依頼が全員で止まる）
     if (next === null || next === undefined) {
-      return { confirm: true, warnings, note: "1 回の生成の上限がなくなります（高い生成も受け付けるようになります）。" };
+      return { confirm: true, warnings, note: "生成 1 件あたりの上限がなくなります。" };
     }
     const lowering = current === null || current === undefined || next < Number(current);
     return {
       confirm: lowering,
       warnings,
-      note: `目安が ${formatCredits(next)} クレジットを超える生成（長い動画・高い解像度）は、管理者を含む全員が受け付けられなくなります。`,
+      note: `目安が ${formatCredits(next)} クレジットを超える生成は、管理者を含む全員が実行できなくなります。`,
     };
   }
   if (key === "lipsync_max_audio_seconds") {
@@ -1466,14 +1592,14 @@ export function limitChangeCheck(key, current, next, info) {
     return {
       confirm: lowering,
       warnings,
-      note: "すでに追加した分は変わりません。下げると、この値を超える追加は、次の操作から断られます。",
+      note: "追加済みの分は変わりません。下げると、この値を超える追加は、次の操作から断られます。",
     };
   }
   if (key === "daily_job_limit") {
     const lowering = current === null || current === undefined || next < Number(current);
     const top = Math.max(0, ...(Array.isArray(info?.top_users) ? info.top_users : []).map((t) => Number(t.count ?? 0)));
     if (top > 0 && next <= top) {
-      warnings.push(`直近 24 時間の回数が最も多い利用者（${formatCredits(top)} 回）は、保存するとすぐに生成できなくなります。`);
+      warnings.push(`保存すると、直近 24 時間の回数が最も多い利用者（${formatCredits(top)} 回）がすぐ生成できなくなります。`);
     }
     return { confirm: lowering || warnings.length > 0, warnings };
   }
@@ -1803,8 +1929,17 @@ export function roleListNotice(body) {
   if (!rolesSupported(body)) return null;
   const set = MODEL_SCOPES.filter((s) => s.key !== "all" && scopeList(body, s.key) !== null).map((s) => s.label);
   if (set.length === 0) return null;
-  if (set.length === 1) return `${set[0]}の一覧が設定されています。全体でオンにしても、${set[0]}のタブでオンにしないと${set[0]}は使えません。`;
-  return `${set.join("・")}の一覧が設定されています。全体でオンにしても、それぞれのタブでオンにしないとその区分は使えません。`;
+  if (set.length === 1) return `${set[0]}の一覧があります。必要なら、${set[0]}のタブでもオンにしてください。`;
+  return `${set.join("・")}の一覧があります。必要なら、それぞれのタブでもオンにしてください。`;
+}
+
+/** roleListNotice の 1 行の続き（ホバーの title に出す）。1 行が出ないときは null */
+export function roleListNoticeTip(body) {
+  if (!rolesSupported(body)) return null;
+  const set = MODEL_SCOPES.filter((s) => s.key !== "all" && scopeList(body, s.key) !== null).map((s) => s.label);
+  if (set.length === 0) return null;
+  if (set.length === 1) return `全体でオンにしても、${set[0]}のタブでオンにしないと${set[0]}は使えません。`;
+  return "全体でオンにしても、それぞれのタブでオンにしないとその区分は使えません。";
 }
 
 /**
@@ -1924,31 +2059,38 @@ export function effectiveDrafts(body, drafts, resets = {}) {
   return out;
 }
 
-/** 保存の確認の文（タブごとに、オン・オフにするもの）。labelOf は model_id → 表示名 */
-export function saveConfirmLines(plan, labelOf = (id) => id) {
+/**
+ * 保存の確認の文（タブごとに、オン・オフにするもの）。labelOf は model_id → 表示名。
+ * tips（Map）を渡すと、ホバーに出す続きの文を「行の文 → 続き」で入れる（返り値の形は変えない）
+ * @param {any} plan
+ * @param {(id: string) => string} [labelOf]
+ * @param {Map<string, string> | null} [tips]
+ * @returns {string[]}
+ */
+export function saveConfirmLines(plan, labelOf = (id) => id, tips = null) {
   const lines = ["モデルの設定を保存しますか？"];
   for (const e of plan.entries) {
     if (plan.roles) lines.push(`【${e.label}】`); // 区分のタブが無い（古いサーバー）ときは見出しを出さない
     if (e.on.length) lines.push(`・オンにする：${listText(e.on.map(labelOf), 6)}`);
     if (e.off.length) lines.push(`・オフにする：${listText(e.off.map(labelOf), 6)}`);
-    if (e.unknown.length) lines.push(`・今のカタログに無い ID ${e.unknown.length} 件を外します。`);
+    if (e.unknown.length) lines.push(`・今のカタログにない ID ${e.unknown.length} 件を外します。`);
     if (e.key !== "all" && Array.isArray(e.payload) && e.on.some((id) => (plan.optIn ?? []).includes(id))) {
-      lines.push(`・${e.label}の一覧は全体と同じ（制限なし）に戻らず、これから足すモデルもこのタブでオンにしないと使えません。`);
+      lines.push(`・${e.label}は、これから追加するモデルもこのタブでオンにするまで使えません。`);
     }
     // 全体の一覧はいつも明示の配列で保存する（DB 226 は全体の null を断る）。何件にするかを言う（B-1）
     if (e.key === "all" && Array.isArray(e.payload)) lines.push(`・全体で使えるモデルを、オンにした ${e.payload.length} 件にします。`);
     if (e.key !== "all" && e.payload === null) {
-      lines.push(
-        `・${e.label}は制限なし（全体と同じ。これから足すモデルも使える）として保存します。${(plan.optIn ?? []).length ? "口パクなど、個別にオンにするモデルは使えなくなります。" : ""}`,
-      );
+      const line = `・${e.label}は制限なしで保存します。${(plan.optIn ?? []).length ? "口パクなど、個別にオンにするモデルは使えなくなります。" : ""}`;
+      lines.push(line);
+      tips?.set?.(line, "全体と同じで、これから追加するモデルも使えます。");
     }
   }
-  lines.push("（次の生成から、すぐに効きます）");
+  lines.push("（次の生成から反映されます）");
   return lines;
 }
 
 /** 全体の一覧を保存するときの確認の 2 行目（小さな字。B-1）。全体を保存しない（変えない）ときは null */
-export const MODEL_SAVE_ALL_NOTE = "これから足すモデルは、ここでオンにするまで使えません。";
+export const MODEL_SAVE_ALL_NOTE = "これから追加するモデルは、ここでオンにするまで使えません。";
 export function saveConfirmNote(plan) {
   return (plan?.entries ?? []).some((e) => e.key === "all" && Array.isArray(e.payload)) ? MODEL_SAVE_ALL_NOTE : null;
 }
@@ -1957,8 +2099,8 @@ export function saveConfirmNote(plan) {
 export function emptyScopeWarnings(plan) {
   const emptied = plan.emptied ?? [];
   // 全体で使えるモデルが 0 になるときは、区分も必ず 0 になる。確認は全体の 1 件だけにする（誰も生成できなくなる、で足りる）
-  if (emptied.some((e) => e.key === "all")) return ["すべてのモデルがオフになり、誰も生成できなくなります。本当に保存しますか？"];
-  return emptied.map((e) => `${e.label}はどのモデルも使えなくなり、生成できなくなります。本当に保存しますか？`);
+  if (emptied.some((e) => e.key === "all")) return ["すべてのモデルがオフになり、誰も生成できなくなります。"];
+  return emptied.map((e) => `${e.label}はどのモデルも使えなくなります。`);
 }
 
 /**
@@ -2082,40 +2224,55 @@ export function settingsDiff(before, after, labelOf = (id) => id) {
   return lines.length ? lines : ["変更なし（同じ値で保存）"];
 }
 
-/** admin-api の失敗（HTTP の状態と本文 {error, message}。通信の失敗は status 0）を日本語にする */
-export function explainApiError(status, body) {
+/**
+ * admin-api の失敗（HTTP の状態と本文 {error, message}。通信の失敗は status 0）の文とコード。op は読み込む物の名前（「モデル一覧」「Storage」）。
+ * 返り値：{ text, code }（code は決まり 3.1 に当たる物だけ。HTTP の状態とサーバーの文は console だけに出す）
+ */
+export function apiErrorInfo(status, body, op = "モデル一覧") {
   const code = String(body?.error ?? "");
   // 未デプロイ（ゲートウェイの 404 には CORS が無い）・許可されていないオリジン・通信の失敗は、ブラウザからは status 0 に見える
-  if (status === 0) {
-    return "サーバーに接続できません。通信の問題か、サーバー側の機能 admin-api がまだ用意されていない可能性があります。";
-  }
+  if (status === 0) return { text: MSG_NETWORK_FAILURE, code: null };
   if (code === "origin_not_allowed") {
-    return "サーバーに接続できませんでした（このページの場所からの接続は許可されていません。公開している管理コンソールから開いてください）。";
+    return { text: "接続エラー：このページからは使えません。\nstudio.a-i-ken-rc.com から開いてください。", code: null };
   }
-  if (code === "admin_session_expired") return "管理コンソールにログインしてから 12 時間たちました。もう一度ログインしてください。";
-  if (status === 403) return "管理者の権限がありません。";
-  if (status === 401) return "ログインの有効期限が切れました。ページを開き直してください。";
-  if (status === 404) return "サーバー側の機能（admin-api）がまだ用意されていません。";
+  if (code === "admin_session_expired") return { text: "管理コンソールのログインが無効になりました。\n再度ログインしてください。", code: null };
+  if (status === 403) return { text: MSG_ADMIN_ONLY, code: "E-LOG-54" };
+  if (status === 401) return { text: MSG_LOGIN_EXPIRED, code: null };
+  if (status === 404) return { text: "サーバーの更新が未適用です。", code: "E-ADM-51" };
   // 503 などはサーバーの文言（日本語。既知の誤りだけを返す）
-  if (status === 503 && typeof body?.message === "string" && /[^\x00-\x7F]/.test(body.message)) return body.message;
-  return `モデルの一覧を読み込めませんでした（HTTP ${status}）。`;
+  if (status === 503 && typeof body?.message === "string" && /[^\x00-\x7F]/.test(body.message)) return { text: body.message, code: null };
+  console.warn("admin-api の失敗:", status, code, body?.message ?? "");
+  // 英数字で終わる名前（Storage）は「の」の前をあける
+  const name = /[\x00-\x7F]$/.test(op) ? `${op} ` : op;
+  return { text: `${name}の読み込みエラーが発生しました。`, code: "E-ADM-99" };
+}
+
+/** admin-api の失敗を日本語の文にする（apiErrorInfo の文だけ） */
+export function explainApiError(status, body, op = "モデル一覧") {
+  return apiErrorInfo(status, body, op).text;
 }
 
 /**
- * 管理コンソールのログインの流れ（admin-api の /admin-login/start・finish。193 の 1930）が失敗したときの文。
- * サーバーの文（日本語。既知の誤りだけを返す）があればそれを、無ければ状態から。URL・本文の英語はそのまま出さない
+ * 管理コンソールのログインの流れ（admin-api の /admin-login/start・finish。193 の 1930）が失敗したときの文とコード。
+ * サーバーの文（日本語。既知の誤りだけを返す）があればそれを、無ければ状態から。URL・本文の英語はそのまま出さない（HTTP の状態は console だけ）
  */
-export function adminLoginErrorText(status, body) {
+export function adminLoginErrorInfo(status, body) {
   const code = String(body?.error ?? "");
-  if (status === 0) return "サーバーに接続できません。通信の状態を確かめてから、もう一度ログインしてください。";
+  if (status === 0) return { text: MSG_NETWORK_FAILURE, code: null };
   if (code === "origin_not_allowed") {
-    return "このページの場所からはログインできません。公開している管理コンソール（studio.a-i-ken-rc.com）から開いてください。";
+    return { text: "ログインエラー：このページからは使えません。\nstudio.a-i-ken-rc.com から開いてください。", code: null };
   }
-  if (status === 404) return "サーバー側のログインの機能（admin-api）がまだ用意されていません。";
+  if (status === 404) return { text: "ログインエラー：サーバーの更新が未適用です。", code: "E-ADM-51" };
   if ([400, 403, 429, 503].includes(status) && typeof body?.message === "string" && /[^\x00-\x7F]/.test(body.message)) {
-    return body.message;
+    return { text: body.message, code: null };
   }
-  return `ログインできませんでした（HTTP ${status}）。もう一度ログインしてください。`;
+  console.warn("管理コンソールのログインの失敗:", status, code);
+  return { text: "ログインエラーが発生しました。\n再度ログインしてください。", code: "E-ADM-99" };
+}
+
+/** 管理コンソールのログインの失敗の文（adminLoginErrorInfo の文だけ） */
+export function adminLoginErrorText(status, body) {
+  return adminLoginErrorInfo(status, body).text;
 }
 
 // ---- 設定タブの見せ方（提案書 11 章。表示と確認の文だけ。保存の単位・範囲・既定・確認の条件は上の SETTING_LIMITS・limitChangeCheck のまま） ----
@@ -2125,13 +2282,13 @@ export function adminLoginErrorText(status, body) {
  * ここに無い項目（これから足す列）は、最後の「その他」に入れて出す
  */
 export const SETTING_GROUPS = [
-  { id: "overall", label: "全体の利用", keys: ["global_daily_cost_limit_usd", "user_daily_cost_limit_usd", "daily_job_limit"] },
-  { id: "job", label: "1 回の生成", keys: ["job_max_credits", "lipsync_max_audio_seconds"] },
-  { id: "burst", label: "短い時間", keys: [CANVAS_COLUMNS.burstStudent, CANVAS_COLUMNS.burstMember, CANVAS_COLUMNS.burstWindow] },
+  { id: "overall", label: "24 時間", keys: ["global_daily_cost_limit_usd", "user_daily_cost_limit_usd", "daily_job_limit"] },
+  { id: "job", label: "生成 1 件あたり", keys: ["job_max_credits", "lipsync_max_audio_seconds"] },
+  { id: "burst", label: "短時間", keys: [CANVAS_COLUMNS.burstStudent, CANVAS_COLUMNS.burstMember, CANVAS_COLUMNS.burstWindow] },
   { id: "canvas", label: "Canvas の 1 回の実行", keys: [CANVAS_COLUMNS.runStudent, CANVAS_COLUMNS.runMember] },
   {
     id: "grant",
-    label: "追加クレジット",
+    label: "追加の上限",
     keys: ["stage_grant_total_limit", "instructor_grant_max_credits", "instructor_grant_max_per_student_stage", "instructor_grant_max_per_cohort_day"],
   },
 ];
@@ -2159,7 +2316,7 @@ const SETTING_TARGETS = {
   lipsync_max_audio_seconds: "口パクの生成",
   [CANVAS_COLUMNS.burstStudent]: "受講者 1 人",
   [CANVAS_COLUMNS.burstMember]: "メンバー・講師・管理者 1 人",
-  [CANVAS_COLUMNS.burstWindow]: "短い時間の上限の数え方",
+  [CANVAS_COLUMNS.burstWindow]: "短時間の上限の数え方",
   [CANVAS_COLUMNS.runStudent]: "受講者",
   [CANVAS_COLUMNS.runMember]: "メンバー・講師・管理者",
   stage_grant_total_limit: "段階の回の受講者 1 人",
@@ -2207,7 +2364,7 @@ export function settingEmptyText(key) {
 export function settingTimingText(key) {
   const spec = settingSpec(key);
   const grant = !!spec && spec.defaultValue !== undefined && !spec.canvas && key !== "lipsync_max_audio_seconds";
-  return grant ? "すでに追加した分は変わらず、次の追加の操作から効きます。" : "次の生成から、すぐに効きます。";
+  return grant ? "すでに追加した分は変わらず、次の追加の操作から効きます。" : "次の生成から反映されます。";
 }
 
 /**
@@ -2233,9 +2390,16 @@ export function resetConfirmView(key, label, current) {
     `${settingValueText(key, current)} → ${settingValueText(key, null)}`,
     `${target ? `対象は${target}です。` : ""}${settingTimingText(key)}`,
   ];
-  if (spec && !spec.nullText) lines.push("既定の数値は、この画面では分かりません（今より下がることもあります）。");
-  else if (key === "job_max_credits") lines.push("1 回の生成の上限がなくなります（高い生成も受け付けるようになります）。");
-  return { title: `${label}を${reset.replace(/戻す$/, "戻しますか？")}`, lines, warnings: [], ok: reset };
+  // lineTips：lines と同じ並びの、ホバーに出す続きの文（無い行は null）
+  const lineTips = lines.map(() => null);
+  if (spec && !spec.nullText) {
+    lines.push("既定の値はこの画面には表示できません。");
+    lineTips.push("今より下がることもあります。");
+  } else if (key === "job_max_credits") {
+    lines.push("生成 1 件あたりの上限がなくなります。");
+    lineTips.push(null);
+  }
+  return { title: `${label}を${reset.replace(/戻す$/, "戻しますか？")}`, lines, lineTips, warnings: [], ok: reset };
 }
 
 /** 数値の編集に、保存していない入力があるか（edit：{ text, initial }） */
@@ -2284,10 +2448,16 @@ export function freshnessView(parts) {
 export function usageSummaryView(info) {
   const u = globalUsageView(info);
   let warn = null;
-  if (u.pct !== null && u.pct >= 100) warn = "上限に届いています。直近 24 時間の利用が減るまで、全員が生成できません。";
-  else if (u.low) warn = "上限の 80% を超えています。上限に届くと、全員が生成できなくなります。";
+  // warnTip：warn の続き（ホバーの title に出す）
+  let warnTip = null;
+  if (u.pct !== null && u.pct >= 100) warn = "全体の上限に達しました。\n直近 24 時間の利用が減るまで、全員が生成できません。";
+  else if (u.low) {
+    warn = "全体の上限の 80% を超えました。";
+    warnTip = "上限に達すると、全員が生成できなくなります。";
+  }
   return {
     ...u,
+    warnTip,
     costText: formatUsdShort(u.cost),
     limitText: u.limit === null ? "上限は既定" : `/ 上限 ${formatUsdShort(u.limit)}`,
     pctText: u.pct === null ? null : `上限の ${u.pct}%`,

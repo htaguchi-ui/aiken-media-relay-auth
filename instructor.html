@@ -16,22 +16,22 @@
 <!-- ログインの確かめ・RPC の接続先へ先につないでおく（supabase-js の fetch は資格情報なしなので crossorigin） -->
 <link rel="preconnect" href="https://tnzwhwitgnzoehbjrmoy.supabase.co" crossorigin>
 <link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=IBM+Plex+Sans+JP:wght@400;500;600;700&amp;display=swap">
-<link rel="stylesheet" href="/r/2751bb45fefd/site-nav.css">
-<link rel="stylesheet" href="/r/2751bb45fefd/gsi-button.css">
-<link rel="modulepreload" href="/r/2751bb45fefd/admin-lib.js">
-<link rel="modulepreload" href="/r/2751bb45fefd/auth-storage.js">
-<link rel="modulepreload" href="/r/2751bb45fefd/cohort-close-lib.js">
-<link rel="modulepreload" href="/r/2751bb45fefd/instructor-list-lib.js">
-<link rel="modulepreload" href="/r/2751bb45fefd/instructor-list.js">
-<link rel="modulepreload" href="/r/2751bb45fefd/mypage-lib.js">
-<link rel="modulepreload" href="/r/2751bb45fefd/poll-lib.js">
-<link rel="modulepreload" href="/r/2751bb45fefd/share-lib.js">
-<link rel="modulepreload" href="/r/2751bb45fefd/site-nav.js">
-<link rel="modulepreload" href="/r/2751bb45fefd/stage-lib.js">
-<link rel="modulepreload" href="/r/2751bb45fefd/stage-minutes-lib.js">
-<link rel="modulepreload" href="/r/2751bb45fefd/stage-timer-lib.js">
-<link rel="modulepreload" href="/r/2751bb45fefd/stage-timer.js">
-<link rel="modulepreload" href="/r/2751bb45fefd/submissions-lib.js">
+<link rel="stylesheet" href="/r/0692eb951f2f/site-nav.css">
+<link rel="stylesheet" href="/r/0692eb951f2f/gsi-button.css">
+<link rel="modulepreload" href="/r/0692eb951f2f/admin-lib.js">
+<link rel="modulepreload" href="/r/0692eb951f2f/auth-storage.js">
+<link rel="modulepreload" href="/r/0692eb951f2f/cohort-close-lib.js">
+<link rel="modulepreload" href="/r/0692eb951f2f/instructor-list-lib.js">
+<link rel="modulepreload" href="/r/0692eb951f2f/instructor-list.js">
+<link rel="modulepreload" href="/r/0692eb951f2f/mypage-lib.js">
+<link rel="modulepreload" href="/r/0692eb951f2f/poll-lib.js">
+<link rel="modulepreload" href="/r/0692eb951f2f/share-lib.js">
+<link rel="modulepreload" href="/r/0692eb951f2f/site-nav.js">
+<link rel="modulepreload" href="/r/0692eb951f2f/stage-lib.js">
+<link rel="modulepreload" href="/r/0692eb951f2f/stage-minutes-lib.js">
+<link rel="modulepreload" href="/r/0692eb951f2f/stage-timer-lib.js">
+<link rel="modulepreload" href="/r/0692eb951f2f/stage-timer.js">
+<link rel="modulepreload" href="/r/0692eb951f2f/submissions-lib.js">
 <style>
   :root {
     --accent: #26396E; --accent-hover: #1B2B55; --on-accent: #FFFFFF;
@@ -69,6 +69,27 @@
       --low: #D8916F; --low-text: #EBA887;
       --danger: #EE968C; --danger-line: #5C3631;
       --dot: #4A5370;
+    }
+  }
+  /* 選んだ項目の強調（組 13・highlight/SPEC.md）：左の帯は使わず、明るい面＋淡い縁＋2 段の影で浮かせる */
+  :root {
+    --sel-bg: #EAF2FF;                       /* 白い箱の中で選んだ面 */
+    --sel-lift-bg: #FFFFFF;                  /* 灰色の地の上で選んだ面 */
+    --sel-card-bg: #EAF2FF;                  /* 前の面が白だったカード（ラジオのカード・狭い幅の選ぶカード）で選んだ面 */
+    --sel-edge: rgba(38, 57, 110, 0.18);     /* 淡い縁（紺の 18%） */
+    --sel-shadow: 0 0 0 1px var(--sel-edge), 0 1px 2px rgba(22, 30, 56, 0.08), 0 4px 12px -4px rgba(22, 30, 56, 0.18);
+    --sel-shadow-row: inset 0 0 0 1px var(--sel-edge), 0 1px 2px rgba(22, 30, 56, 0.08), 0 2px 6px -1px rgba(22, 30, 56, 0.16);
+    --sel-motion: 120ms ease-out;
+  }
+  @media (prefers-color-scheme: dark) {
+    :root {
+      --sel-bg: #293355;                     /* 前の #1E2741 より明るく、白の文字で前の比 12.28 以上（12.36）。hover #1C2234 との比 1.28・#222A3E と 1.16 */
+      --sel-lift-bg: #293355;
+      --sel-card-bg: #212944;                /* 前の面 #161B2B のカード：白の文字で前の比 14.24 以上（14.33）。選んでいないカードとの比 1.20 */
+      --sel-glint: inset 0 1px 0 rgba(255, 255, 255, 0.07);  /* 上の縁の細い光（暗い地では影より効く） */
+      --sel-edge: rgba(169, 185, 233, 0.40);
+      --sel-shadow: var(--sel-glint), 0 0 0 1px var(--sel-edge), 0 1px 2px rgba(0, 0, 0, 0.45), 0 4px 12px -4px rgba(0, 0, 0, 0.6);
+      --sel-shadow-row: var(--sel-glint), inset 0 0 0 1px var(--sel-edge), 0 1px 2px rgba(0, 0, 0, 0.45), 0 2px 6px -1px rgba(0, 0, 0, 0.6);
     }
   }
   * { box-sizing: border-box; }
@@ -240,7 +261,7 @@
   .back-row { margin: -4px 0 -8px; }
   a.back-link { display: inline-flex; align-items: center; min-height: 44px; padding: 0 4px; color: var(--accent); font-size: 14px; font-weight: 600; text-decoration: underline; text-underline-offset: 3px; }
 
-  /* ---- ワークショップ（日ごとのリスト。今の行を強調：背景・左の線・太字・「今」の言葉） ---- */
+  /* ---- ワークショップ（日ごとのリスト。今の行を強調：明るい面と影・太字・「今」の言葉） ---- */
   .wk-list { display: flex; flex-direction: column; }
   .wk-day { border-top: 1px solid var(--line-soft); }
   .wk-day:first-child { border-top: 0; }
@@ -250,7 +271,7 @@
   .wk-row .wk-name { overflow-wrap: anywhere; }
   .wk-row .wk-credits { white-space: nowrap; color: var(--text-2); text-align: right; }
   .wk-row.done .wk-name, .wk-row.done .wk-credits { color: var(--muted); }
-  .wk-row.now { background: var(--accent-soft); border-left-color: var(--accent); }
+  .wk-row.now { position: relative; z-index: 1; background: var(--sel-bg); box-shadow: var(--sel-shadow); }
   .wk-row.now .wk-name, .wk-row.now .wk-credits { font-weight: 700; color: var(--accent-soft-text); }
   @media (max-width: 560px) {
     .wk-row { grid-template-columns: 76px minmax(0, 1fr); padding: 8px 10px; }
@@ -363,6 +384,19 @@
   dialog.confirm p { overflow-wrap: anywhere; }
   dialog.confirm .row { display: flex; flex-wrap: wrap; gap: 8px; justify-content: flex-end; }
 
+  /* 選んだ項目の強調の切り替え（組 13）：120ms まで。動きを減らす設定では動かさない */
+  @media (prefers-reduced-motion: no-preference) {
+    .wk-row { transition: background-color var(--sel-motion), box-shadow var(--sel-motion); }
+  }
+  @media (forced-colors: active) {
+    .wk-row.now { outline: 2px solid Highlight; outline-offset: -2px; }
+  }
+  /* 暗い配色：選んだ面 #293355 は前の #1E2741 より明るいので、中の文字を明るい値に替えて前の比以上にする（組 13・版 4。highlight/SPEC.md §5.3）
+     --text 白 12.36≥12.28・--text-2 #D5D9E0 8.73≥8.72・--muted #B1B7C3 6.14≥6.12・--accent-soft-text #DFE5F7 9.82≥9.80・--warn-fg #F2DCC0 9.28≥9.27 */
+  @media (prefers-color-scheme: dark) {
+    .wk-row.now { --text: #FFFFFF; --text-2: #D5D9E0; --muted: #B1B7C3; --accent-soft-text: #DFE5F7; --warn-fg: #F2DCC0; }
+  }
+
   /* ---- ログイン前（#login.welcome）だけの見た目：トップ（studio.css の .welcome）と同じ並び・大きさ。
      講師の画面は studio.css を読まないので、ここに小さく置く。色はこのファイルの変数。ログイン後の画面には当たらない（.welcome の中だけ） ---- */
   .center-card.welcome { align-items: center; text-align: center; gap: 16px; padding-top: 40px; }
@@ -456,7 +490,7 @@
 
 <dialog id="confirm" class="confirm" aria-labelledby="confirm-title"></dialog>
 <dialog id="timer-screen" class="timer-screen" aria-label="制作時間の残り"></dialog>
-<script type="module" src="/r/2751bb45fefd/topbar-height.js"></script>
-<script type="module" src="/r/2751bb45fefd/instructor.js"></script>
+<script type="module" src="/r/0692eb951f2f/topbar-height.js"></script>
+<script type="module" src="/r/0692eb951f2f/instructor.js"></script>
 </body>
 </html>

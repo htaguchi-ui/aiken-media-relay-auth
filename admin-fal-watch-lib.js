@@ -1,8 +1,8 @@
-// 管理コンソールの［fal の確かめ］（docs/design-fal-price-watch.md 第 1.4.1 版 2.6・3.7）の、画面に依存しない純粋な関数。
+// 管理コンソールの［fal の確認］（docs/design-fal-price-watch.md 第 1.4.1 版 2.6・3.7）の、画面に依存しない純粋な関数。
 // admin-fal-watch.js が使う。入力は DB の admin_fal_watch_summary の返り（jsonb）。DOM には触らない（試験は scripts/admin_fal_watch_lib_test.ts）。
 // 約束：
-// - 警告が 0 件でも、未確認・未着・照合できない生成・照合できない請求（付け替え待ちを含む）・保留・期間を過ぎた未確認・一度も確かめていない・
-//   取り切れなかった回・途中で止まった回・止まっている（36 時間）が 1 つでもあれば「全部確かめ済み」とは出さない。
+// - 警告が 0 件でも、未確認・未着・照合できない生成・照合できない請求（付け替え待ちを含む）・保留・期間を過ぎた未確認・一度も確認していない・
+//   取り切れなかった回・中断した回・停止中（36 時間）が 1 つでもあれば「すべて確認済み」とは出さない。
 // - 帯に出すのは警告と注意だけ（lower・under_list・使っていない経路は出さない）。
 // - 「引いたクレジット」は mcp/models.ts の creditsOf と同じ式（ceil(round(usd × 100, 6))）。「実費のクレジット換算」は切り上げない。円は出さない。
 
@@ -61,7 +61,7 @@ export const VERDICT_LABELS = {
   lower: "低い（情報）",
   unverified: "未確認（条件つき）",
   not_comparable: "比べられない",
-  missing: "応答に無い（警告）",
+  missing: "応答にない（警告）",
 };
 export const CHANGE_LABELS = { first: "初回", unchanged: "変化なし", changed: "変わった（警告）" };
 export const STATE_LABELS = {
@@ -84,22 +84,22 @@ export const OUTCOME_LABELS = {
   superseded: "追い越された",
   incomplete: "取り切れなかった",
   failed: "失敗",
-  abandoned: "途中で止まった",
+  abandoned: "中断",
 };
-export const RUN_KIND_LABELS = { price: "単価", billing: "請求（定期）", billing_recent: "請求（確かめの日）", billing_recheck: "請求（見直し）" };
+export const RUN_KIND_LABELS = { price: "単価", billing: "請求（定期）", billing_recent: "請求（確認の日）", billing_recheck: "請求（見直し）" };
 export const ALERT_KIND_LABELS = {
   price_higher: "単価が基準より高い",
   price_changed: "単価が変わった",
-  price_missing: "単価の応答に無い",
+  price_missing: "単価の応答にない",
   billing_over: "請求が見積りを超えた",
   billing_on_excluded: "投入していないと記録した生成に請求",
   run_failed: "取り切れなかった・失敗した回",
-  run_stale: "止まっている",
-  run_abandoned: "途中で止まった回",
+  run_stale: "停止中",
+  run_abandoned: "中断した回",
   billing_review: "金額の保留",
   billing_hold: "照合の保留",
   billing_orphan: "照合できない請求",
-  billing_never_checked: "一度も確かめていない",
+  billing_never_checked: "一度も確認していない",
   billing_out_of_window: "請求の期間の外の行（使わずに数えた）",
 };
 
@@ -111,14 +111,14 @@ export function billingRowStatus(r) {
   if (r.verdict_reason) parts.push(`理由：${r.verdict_reason}`);
   if (r.subtotal_unknown) parts.push("定価は不明");
   if (r.hold_reason) parts.push(HOLD_LABELS[r.hold_reason] ?? r.hold_reason);
-  if (r.never_checked) parts.push("一度も確かめていない");
+  if (r.never_checked) parts.push("一度も確認していない");
   if (r.past_window) parts.push("期間を過ぎた");
   return parts.join("・");
 }
 
 const n = (v) => (Number.isFinite(Number(v)) ? Number(v) : 0);
 
-/** 直近 36 時間の、取り切れなかった・失敗・途中で止まった回の数（実行の記録の一覧から） */
+/** 直近 36 時間の、取り切れなかった・失敗・中断した回の数（実行の記録の一覧から） */
 export function troubledRuns(summary, now = Date.now()) {
   return (summary?.runs ?? []).filter((r) =>
     ["incomplete", "failed", "abandoned"].includes(r.outcome) && now - Date.parse(r.started_at) <= 36 * 3_600_000
@@ -152,18 +152,18 @@ export function summarize(summary, now = Date.now()) {
   const billingStale = !!summary?.billing?.stale;
 
   const band = [];
-  if (priceStale) band.push({ level: "warn", text: "単価の見張りが止まっています（36 時間より前から反映がありません）" });
-  if (billingStale) band.push({ level: "warn", text: "請求の突き合わせが止まっています（36 時間より前から反映がありません）" });
+  if (priceStale) band.push({ level: "warn", text: "単価の監視が停止中です（36 時間以上、反映なし）。" });
+  if (billingStale) band.push({ level: "warn", text: "請求の突き合わせが停止中です（36 時間以上、反映なし）。" });
   if (n(pc.higher)) band.push({ level: "warn", text: `単価が基準より高い：${n(pc.higher)}` });
-  if (n(pc.missing)) band.push({ level: "warn", text: `単価の応答に無い：${n(pc.missing)}` });
+  if (n(pc.missing)) band.push({ level: "warn", text: `単価の応答にない：${n(pc.missing)}` });
   if (n(pc.changed)) band.push({ level: "warn", text: `単価が変わった：${n(pc.changed)}` });
   if (n(rc.over)) band.push({ level: "warn", text: `請求が見積りを超えた：${n(rc.over)}` });
   if (n(rc.billing_on_excluded)) band.push({ level: "warn", text: `投入していないと記録した生成に請求：${n(rc.billing_on_excluded)}` });
   if (review) band.push({ level: "notice", text: `金額の保留：${review}` });
   if (hold) band.push({ level: "notice", text: `照合の保留：${hold}` });
   if (orphans) band.push({ level: "notice", text: `照合できない請求：${orphans}${relink ? `（うち付け替え待ち ${relink}）` : ""}` });
-  if (neverChecked) band.push({ level: "notice", text: `一度も確かめていない：${neverChecked}` });
-  if (troubled) band.push({ level: "notice", text: `取り切れなかった・途中で止まった回（直近 36 時間）：${troubled}` });
+  if (neverChecked) band.push({ level: "notice", text: `一度も確認していない：${neverChecked}` });
+  if (troubled) band.push({ level: "notice", text: `取り切れなかった・中断した回（直近 36 時間）：${troubled}` });
   // 開いている（確かめていない）「請求の期間の外の行」の知らせ。fal がその回の期間の外の行を返した＝読み方の前提が崩れている疑い
   const outOfWindow = (summary?.alerts ?? []).filter((a) => a?.kind === "billing_out_of_window");
   if (outOfWindow.length) {
@@ -176,21 +176,21 @@ export function summarize(summary, now = Date.now()) {
     !!summary?.billing?.last_committed_at;
 
   const line = [
-    `単価：確かめ済み ${priceVerified}・未確認 ${priceUnverified}・警告 ${priceWarn}・使っていない経路 ${n(pc.inactive_route)}`,
+    `単価：確認済み ${priceVerified}・未確認 ${priceUnverified}・警告 ${priceWarn}・使っていない経路 ${n(pc.inactive_route)}`,
     `請求（直近 8 日）：一致 ${n(rc.ok) + n(rc.under_list)}・未着 ${n(rc.pending)}・照合できない生成 ${n(rc.no_request_id)}・照合できない請求 ${orphans}・保留 ${hold + review}・警告 ${billingWarn}`,
     `期間を過ぎた未確認 ${pastUnverified}`,
     `最後の反映 ${jstText(summary?.price?.last_committed_at)}・${jstText(summary?.billing?.last_committed_at)}`,
   ].join(" ／ ");
-  return { line: allVerified ? `全部確かめ済み ／ ${line}` : line, allVerified, band };
+  return { line: allVerified ? `すべて確認済み ／ ${line}` : line, allVerified, band };
 }
 
-/** 画面の下に書く注意（設計 3.7） */
+/** 画面の下に書く注意（設計 3.7）。text は常に出す 1 行、title はホバーの続き（無ければ ""） */
 export const FOOT_NOTES = [
-  "API の値が変わっていないことは、API に出ない条件の料金が変わっていないことまでは示しません。",
-  "未着・照合できない・未確認で終了は、請求が無いという意味ではありません。",
-  "見積りより安い請求・単価は、割引の有無が分からないため知らせません。",
-  "照合の保留は、今は画面から解けません（［確かめた］はメモを残すだけです）。",
-  "付け替え待ちの請求は、その時期を見直すまで照合できない請求に残ります。",
+  { text: "API に出ない条件の料金は、この確認の対象外です。", title: "" },
+  { text: "「未着」「照合できない生成」でも、請求されている場合があります。", title: "「未確認のまま終了」も同じです。" },
+  { text: "見積りより安い請求・単価は知らせません。", title: "割引かどうかを判定できないためです。" },
+  { text: "照合の保留は、画面から解除できません。", title: "［確認済みにする］では解除されません。" },
+  { text: "付け替え待ちの請求は「照合できない請求」に残ります。", title: "その時期を見直すまで残ります。" },
 ];
 
 /** 一覧が 300 行で切れたときの文（件数は表の全体から） */

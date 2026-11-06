@@ -16,17 +16,17 @@
 <!-- ログインの確かめ・RPC の接続先へ先につないでおく（supabase-js の fetch は資格情報なしなので crossorigin） -->
 <link rel="preconnect" href="https://tnzwhwitgnzoehbjrmoy.supabase.co" crossorigin>
 <link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=IBM+Plex+Sans+JP:wght@400;500;600;700&amp;display=swap">
-<link rel="stylesheet" href="/r/2751bb45fefd/site-nav.css">
-<link rel="stylesheet" href="/r/2751bb45fefd/gsi-button.css">
-<link rel="modulepreload" href="/r/2751bb45fefd/admin-lib.js">
-<link rel="modulepreload" href="/r/2751bb45fefd/auth-storage.js">
-<link rel="modulepreload" href="/r/2751bb45fefd/instructor-list-lib.js">
-<link rel="modulepreload" href="/r/2751bb45fefd/mypage-lib.js">
-<link rel="modulepreload" href="/r/2751bb45fefd/poll-lib.js">
-<link rel="modulepreload" href="/r/2751bb45fefd/share-lib.js">
-<link rel="modulepreload" href="/r/2751bb45fefd/site-nav.js">
-<link rel="modulepreload" href="/r/2751bb45fefd/stage-lib.js">
-<link rel="modulepreload" href="/r/2751bb45fefd/submissions-lib.js">
+<link rel="stylesheet" href="/r/0692eb951f2f/site-nav.css">
+<link rel="stylesheet" href="/r/0692eb951f2f/gsi-button.css">
+<link rel="modulepreload" href="/r/0692eb951f2f/admin-lib.js">
+<link rel="modulepreload" href="/r/0692eb951f2f/auth-storage.js">
+<link rel="modulepreload" href="/r/0692eb951f2f/instructor-list-lib.js">
+<link rel="modulepreload" href="/r/0692eb951f2f/mypage-lib.js">
+<link rel="modulepreload" href="/r/0692eb951f2f/poll-lib.js">
+<link rel="modulepreload" href="/r/0692eb951f2f/share-lib.js">
+<link rel="modulepreload" href="/r/0692eb951f2f/site-nav.js">
+<link rel="modulepreload" href="/r/0692eb951f2f/stage-lib.js">
+<link rel="modulepreload" href="/r/0692eb951f2f/submissions-lib.js">
 <style>
   :root {
     --accent: #26396E; --accent-hover: #1B2B55; --on-accent: #FFFFFF;
@@ -64,6 +64,27 @@
       --low: #D8916F; --low-text: #EBA887;
       --danger: #EE968C; --danger-line: #5C3631;
       --dot: #4A5370;
+    }
+  }
+  /* 選んだ項目の強調（組 13・highlight/SPEC.md）：左の帯は使わず、明るい面＋淡い縁＋2 段の影で浮かせる */
+  :root {
+    --sel-bg: #EAF2FF;                       /* 白い箱の中で選んだ面 */
+    --sel-lift-bg: #FFFFFF;                  /* 灰色の地の上で選んだ面 */
+    --sel-card-bg: #EAF2FF;                  /* 前の面が白だったカード（ラジオのカード・狭い幅の選ぶカード）で選んだ面 */
+    --sel-edge: rgba(38, 57, 110, 0.18);     /* 淡い縁（紺の 18%） */
+    --sel-shadow: 0 0 0 1px var(--sel-edge), 0 1px 2px rgba(22, 30, 56, 0.08), 0 4px 12px -4px rgba(22, 30, 56, 0.18);
+    --sel-shadow-row: inset 0 0 0 1px var(--sel-edge), 0 1px 2px rgba(22, 30, 56, 0.08), 0 2px 6px -1px rgba(22, 30, 56, 0.16);
+    --sel-motion: 120ms ease-out;
+  }
+  @media (prefers-color-scheme: dark) {
+    :root {
+      --sel-bg: #293355;                     /* 前の #1E2741 より明るく、白の文字で前の比 12.28 以上（12.36）。hover #1C2234 との比 1.28・#222A3E と 1.16 */
+      --sel-lift-bg: #293355;
+      --sel-card-bg: #212944;                /* 前の面 #161B2B のカード：白の文字で前の比 14.24 以上（14.33）。選んでいないカードとの比 1.20 */
+      --sel-glint: inset 0 1px 0 rgba(255, 255, 255, 0.07);  /* 上の縁の細い光（暗い地では影より効く） */
+      --sel-edge: rgba(169, 185, 233, 0.40);
+      --sel-shadow: var(--sel-glint), 0 0 0 1px var(--sel-edge), 0 1px 2px rgba(0, 0, 0, 0.45), 0 4px 12px -4px rgba(0, 0, 0, 0.6);
+      --sel-shadow-row: var(--sel-glint), inset 0 0 0 1px var(--sel-edge), 0 1px 2px rgba(0, 0, 0, 0.45), 0 2px 6px -1px rgba(0, 0, 0, 0.6);
     }
   }
   * { box-sizing: border-box; }
@@ -229,7 +250,7 @@
   .stage-pick-now .stage-count { color: var(--text-2); white-space: nowrap; }
   .stage-pick #stages-toggle { margin-left: auto; }
   #stages-all { align-self: flex-start; }
-  /* ---- 段階の一覧（今の段階を強調：背景・左の線・「今」の印） ---- */
+  /* ---- 段階の一覧（今の段階を強調：明るい面と影・「今」の印） ---- */
   .stage-list { list-style: none; margin: 0; padding: 0; display: flex; flex-direction: column; gap: 2px; }
   .stage-row { width: 100%; text-align: left; display: grid; grid-template-columns: minmax(0, 1fr) auto auto; gap: 2px 12px; align-items: center; min-height: 44px; padding: 8px 12px; border-radius: 10px; border: 0; border-left: 4px solid transparent; background: transparent; }
   .stage-row:hover { background: var(--line-soft); }
@@ -237,7 +258,7 @@
   .stage-row .stage-accept { color: var(--text-2); font-size: 13px; }
   .stage-row .stage-count { color: var(--text-2); text-align: right; white-space: nowrap; }
   .stage-row.now .stage-name { font-weight: 700; }
-  .stage-row.selected { background: var(--accent-soft); border-left-color: var(--accent); color: var(--accent-soft-text); }
+  .stage-row.selected { position: relative; z-index: 1; background: var(--sel-bg); color: var(--accent-soft-text); box-shadow: var(--sel-shadow); }
   .stage-row.selected .stage-accept, .stage-row.selected .stage-count { color: var(--accent-soft-text); }
   @media (max-width: 560px) {
     .stage-row { grid-template-columns: minmax(0, 1fr) auto; }
@@ -253,7 +274,7 @@
   .person-name { font-weight: 700; }
   .work-row { width: 100%; display: flex; flex-wrap: wrap; align-items: center; gap: 4px 12px; min-height: 44px; padding: 6px 12px; border-radius: 10px; border: 1px solid transparent; background: transparent; text-align: left; white-space: pre; }
   .work-row:hover { background: var(--line-soft); }
-  .work-row.selected { background: var(--accent-soft); border-color: var(--accent-soft-line); color: var(--accent-soft-text); font-weight: 700; }
+  .work-row.selected { position: relative; z-index: 1; background: var(--sel-bg); border-color: transparent; color: var(--accent-soft-text); font-weight: 700; box-shadow: var(--sel-shadow-row); }
   .work-label { min-width: 5em; }
   .opus-mark { font-size: 12px; color: var(--warn-fg); background: var(--warn-bg); border-radius: 999px; padding: 0 8px; cursor: help; }
   .scope-badge { font-size: 12px; font-weight: 600; padding: 1px 10px; border-radius: 999px; background: var(--line-soft); color: var(--text-2); }
@@ -289,6 +310,23 @@
   dialog.confirm h2 { font-size: 17px; }
   dialog.confirm p { overflow-wrap: anywhere; }
   dialog.confirm .row { display: flex; flex-wrap: wrap; gap: 8px; justify-content: flex-end; }
+
+  /* 選んだ項目の強調の切り替え（組 13）：120ms まで。動きを減らす設定では動かさない */
+  @media (prefers-reduced-motion: no-preference) {
+    .stage-row, .work-row { transition: background-color var(--sel-motion), box-shadow var(--sel-motion); }
+  }
+  @media (forced-colors: active) {
+    .stage-row.selected, .work-row.selected { outline: 2px solid Highlight; outline-offset: -2px; }
+    /* 選んだ物に focus があるときは、輪を外へ出す（中の輪＝選んだ・外の輪＝focus） */
+    .stage-row.selected:focus-visible, .work-row.selected:focus-visible { outline-offset: 2px; }
+  }
+  /* キーボードの輪（focus-visible）は、隣の選んだ物（z-index: 1）より前に出す（組 13）。輪の 4 辺が隣の面の下に隠れないように */
+  .stage-row:focus-visible, .work-row:focus-visible { position: relative; z-index: 2; }
+  /* 暗い配色：選んだ面 #293355 は前の #1E2741 より明るいので、中の文字を明るい値に替えて前の比以上にする（組 13・版 4。highlight/SPEC.md §5.3）
+     --text 白 12.36≥12.28・--text-2 #D5D9E0 8.73≥8.72・--muted #B1B7C3 6.14≥6.12・--accent-soft-text #DFE5F7 9.82≥9.80・--warn-fg #F2DCC0 9.28≥9.27 */
+  @media (prefers-color-scheme: dark) {
+    .stage-row.selected, .work-row.selected { --text: #FFFFFF; --text-2: #D5D9E0; --muted: #B1B7C3; --accent-soft-text: #DFE5F7; --warn-fg: #F2DCC0; }
+  }
 
   /* ---- ログイン前（#login.welcome）だけの見た目：トップ（studio.css の .welcome）と同じ並び・大きさ。
      講師の画面は studio.css を読まないので、ここに小さく置く。色はこのファイルの変数。ログイン後の画面には当たらない（.welcome の中だけ） ---- */
@@ -383,7 +421,7 @@
 
 <dialog id="confirm" class="confirm" aria-labelledby="confirm-title"></dialog>
 <dialog id="screen" class="screen" aria-label="上映"></dialog>
-<script type="module" src="/r/2751bb45fefd/topbar-height.js"></script>
-<script type="module" src="/r/2751bb45fefd/submissions.js"></script>
+<script type="module" src="/r/0692eb951f2f/topbar-height.js"></script>
+<script type="module" src="/r/0692eb951f2f/submissions.js"></script>
 </body>
 </html>

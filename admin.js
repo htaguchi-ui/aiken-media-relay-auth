@@ -26,9 +26,11 @@ import {
   accessText,
   addSubmitLabel,
   adminAddConfirmView,
-  adminLoginErrorText,
+  adminLoginErrorInfo,
+  apiErrorInfo,
   approxCreditsText,
   bulkAddResult,
+  bulkGrantTotalLine,
   canGrant,
   cohortIdOf,
   cohortLabel,
@@ -40,14 +42,22 @@ import {
   defaultCohortId,
   displayName,
   emailProblem,
+  errorCode,
+  errorInfo,
+  errorText,
   explainError,
+  explainErrorInfo,
   formatCredits,
   formatDateTime,
   formatDateWithWeekday,
   formatShortDateTime,
   formatUsd,
   formatYen,
+  grantRoom,
+  grantRoomHelp,
+  grantRoomText,
   grantTotalProblem,
+  grantWhoNo,
   isNetworkFailure,
   matchesFilter,
   matchesQuery,
@@ -82,10 +92,10 @@ import {
   optInModelIds,
   modeStatus,
   normalizeOptInModes,
-  explainApiError,
   formatUsdShort,
   availableLimits,
   settingDesc,
+  settingTip,
   settingLabel,
   buildModelSave,
   changedScopes,
@@ -98,6 +108,7 @@ import {
   modelLabeler,
   modeBaseOn,
   roleListNotice,
+  roleListNoticeTip,
   rolesAvailable,
   saveConfirmLines,
   saveConfirmNote,
@@ -223,7 +234,7 @@ const SUPABASE_PUBLISHABLE_KEY = "sb_publishable_KRY7iSTi9d_z9EwW0KuDwg_ooUqGvDN
 
 // 読み込めない（通信の失敗・integrity の不一致）ときは先へ進まない
 if (typeof window.supabase?.createClient !== "function") {
-  document.getElementById("status").textContent = "画面を表示できませんでした。インターネットの接続を確かめて、ページを開き直してください。";
+  document.getElementById("status").textContent = "表示エラー：画面を読み込めません。\nページを再読み込みしてください。";
   throw new Error("supabase-js を読み込めませんでした");
 }
 
@@ -321,6 +332,8 @@ const state = {
   /** loading | ok | error（一度も読めていないときだけ error） */
   rowsStatus: "loading",
   rowsError: "",
+  /** 名簿の読み込みの失敗（生の誤り。表示する所が errorInfo で「名簿の読み込みエラー：」を付ける） */
+  rowsErrorRaw: null,
   cohorts: [],
   venues: [],
   cohortsStatus: "loading",
@@ -532,8 +545,14 @@ function bar(pct, low = false, cls = "") {
   return el("span", { className: `bar ${cls} ${low ? "low" : ""}`, role: "img", "aria-label": `使用 ${pct}%` }, fill);
 }
 
-function warnBox(text, tag = "div") {
-  return el(tag, { className: "warn-box" }, icon("warn", 16), el("span", { text }));
+/** エラーコード（E-ADM-50 など）を最後の文の後ろに小さく薄く出す（文の決まり 3.2。文の定数には入れない）。code が無ければ null */
+function codeTag(code) {
+  return code ? el("span", { className: "err-code", text: `（${code}）` }) : null;
+}
+
+/** 注意の箱。tip はホバーに出す続きの文、code はエラーコード */
+function warnBox(text, tag = "div", { tip = null, code = null } = {}) {
+  return el(tag, { className: "warn-box", title: tip }, icon("warn", 16), el("span", { text }, codeTag(code)));
 }
 
 function field(labelText, input, hint = null) {
@@ -577,12 +596,19 @@ function readDate(input) {
 const yenHintRefs = new Set();
 const yenHintUpdaters = new WeakMap();
 
-/** クレジットの入力の横に出す円の目安（ドル円はサーバーの直近 3 か月の平均。無ければ 150 円）。注記は書き直すたびに今のレートから作る */
-function yenHint(input) {
+/**
+ * クレジットの入力の横に出す円の目安（ドル円はサーバーの直近 3 か月の平均。無ければ 150 円）。注記は書き直すたびに今のレートから作る。
+ * min：受け付ける最小値（追加の欄は 1、月額・期間の欄は 0）。範囲の外なら範囲の文を出す
+ */
+function yenHint(input, min = 0) {
   const hint = el("span", { className: "hint num" });
   const update = () => {
     const n = parseCredits(input.value);
-    hint.textContent = n === null ? "" : n === undefined ? "整数で入力してください" : `${formatYen(n)}（${fxRateNote()}）`;
+    hint.textContent = n === null
+      ? ""
+      : n === undefined || n < min
+      ? `${min}〜${formatCredits(MAX_CREDITS)} の整数です。`
+      : `${formatYen(n)}（${fxRateNote()}）`;
   };
   input.addEventListener("input", update);
   update();
@@ -651,11 +677,11 @@ function scheduleToast(t) {
  * action（{ label, onClick }）は、操作のあとに戻る道（［変更履歴を見る］など。3.4 の 9）。
  * fold（{ label, items }）は、折りたたみの中の箇条書き（U3-12）
  */
-function notify(message, kind = "ok", details = [], action = null, fold = null) {
+function notify(message, kind = "ok", details = [], action = null, fold = null, code = null) {
   if (appClosed) return;
   if (kind !== "error" && kind !== "warn") kind = "ok";
   placeNotice();
-  const key = [kind, message, ...details, action?.label ?? "", ...(fold ? [fold.label, ...fold.items] : [])].join("\n");
+  const key = [kind, message, code ?? "", ...details, action?.label ?? "", ...(fold ? [fold.label, ...fold.items] : [])].join("\n");
   const last = toasts[toasts.length - 1];
   if (last && last.key === key) {
     last.count += 1;
@@ -670,7 +696,7 @@ function notify(message, kind = "ok", details = [], action = null, fold = null) 
     el(
       "div",
       { className: "notice-body" },
-      el("p", { className: "notice-msg" }, el("span", { text: message }), el("span", { className: "notice-count small num", hidden: true })),
+      el("p", { className: "notice-msg" }, el("span", { className: "notice-text", text: message }), codeTag(code), el("span", { className: "notice-count small num", hidden: true })),
       details.length ? el("ul", {}, ...details.map((d) => el("li", { text: d }))) : null,
       // 折りたたみ（［詳しく］。登録済みでスキップした人のメールなど。U3-12）
       fold && fold.items.length
@@ -725,8 +751,9 @@ function clearNotice() {
 // 読み上げの領域は、お知らせが出る前から画面に置いておく
 placeNotice();
 
-function fatal(message) {
-  $("status").replaceChildren(el("p", { className: "error-text", text: message }));
+/** 中央のカードに失敗を出す。code はエラーコード（小さく薄く）、tip はホバーに出す続き */
+function fatal(message, code = null, tip = null) {
+  $("status").replaceChildren(el("p", { className: "error-text", text: message, title: tip }, codeTag(code)));
   show("status");
 }
 
@@ -818,11 +845,12 @@ const askEl = $("ask");
 let askDone = null;
 
 /**
- * @param {{ title: string, lines?: string[], note?: string|null, warnings?: string[], detail?: string[],
+ * @param {{ title: string, lines?: string[], lineTips?: (string|null)[], note?: string|null, warnings?: string[], detail?: string[],
+ *   detailTips?: Map<string, string>|null,
  *   buttons: { label: string, value: any, kind?: "primary"|"danger"|"" }[], cancelValue?: any, focusValue?: any }} o
  * @returns {Promise<any>} 押したボタンの value（Esc・背景・強制的に閉じたときは cancelValue）
  */
-function ask({ title, lines = [], note = null, warnings = [], detail = [], buttons, cancelValue = false, focusValue = cancelValue }) {
+function ask({ title, lines = [], lineTips = [], note = null, warnings = [], detail = [], detailTips = null, buttons, cancelValue = false, focusValue = cancelValue }) {
   if (askDone) askDone(undefined);
   const back = document.activeElement;
   return new Promise((resolve) => {
@@ -848,9 +876,11 @@ function ask({ title, lines = [], note = null, warnings = [], detail = [], butto
         "div",
         { className: "ask-body" },
         el("h2", { id: "ask-title", text: title }),
-        ...lines.map((t) => el("p", { text: t })),
+        ...lines.map((t, i) => el("p", { text: t, title: lineTips?.[i] ?? null })),
         ...warnings.map((w) => el("p", { className: "warn-line", role: "alert" }, el("span", { "aria-hidden": "true", text: "⚠" }), el("span", { text: w }))),
-        detail.length ? el("div", { className: "ask-detail" }, el("ul", {}, ...detail.map((d) => el("li", { text: d })))) : null,
+        detail.length
+          ? el("div", { className: "ask-detail" }, el("ul", {}, ...detail.map((d) => el("li", { text: d, title: detailTips?.get?.(d) ?? null }))))
+          : null,
         note ? el("p", { className: "ask-note", text: note }) : null,
       ),
       el("div", { className: "ask-foot" }, ...btns),
@@ -878,8 +908,8 @@ askEl.addEventListener("close", () => {
 /** 保存していない変更を捨ててよいか（［編集を続ける］が既定） */
 function askDiscard(what = "入力した値", okLabel = "破棄して閉じる") {
   return ask({
-    title: "保存していない変更を破棄しますか？",
-    lines: [`${what}は、まだ保存していません。`],
+    title: "変更を破棄しますか？",
+    lines: [`${what}は失われます。`],
     buttons: [{ label: "編集を続ける", value: false }, { label: okLabel, value: true, kind: "danger" }],
     cancelValue: false,
   });
@@ -928,7 +958,8 @@ async function signIn() {
   try {
     const { status, body } = await postLogin("/admin-login/start", {});
     if (status !== 200 || typeof body?.flow_state !== "string" || typeof body?.code_challenge !== "string") {
-      showLoginNote(adminLoginErrorText(status, body));
+      const failed = adminLoginErrorInfo(status, body);
+      showLoginNote(failed.text, failed.code);
       show("login");
       return;
     }
@@ -938,7 +969,11 @@ async function signIn() {
       sessionStore?.removeItem?.(ADMIN_LOGIN_FLOW_KEY);
     }
     if (sessionStore?.getItem(ADMIN_LOGIN_FLOW_KEY) !== body.flow_state) {
-      showLoginNote("このブラウザでは、ログインの途中の記録を保存できません。プライベートブラウズを使っていれば、通常のウィンドウで開いてください。");
+      showLoginNote(
+        "ログインエラー：ブラウザに保存できません。\nプライベートブラウズのときは、通常のウィンドウで開いてください。",
+        null,
+        "プライベートブラウズでは、ログインの途中の記録を保存できません。",
+      );
       show("login");
       return;
     }
@@ -967,17 +1002,18 @@ async function finishSignIn(code) {
   } catch {
     flowState = null;
   }
-  if (!flowState) return { error: "このタブで始めたログインではないため、続けられません。もう一度ログインしてください。" };
+  if (!flowState) return { error: "ログインエラー：このタブで始めたログインではありません。\n再度ログインしてください。" };
   const { status, body } = await postLogin("/admin-login/finish", { flow_state: flowState, code });
   const expiresAt = adminConsoleExpiresAt(body?.admin_expires_at ?? null, Date.now());
   if (status !== 200 || typeof body?.access_token !== "string" || typeof body?.refresh_token !== "string" || expiresAt === null) {
-    return { error: adminLoginErrorText(status, body) };
+    const failed = adminLoginErrorInfo(status, body);
+    return { error: failed.text, code: failed.code };
   }
   // この端末に前の管理コンソールのセッションが残っていれば、先に終わらせる（新しいログインで置き換える。古いトークンを残さない）
   const previous = storedAccessToken(localStore, ADMIN_CONSOLE_STORAGE_KEY);
   if (previous && previous !== body.access_token) await endConsoleToken(previous);
   const { error } = await supabase.auth.setSession({ access_token: body.access_token, refresh_token: body.refresh_token });
-  if (error) return { error: "ログインを保存できませんでした。ページを開き直して、もう一度ログインしてください。" };
+  if (error) return { error: "ログインエラー：保存できませんでした。\n再読み込みして、再度ログインしてください。" };
   return { expiresAt };
 }
 
@@ -1002,7 +1038,7 @@ async function signOut() {
   // Claude Code の接続も切らない）。通信を待つ前に、本人の値・編集中の内容を消して操作を止める（F107-04）
   stopExpireWatch();
   clearAppView();
-  $("status").textContent = "ログアウトしています…";
+  $("status").textContent = "ログアウト中…";
   show("status");
   await endConsoleSession(currentIdentity());
   location.replace(returnUrl());
@@ -1096,12 +1132,12 @@ let expiring = false;
  * 管理コンソールのログインを終えて、ログインの画面に戻す。終わらせるのは target（呼ぶ側が判定に使ったセッション）だけで、
  * ここで保存先を読み直さない（その間にほかのタブで入った新しいログインは消さない。F112-03・TASK-0142 F142-01）
  */
-async function closeConsole(note, target) {
+async function closeConsole(note, target, tip = null) {
   discardDlKey(sessionStore); // 期限切れ・再確認・起動時の終了でも、通信を待つ前に /dl の鍵を消す
   stopExpireWatch();
   clearAppView();
   await endConsoleSession(target);
-  showLoginNote(note);
+  showLoginNote(note, null, tip);
   show("login");
 }
 
@@ -1126,7 +1162,7 @@ async function logoutIfExpired() {
       }
       target = st.identity;
     }
-    await closeConsole(`管理コンソールにログインしてから ${ADMIN_SESSION_LIMIT_MS / 3600000} 時間たったため、ログアウトしました。もう一度ログインしてください。`, target);
+    await closeConsole(`ログインの有効期限（${ADMIN_SESSION_LIMIT_MS / 3600000} 時間）が切れました。\n再度ログインしてください。`, target);
     return true;
   } finally {
     expiring = false;
@@ -1149,16 +1185,21 @@ async function recheckConsole() {
   }
   expiring = true;
   try {
-    await closeConsole("管理コンソールのログインが終わっていたため、ログアウトしました。もう一度ログインしてください。", st.identity);
+    await closeConsole("ログインが無効になりました。\n再度ログインしてください。", st.identity);
     return true;
   } finally {
     expiring = false;
   }
 }
 
-function showLoginNote(text) {
-  $("login-note").textContent = text;
-  $("login-note").hidden = !text;
+/** ログインの画面の下の文。code はエラーコード（小さく薄く）、tip はホバーに出す続き */
+function showLoginNote(text, code = null, tip = null) {
+  const note = $("login-note");
+  note.textContent = text;
+  if (text && code) note.append(codeTag(code));
+  if (tip && text) note.setAttribute?.("title", tip);
+  else note.removeAttribute?.("title");
+  note.hidden = !text;
 }
 
 /** このタブが表示している管理者の ID（ログイン前は null） */
@@ -1209,6 +1250,7 @@ function applyRows(data) {
   state.rows = sortByLastUsed(data ?? []);
   state.rowsStatus = "ok";
   state.rowsError = "";
+  state.rowsErrorRaw = null;
   state.fresh.rows = { at: Date.now(), stale: false };
   for (const email of [...state.selected]) {
     const r = state.rows.find((x) => x.email === email);
@@ -1226,13 +1268,21 @@ async function loadUsage() {
   if (!gates.rows.accept(ticket)) return true;
   if (error) {
     state.rowsError = explainError(error);
+    state.rowsErrorRaw = error;
     if (state.rowsStatus !== "ok") state.rowsStatus = "error";
     state.fresh.rows.stale = true;
-    notify(`名簿を読み込めませんでした。${state.rowsError}`, "error");
+    const failed = errorInfo("名簿の読み込み", error);
+    notify(failed.text, "error", [], null, null, failed.code);
     return false;
   }
   applyRows(data);
   return true;
+}
+
+/** 回の読み込みの失敗の注意の箱（「回の読み込みエラー：原因」。前置きはここだけが付ける） */
+function cohortsLoadWarn() {
+  const failed = errorInfo("回の読み込み", state.cohortsErrorRaw);
+  return warnBox(failed.text, "div", { code: failed.code });
 }
 
 /** 回と会場（013）がまだ DB に無いか（このときは members に cohort_id を送らない・名簿に案内を出す） */
@@ -1367,7 +1417,7 @@ function renderHeader() {
     ...[
       v.text ?? (v.failed ? "" : "読み込み中…"),
       v.stale || v.failed
-        ? el("span", { className: "stale-mark" }, el("span", { "aria-hidden": "true", text: " ⚠" }), v.text ? "一部は前に読んだ値" : "読み込めていない部分があります")
+        ? el("span", { className: "stale-mark" }, el("span", { "aria-hidden": "true", text: " ⚠" }), v.text ? "一部は古い値" : "一部を読み込めません")
         : null,
     ].filter(Boolean),
   );
@@ -1388,8 +1438,8 @@ async function confirmLeaveSettings() {
   const parts = unsavedSettings();
   if (!parts.length) return true;
   const ok = await ask({
-    title: "保存していない変更を破棄しますか？",
-    lines: [`${parts.join("・")}を、まだ保存していません。`, "破棄すると、設定は今のままです。"],
+    title: "変更を破棄しますか？",
+    lines: [`${parts.join("・")}は失われます。`],
     buttons: [{ label: "編集を続ける", value: false }, { label: "破棄して移る", value: true, kind: "danger" }],
     cancelValue: false,
   });
@@ -1401,7 +1451,7 @@ async function confirmLeaveSettings() {
 async function switchTab(tab) {
   if (state.tab === tab) return true;
   if (state.settings.busy) {
-    notify("設定の保存の結果を待っています。終わってから移ってください。");
+    notify("保存中です。\n完了までお待ちください。");
     return false;
   }
   if (state.tab === "settings" && !(await confirmLeaveSettings())) return false;
@@ -1522,7 +1572,7 @@ function renderOverview() {
         sub: ok && month.has ? month.usd : null,
         sub2: ok && month.has ? "日本時間の 1 日 0 時から" : null,
         className: "desk-only",
-        title: ok && month.has ? `見積額：今月 ${formatUsd(t.month_cost_usd)}（日本時間の 1 日 0 時から）` : "今月の集計はまだ使えません（DB の更新待ち）",
+        title: ok && month.has ? `見積額：今月 ${formatUsd(t.month_cost_usd)}（日本時間の 1 日 0 時から）` : ok ? "サーバーの更新が未適用です。" : null,
       }),
       ovItem({
         label: "要対応",
@@ -1587,12 +1637,12 @@ function emptyBox(message, ...actions) {
   return el("div", { className: "empty" }, el("p", { text: message }), ...actions);
 }
 
-function errorBox(message, retry = refresh) {
+function errorBox(message, retry = refresh, code = null) {
   return el(
     "div",
     { className: "empty error", role: "alert" },
-    el("p", { text: message }),
-    el("button", { type: "button", className: "btn", text: "読み込み直す", onclick: retry }),
+    el("p", { text: message }, codeTag(code)),
+    el("button", { type: "button", className: "btn", text: "再試行", onclick: retry }),
   );
 }
 
@@ -1600,7 +1650,12 @@ function renderRoster() {
   renderChips();
   $("roster-banner").replaceChildren(
     ...(no013()
-      ? [warnBox("DB の更新（回と会場：013）がまだ適用されていません。受講者は旧い個別の日付で判定され、回の設定・「回」の画面は使えません。受講者の追加は、回を設定せずに行います。")]
+      ? [
+        warnBox("サーバーの更新が未適用です。回の機能は使えません。", "div", {
+          tip: "受講者は以前の個別の日付で判定されます。受講者の追加は、回を設定せずに行います。",
+          code: "E-ADM-50",
+        }),
+      ]
       : []),
   );
   const list = $("roster-list");
@@ -1613,7 +1668,8 @@ function renderRoster() {
   if (state.rowsStatus === "error") {
     $("shown-count").textContent = "";
     renderSelHead([]);
-    list.replaceChildren(errorBox(`名簿を読み込めませんでした。${state.rowsError}`));
+    const failed = errorInfo("名簿の読み込み", state.rowsErrorRaw);
+    list.replaceChildren(errorBox(failed.text, refresh, failed.code));
     return;
   }
   const rows = visibleRows();
@@ -1622,7 +1678,7 @@ function renderRoster() {
   if (!state.rows.length) {
     list.replaceChildren(
       emptyBox(
-        "まだ誰も登録されていません。",
+        "登録者はまだいません",
         el("button", { type: "button", className: "btn primary", text: "名簿に追加", onclick: () => openAdd() }),
       ),
     );
@@ -1699,7 +1755,7 @@ function quotaBlock(r, v) {
   } else {
     out.push(el("span", { className: "small muted num", text: prefix + v.text }));
   }
-  if (v.legacy) out.push(warnBox("回が未設定です（今は旧い個別の期間で判定しています）", "span"));
+  if (v.legacy) out.push(warnBox("回が未設定です。", "span", { tip: "今は以前の個別の期間で判定しています。" }));
   return out;
 }
 
@@ -1760,7 +1816,7 @@ function tableRow(r) {
       el("span", { className: "badges" }, roleBadge(r.role), r.status !== "active" ? statusBadge(r.status) : null),
       cohortText ? el("span", { className: `small num ${r.role === "student" && !r.cohort_id ? "warn-text" : "muted"}`, text: cohortText }) : null,
     ),
-    el("span", { className: "cell stretch" }, quota, v.legacy ? el("span", { className: "small warn-text", text: "回が未設定（旧い期間で判定中）" }) : null),
+    el("span", { className: "cell stretch" }, quota, v.legacy ? el("span", { className: "small warn-text", text: "回が未設定（以前の期間で判定中）" }) : null),
     el("span", { className: "num small muted", text: accessText(r) }),
   );
 }
@@ -1819,7 +1875,7 @@ function renderSelHead(visible) {
         el("button", {
           type: "button",
           className: "link-btn",
-          text: allOn ? "選択を外す" : "すべて選択",
+          text: allOn ? "選択を解除" : "すべて選択",
           disabled: !targets.length,
           onclick: () => {
             for (const r of targets) {
@@ -1836,9 +1892,7 @@ function renderSelHead(visible) {
     el("p", {
       className: "sel-hint",
       text: [
-        state.selectCohortTarget
-          ? `${state.selectCohortTarget} に所属させる受講者を選びます。`
-          : "まとめて設定するときは、受講者とメンバーを分けて選ぶと分かりやすくなります。",
+        state.selectCohortTarget ? `${state.selectCohortTarget} に所属させる受講者を選びます。` : "",
         `受講者 ${students}人・メンバー ${members}人（管理者は選べません）。`,
         narrowed,
       ].join(""),
@@ -1857,7 +1911,7 @@ function pickItem(r) {
   });
   return el(
     "label",
-    { className: `pick ${selectable ? "" : "disabled"}`, title: selectable ? null : "まとめての操作は受講者と AIKENメンバーだけが対象です" },
+    { className: `pick ${selectable ? "" : "disabled"}`, title: selectable ? null : "管理者は選べません" },
     cb,
     el(
       "span",
@@ -1932,7 +1986,7 @@ async function openMember(email, { asSheet = false } = {}) {
     renderRoster();
     renderMemberAside();
   } else {
-    openSheet("member", () => setSheet({ title: "読み込み中…", body: [el("p", { className: "muted", text: "最新の状態を読み込んでいます…" })] }));
+    openSheet("member", () => setSheet({ title: "読み込み中…", body: [] }));
   }
   const fresh = await freshRow(email);
   if (seq !== detailSeq || appClosed) return;
@@ -1943,7 +1997,7 @@ async function openMember(email, { asSheet = false } = {}) {
   const current = gates.rows.current(fresh.ticket);
   const row = current ? fresh.row : (state.rows.find((x) => x.email === email) ?? null);
   if (!fresh.ok && current) {
-    notify("最新の状態を読めませんでした。一覧を読み込み直してください。", "error");
+    notify("読み込みエラー：最新の状態を取得できません。\n一覧を再読み込みしてください。", "error");
     closeMember();
     return;
   }
@@ -1952,7 +2006,7 @@ async function openMember(email, { asSheet = false } = {}) {
   if (seq !== detailSeq) return;
   if (!row) {
     closeMember();
-    notify(`${email} は名簿に見つからなかったため、一覧を読み込み直しました。`, "error");
+    notify(`${email} は名簿にありません。一覧を再読み込みしました。`, "error");
     renderAll();
     return;
   }
@@ -2002,7 +2056,7 @@ function renderMemberAside() {
   }
   const r = state.detailEmail && state.rows.find((x) => x.email === state.detailEmail);
   if (!r) {
-    aside.replaceChildren(el("p", { className: "side-empty", text: "名簿から人を選ぶと、ここに詳細が出ます。" }));
+    aside.replaceChildren(el("p", { className: "side-empty", text: "人を選ぶと、ここに詳細が出ます" }));
     return;
   }
   const d = memberDetail(r, "aside-title");
@@ -2019,23 +2073,61 @@ function memberDetail(r, titleId) {
     el("div", { className: "badges" }, roleBadge(r.role), statusBadge(r.status)),
   );
   const sections = [];
-  if (hasWindow(r)) sections.push(windowSection(r, v));
+  // 「あと N まで」の行は追加の欄に置き、段階の回の数は一覧の読み込み（loadGrants）の結果で埋める（読み込みは増やさない）
+  const room = grantRoomRow(r);
+  if (hasWindow(r)) sections.push(windowSection(r, v, room.node));
   if (r.role === "student") sections.push(cohortSection(r, v));
   if (isMonthlyRole(r.role)) sections.push(monthlySection(r));
   sections.push(usageSection(r));
-  if (hasWindow(r)) sections.push(grantsSection(r));
+  if (hasWindow(r)) sections.push(grantsSection(r, room));
   sections.push(...manageSection(r));
   return { head, sections };
 }
 
-function windowSection(r, v) {
+/** 送っている間のクレジットの追加（メール）。2 回目の押しを無視し、描き直しても［追加中…］のままにする（組 13 U-05・A-02） */
+const grantBusy = new Set();
+/** まとめての追加を送っている間（同じ形） */
+let bulkGrantBusy = false;
+const GRANT_BUSY_LABEL = "追加中…";
+
+/**
+ * 追加の欄の下の「あと 8,500 まで ?」（組 13 U-05・A-03）。Day ごと・月額は名簿の行から今すぐ、段階の回は set で後から埋める。
+ * 数が分からないあいだ（読み込み中・失敗）は出さない
+ */
+function grantRoomRow(r) {
+  const stage = isStageStudent(r);
+  const text = el("span", { className: "help-text small num" });
+  const node = el(
+    "details",
+    { className: "help grant-room", hidden: true },
+    el("summary", {}, text, el("span", { className: "help-q", "aria-hidden": "true", text: "?" })),
+    el("div", { className: "help-body", text: grantRoomHelp(stage, state.stages.limitT) }),
+  );
+  const set = (room) => {
+    text.textContent = grantRoomText(room);
+    node.hidden = room === null || room === undefined;
+  };
+  if (!stage) set(grantRoom({ row: r }));
+  return { node, set, stage };
+}
+
+function windowSection(r, v, roomNode = null) {
   const canAdd = canGrant(r);
   const credits = creditInput("", { placeholder: "例：500" });
   const note = textInput({ placeholder: "例：授業中に不足したため" });
+  const busy = grantBusy.has(r.email);
+  const addButton = el("button", {
+    type: "button",
+    className: "btn primary",
+    text: busy ? GRANT_BUSY_LABEL : "追加する",
+    disabled: busy,
+    onclick: () => addGrant(r, credits.value, note.value, addButton),
+  });
   const form = el(
     "div",
     { className: "grant-form", hidden: true },
-    field("追加するクレジット", credits, yenHint(credits)),
+    field("追加するクレジット", credits, yenHint(credits, 1)),
+    roomNode,
     field("メモ（任意。理由など）", note),
     el(
       "div",
@@ -2043,13 +2135,13 @@ function windowSection(r, v) {
       el("button", {
         type: "button",
         className: "btn",
-        text: "やめる",
+        text: "キャンセル",
         onclick: () => {
           form.hidden = true;
           toggle.setAttribute("aria-expanded", "false");
         },
       }),
-      el("button", { type: "button", className: "btn primary", text: "追加する", onclick: () => addGrant(r, credits.value, note.value) }),
+      addButton,
     ),
   );
   const toggle = el(
@@ -2092,7 +2184,7 @@ function windowSection(r, v) {
   } else {
     content.push(el("p", { className: "muted", text: v.text }));
   }
-  if (v.legacy) content.push(warnBox("回が未設定です。今は旧い個別の期間で判定しています。所属する回を設定してください。"));
+  if (v.legacy) content.push(warnBox("回が未設定です。\n所属する回を設定してください。", "div", { tip: "今は以前の個別の期間で判定しています。" }));
   return el(
     "section",
     { className: "box" },
@@ -2104,9 +2196,13 @@ function windowSection(r, v) {
     ),
     ...content,
     toggle,
-    canAdd ? null : el("p", { className: "hint", text: "今の枠が無い（期間外・未設定）ため、クレジットを追加できません。" }),
+    canAdd ? null : el("p", { className: "hint", text: "今の枠がありません（期間外・未設定）。" }),
     isStageStudent(r)
-      ? el("p", { className: "hint", text: "この人の回は、段階ごとの枠です。上限は今の段階で決まり、講師が段階を進めると切り替わります。追加は今の段階に付きます。" })
+      ? el("p", {
+        className: "hint",
+        text: "追加は今の段階に付きます。",
+        title: "段階ごとの枠の回です。上限は今の段階で決まり、講師が段階を進めると切り替わります。",
+      })
       : null,
     form,
   );
@@ -2140,7 +2236,7 @@ function cohortSection(r, v) {
       "section",
       { className: "box" },
       el("h3", { text: "所属する回" }),
-      warnBox(v.legacy ? "回が未設定です（今は旧い個別の期間で判定しています）" : "回が未設定（生成できません）"),
+      v.legacy ? warnBox("回が未設定です。", "div", { tip: "今は以前の個別の期間で判定しています。" }) : warnBox("回が未設定（生成できません）"),
       el("button", { type: "button", className: "btn primary", text: "回を設定", onclick: () => openCohortPicker([r]) }),
     );
   }
@@ -2166,7 +2262,7 @@ function cohortSection(r, v) {
     ),
     // admin_usage の日付・クレジットは「実際に適用される値」（回に所属していれば回の値）
     periodList(r, r.current_period),
-    el("p", { className: "hint", text: "日付とクレジットは回で設定します。この人だけ足りないときは「クレジットを追加」を使います。" }),
+    el("p", { className: "hint", text: "日付とクレジットは回の設定に従います。", title: "この人だけ足りないときは［クレジットを追加］を使います。" }),
   );
 }
 
@@ -2176,7 +2272,7 @@ function monthlySection(r) {
     "section",
     { className: "box" },
     el("h3", { text: "月額のクレジット" }),
-    field("毎月（日本時間の 1 日に戻る・繰り越しなし）", input, yenHint(input)),
+    field("毎月（1 日に戻る・繰り越しなし）", input, yenHint(input)),
     el("p", { className: "hint", text: "空欄で保存すると未設定（生成できません）になります。" }),
     el("button", { type: "button", className: "btn primary", text: "月額を保存", onclick: () => saveMonthly(r, input.value) }),
   );
@@ -2217,13 +2313,17 @@ function usageSection(r) {
       r.note ? el("dt", { text: "メモ" }) : null,
       r.note ? el("dd", { text: r.note }) : null,
     ),
-    el("p", { className: "hint", text: "「今日」は日本時間の 0 時から、「24時間」は直近 24 時間、「今月」は日本時間の 1 日 0 時から。見積額（ドル）は生成のときの見積もりで、クレジットは見積額からの目安です。" }),
+    el("p", {
+      className: "hint",
+      text: "日付は日本時間です。クレジットは見積額からの目安です。",
+      title: "「今日」は 0 時から、「24時間」は直近 24 時間、「今月」は 1 日 0 時から。見積額（ドル）は生成のときの見積もりです。",
+    }),
   );
 }
 
-function grantsSection(r) {
+function grantsSection(r, room = null) {
   const list = el("ul", { className: "grants" }, el("li", { className: "muted", text: "読み込み中…" }));
-  loadGrants(r, list);
+  loadGrants(r, list, room);
   return el(
     "section",
     { className: "box" },
@@ -2276,7 +2376,7 @@ function queryWindowGrants(r, columns) {
 }
 
 /** 一時追加を一覧にする。段階の回の受講者は、段階ごとに分け、取り消した行は取り消し済みとして出す（設計 7.1 の案 B） */
-async function loadGrants(r, list) {
+async function loadGrants(r, list, room = null) {
   const stageStudent = isStageStudent(r);
   const hasWindowNow = !!(r.current_kind && r.current_window_start && r.current_window_end);
   if (!hasWindowNow && !stageStudent) {
@@ -2293,14 +2393,18 @@ async function loadGrants(r, list) {
   ]);
   const error = win.error || stg.error;
   if (error) {
-    list.replaceChildren(el("li", { className: "error-text", text: explainError(error) }));
+    list.replaceChildren(el("li", { className: "error-text", text: errorText("読み込み", error) }, codeTag(errorCode("読み込み", error))));
     return;
   }
   const stageRows = stageStudent ? (stg.data ?? []) : [];
+  // 追加の欄の「あと N まで」（段階の回）。この回の段階に付いた追加の合計（取り消した追加も数える。stageGrantedTotal と同じ数え方）
+  if (room?.stage && stagesOfCohort(r.cohort_id).length) {
+    room.set(grantRoom({ stage: true, granted: stageRows.reduce((n, g) => n + Number(g.credits ?? 0), 0), limit: state.stages.limitT }));
+  }
   // 段階の回の追加は、段階の行に分ける。stage_id が無い行（その回に Day ごとの時代の追加が残っているなど）は、今の枠の分だけ別に出す
   const rows = [...(win.data ?? []).filter((g) => !g.stage_id), ...stageRows];
   if (!rows.length) {
-    list.replaceChildren(el("li", { className: "muted", text: "追加はありません。" }));
+    list.replaceChildren(el("li", { className: "muted", text: "追加はまだありません" }));
     return;
   }
   const view = adminGrantGroups(
@@ -2361,14 +2465,14 @@ function manageSection(r) {
       onclick: () => removeMember(r),
     }),
   );
-  const notes = ["停止・削除・区分の変更は、実行前に確認が出ます。"];
+  const notes = [];
   if (deleteBlock) notes.push(deleteBlock);
   if (isMe) notes.push("自分自身は削除できません。");
   if (r.role === "admin") notes.push("最後の有効な管理者は、停止・区分の変更・削除ができません。");
   return [
     el("h3", { className: "group-title", text: "管理" }),
     el("div", { className: "menu" }, ...rows),
-    el("p", { className: "hint", text: notes.join("") }),
+    ...(notes.length ? [el("p", { className: "hint", text: notes.join("") })] : []),
   ];
 }
 
@@ -2387,9 +2491,9 @@ function cohortOptions(currentId = null, short = false) {
 async function updateMember(email, patch, doneMessage) {
   const { data, error } = await supabase.from("members").update(patch).eq("email", email).select("email");
   if (error) {
-    notify(explainError(error), "error");
+    notify(errorText("変更", error), "error", [], null, null, errorCode("変更", error));
   } else if (!data?.length) {
-    notify("変更できませんでした（権限が無いか、対象が見つかりません）。", "error");
+    notify("変更されませんでした。\n再読み込みしてください。", "error");
   } else {
     notify(doneMessage);
   }
@@ -2400,16 +2504,15 @@ async function updateMember(email, patch, doneMessage) {
 function confirmSelfLockout(r) {
   if (r.email !== myEmail) return true;
   const typed = prompt(
-    `自分自身（${r.email}）の管理者権限が無くなり、このコンソールを使えなくなります。\n` +
-      "ほかに実在する管理者がいることを確認してから進めてください。\n" +
-      "続ける場合は、自分のメールアドレスを入力してください。",
+    "自分の管理者権限が外れ、管理コンソールを使えなくなります。\n" +
+      "続けるには、自分のメールアドレスを入力してください。",
   );
   return normalizeEmail(typed ?? "") === myEmail;
 }
 
 async function changeStatus(r, status) {
   const label = status === "active" ? "有効に" : "停止";
-  if (status === "disabled" && !confirm(`${r.email} の利用を停止しますか？\n（1 分ほどで MCP が使えなくなります）`)) return;
+  if (status === "disabled" && !confirm(`${r.email} の利用を停止しますか？\n約 1 分で MCP が使えなくなります。`)) return;
   if (status === "active" && !confirm(`${r.email} の利用を再開しますか？`)) return;
   if (status === "disabled" && r.role === "admin" && !confirmSelfLockout(r)) return;
   await updateMember(r.email, { status }, `${r.email} を${label}しました。`);
@@ -2423,7 +2526,7 @@ async function changeRole(r, select) {
     patch.monthly_credits = DEFAULT_MONTHLY_CREDITS;
   }
   const extra = "monthly_credits" in patch
-    ? `\n（月額クレジットは初期値 ${formatCredits(DEFAULT_MONTHLY_CREDITS)}〔${formatYen(DEFAULT_MONTHLY_CREDITS)}〕にします）`
+    ? `\n月額クレジットは初期値の ${formatCredits(DEFAULT_MONTHLY_CREDITS)} になります。`
     : "";
   const roleLabel = roleLabelsFor(true)[role] ?? role;
   if (!confirm(`${r.email} の区分を「${roleLabel}」に変更しますか？${extra}`)) {
@@ -2434,7 +2537,7 @@ async function changeRole(r, select) {
     select.value = r.role;
     return;
   }
-  const hint = role === "student" && !r.cohort_id ? "所属する回を設定してください（回が未設定の間は生成できません）。" : "";
+  const hint = role === "student" && !r.cohort_id ? "回を設定するまで生成できません。" : "";
   await updateMember(r.email, patch, `${r.email} の区分を「${roleLabel}」に変更しました。${hint}`);
 }
 
@@ -2442,8 +2545,8 @@ async function changeCohort(r, select) {
   const id = select.value || null;
   const c = state.cohorts.find((x) => x.id === id);
   const label = id ? cohortLabel(c ?? { id }) : "未設定";
-  const note = id ? "日付とクレジットは回の設定に従います。" : "回を外すと、生成できなくなります（旧い個別の期間が残っている場合を除く）。";
-  if (!confirm(`${r.email} の所属する回を「${label}」にしますか？\n（${note}）`)) {
+  const note = id ? "日付とクレジットは回の設定に従います。" : "回を外すと、生成できなくなります（以前の個別の期間が残る人を除く）。";
+  if (!confirm(`${r.email} の所属する回を「${label}」にしますか？\n${note}`)) {
     select.value = r.cohort_id ?? "";
     return;
   }
@@ -2454,7 +2557,7 @@ async function saveMonthly(r, value) {
   clearNotice();
   const { patch, problems } = parseCreditForm({ monthly_credits: value }, { partial: false, fields: MONTHLY_FIELDS });
   if (problems.length) {
-    notify("保存できません。次の項目を確認してください。", "error", problems);
+    notify("保存エラー：入力に誤りがあります。", "error", problems);
     return;
   }
   const what = patch.monthly_credits === null ? "未設定" : `${formatCredits(patch.monthly_credits)}（${formatYen(patch.monthly_credits)}）`;
@@ -2472,12 +2575,35 @@ async function stageGrantedTotal(r) {
   return (data ?? []).reduce((n, g) => n + Number(g.credits ?? 0), 0);
 }
 
-/** 今の枠に一時追加する（時間枠は DB のトリガが決め、枠外なら拒否する）。段階の回は今の段階に付く */
-async function addGrant(r, creditsText, noteText) {
+/**
+ * 今の枠に一時追加する（時間枠は DB のトリガが決め、枠外なら拒否する）。段階の回は今の段階に付く。
+ * 送っている間（確かめの前の読み込みから返事まで）は、同じ人への 2 回目の押しを無視し、［追加する］を押せなくする。
+ * 確かめのあとは文字を「追加中…」にする（組 13 U-05・A-02。名簿の追加 submitAdd と同じ disabled と finally の形）
+ */
+async function addGrant(r, creditsText, noteText, button = null) {
+  if (grantBusy.has(r.email)) return;
+  grantBusy.add(r.email);
+  const label = button ? button.textContent : "";
+  if (button) button.disabled = true;
+  try {
+    await sendGrant(r, creditsText, noteText, () => {
+      if (button) button.textContent = GRANT_BUSY_LABEL;
+    });
+  } finally {
+    grantBusy.delete(r.email);
+    if (button) {
+      button.disabled = false;
+      button.textContent = label;
+    }
+  }
+}
+
+/** addGrant の中身。sending は確かめのあと、送る直前に呼ぶ */
+async function sendGrant(r, creditsText, noteText, sending) {
   clearNotice();
   const credits = parseGrantCredits(creditsText);
   if (credits === undefined) {
-    notify(`追加するクレジットは 1〜${formatCredits(MAX_CREDITS)} の整数で入力してください。`, "error");
+    notify(`クレジットは 1〜${formatCredits(MAX_CREDITS)} の整数です。`, "error");
     return;
   }
   const stageStudent = isStageStudent(r);
@@ -2485,20 +2611,24 @@ async function addGrant(r, creditsText, noteText) {
     // 段階の回は、10,000 の固定ではなく、この回の合計（T）で見る。T か追加済みが分からないときは DB が決める
     const over = stageGrantTotalProblem({ granted: await stageGrantedTotal(r), limit: state.stages.limitT }, credits);
     if (over) {
-      notify(`追加できません。${over}`, "error");
+      // 前にメールを付ける（名前が無いと回全体の合計と読める。D-1106-110x）。
+      // DB が断ったときの文（admin-lib.js の「${who}：」）と同じ形。メールが無ければ今の文のまま
+      notify(typeof r?.email === "string" && r.email ? `${r.email}：${over}` : over, "error");
       return;
     }
   } else {
     const over = grantTotalProblem(r, credits);
     if (over) {
-      notify(`追加できません。${over}。`, "error");
+      notify(over, "error");
       return;
     }
   }
   const note = String(noteText ?? "").trim();
   const where = stageStudent ? "今の段階" : "今の枠";
-  const stageLine = stageStudent ? "\nこの追加は、1 人あたりのこの回の追加の合計に数えます。取り消しても、合計からは減りません。" : "";
-  if (!confirm(`${r.email} の${where}に ${formatCredits(credits)} クレジット（${formatYen(credits)}）を追加しますか？${stageLine}`)) return;
+  const stageLine = stageStudent ? "\n取り消した分も、この人の回の追加の合計に含みます。" : "";
+  // 相手は表示名を先に、メールは括弧に（名簿で探した名前のまま照らせる。組 13 U-05・A-05）
+  if (!confirm(`${grantWhoNo(r, true)}${where}に ${formatCredits(credits)} クレジット（${formatYen(credits)}）を追加しますか？${stageLine}`)) return;
+  sending();
   let data;
   let error;
   if (stagesAvailable()) {
@@ -2510,13 +2640,15 @@ async function addGrant(r, creditsText, noteText) {
       .select("window_start, window_end")
       .maybeSingle());
   }
+  // 返事が来たら止めを外す（読み直しの描き直しで［追加中…］のまま残さない）
+  grantBusy.delete(r.email);
   if (error) {
-    notify(explainError(error), "error");
+    notify(errorText("追加", error), "error", [], null, null, errorCode("追加", error));
   } else {
     // 枠は DB のトリガがその時点の今の枠で決める（一覧が古いまま日付の境目をまたいでも、実際に付いた枠を示す）
     const row = Array.isArray(data) ? data[0] : data;
     const until = row?.window_end ? `（${windowLastDayText(row.window_end)} までの枠）` : "";
-    notify(`${r.email} の${stageStudent ? "今の段階" : "今の枠"}${until}に ${formatCredits(credits)} クレジットを追加しました。`);
+    notify(`${grantWhoNo(r)}${stageStudent ? "今の段階" : "今の枠"}${until}に ${formatCredits(credits)} クレジットを追加しました。`);
   }
   await refresh();
 }
@@ -2533,8 +2665,8 @@ async function removeGrant(r, g) {
     error = res.error;
     removed = !!res.data?.length;
   }
-  if (error) notify(explainError(error), "error");
-  else if (!removed) notify("取り消せませんでした（権限が無いか、対象が見つかりません）。", "error");
+  if (error) notify(errorText("削除", error), "error", [], null, null, errorCode("削除", error));
+  else if (!removed) notify("取り消されませんでした。\n再読み込みしてください。", "error");
   else notify(`${r.email} への追加（+${formatCredits(g.credits)}）を取り消しました。`);
   await refresh();
 }
@@ -2544,7 +2676,7 @@ async function revokeStageGrant(r, g) {
   clearNotice();
   if (!confirm(`${r.email} への追加（+${formatCredits(g.credits)}）を取り消しますか？\n${REVOKE_CONFIRM_TEXT}`)) return;
   const { error } = await supabase.rpc("revoke_stage_grant", { p_grant_id: g.id, p_note: null });
-  if (error) notify(explainError(error), "error");
+  if (error) notify(errorText("取り消し", error), "error", [], null, null, errorCode("取り消し", error));
   else notify(`${r.email} への追加（+${formatCredits(g.credits)}）を取り消しました。`);
   await refresh();
 }
@@ -2559,10 +2691,10 @@ async function removeMember(r) {
     notify(block, "error");
     return;
   }
-  if (!confirm(`${r.email} を名簿から削除しますか？\n（使用量の記録は残ります。元に戻すには追加し直してください）`)) return;
+  if (!confirm(`${r.email} を名簿から削除しますか？\n使用量の記録は残ります。`)) return;
   const { data, error } = await supabase.from("members").delete().eq("email", r.email).select("email");
-  if (error) notify(explainError(error), "error");
-  else if (!data?.length) notify("削除できませんでした（権限が無いか、対象が見つかりません）。", "error");
+  if (error) notify(errorText("削除", error, { target: "member" }), "error", [], null, null, errorCode("削除", error, { target: "member" }));
+  else if (!data?.length) notify("削除されませんでした。\n再読み込みしてください。", "error");
   else notify(`${r.email} を削除しました。`);
   await refresh();
 }
@@ -2572,7 +2704,7 @@ async function removeMember(r) {
 /** 送った人数より更新された人数が少ないとき（その間に削除・区分の変更があった）の説明 */
 function shortfallText(sent, updated) {
   return updated < sent
-    ? `${sent - updated} 人は更新されませんでした（その間に名簿から外された・区分が変わった可能性があります）。`
+    ? `${sent - updated} 人は更新されませんでした。`
     : "";
 }
 
@@ -2609,12 +2741,12 @@ function openCohortPicker(targets) {
       el("p", {
         className: "muted",
         text: single
-          ? `${displayName(single)} の所属する回を選びます。日付とクレジットは回の設定に従います。`
-          : `選んだ受講者 ${students.length} 人の所属する回を選びます。日付とクレジットは回の設定に従います。` +
+          ? `${displayName(single)} の所属する回を選びます。`
+          : `選んだ受講者 ${students.length} 人の所属する回を選びます。` +
             (targets.length > students.length ? `（メンバー ${targets.length - students.length} 人は対象外です）` : ""),
       }),
     ];
-    if (state.cohortsStatus === "error") body.push(warnBox(`回を読み込めませんでした。${state.cohortsError}`));
+    if (state.cohortsStatus === "error") body.push(cohortsLoadWarn());
     const list = state.cohorts.map((c) =>
       option(
         c.id,
@@ -2638,12 +2770,12 @@ async function applyCohort(targets, cohortId) {
   const students = targets.filter((r) => r.role === "student");
   const excluded = targets.length - students.length;
   if (!students.length) {
-    notify("受講者を選んでください（所属する回は受講者だけに設定します）。", "error");
+    notify("受講者を選んでください（回は受講者だけに設定します）。", "error");
     return;
   }
   const c = state.cohorts.find((x) => x.id === cohortId);
   const label = cohortId ? cohortLabel(c ?? { id: cohortId }) : "未設定";
-  if (!confirm(`受講者 ${students.length} 人の所属する回を「${label}」にしますか？${excluded ? `\n（受講者以外の ${excluded} 人は対象外のため除きます）` : ""}`)) return;
+  if (!confirm(`受講者 ${students.length} 人の所属する回を「${label}」にしますか？${excluded ? `\n受講者以外の ${excluded} 人は除きます。` : ""}`)) return;
   const emails = students.map((r) => r.email);
   const { data, error } = await supabase
     .from("members")
@@ -2652,7 +2784,7 @@ async function applyCohort(targets, cohortId) {
     .eq("role", "student")
     .select("email");
   if (error) {
-    notify(`所属する回を設定できませんでした（${explainError(error)}）。`, "error");
+    notify(errorText("回の設定", error), "error", [], null, null, errorCode("回の設定", error));
     await refresh();
     return;
   }
@@ -2660,7 +2792,7 @@ async function applyCohort(targets, cohortId) {
   const parts = [`受講者 ${updated} 人の所属する回を「${label}」にしました。`];
   const short = shortfallText(emails.length, updated);
   if (short) parts.push(short);
-  if (excluded) parts.push(`受講者以外の ${excluded} 人は対象外のため除きました。`);
+  if (excluded) parts.push(`受講者以外の ${excluded} 人は除きました。`);
   const clean = !short;
   notify(parts.join(""), clean ? "ok" : "error");
   if (clean) {
@@ -2683,10 +2815,10 @@ function openBulkMonthly(targets) {
       body: [
         el("p", {
           className: "muted",
-          text: `選んだ AIKENメンバー・講師 ${members.length} 人の月額クレジットを、同じ値にします。` +
+          text: `AIKENメンバー・講師 ${members.length} 人の月額を同じ値にします。` +
             (targets.length > members.length ? `（受講者 ${targets.length - members.length} 人は対象外です）` : ""),
         }),
-        field("毎月（日本時間の 1 日に戻る・繰り越しなし）", input, yenHint(input)),
+        field("毎月（1 日に戻る・繰り越しなし）", input, yenHint(input)),
       ],
       foot: [
         el("button", { type: "button", className: "btn primary big", text: `${members.length}人に設定`, onclick: () => applyBulkMonthly(members, input.value) }),
@@ -2700,7 +2832,7 @@ async function applyBulkMonthly(members, value) {
   clearNotice();
   const n = parseCredits(value);
   if (n === null || n === undefined) {
-    notify(`月額のクレジットは 0〜${formatCredits(MAX_CREDITS)} の整数で入力してください。`, "error");
+    notify(`月額のクレジットは 0〜${formatCredits(MAX_CREDITS)} の整数です。`, "error");
     return;
   }
   if (!members.length) {
@@ -2716,7 +2848,7 @@ async function applyBulkMonthly(members, value) {
     .in("role", ["member", "instructor"])
     .select("email");
   if (error) {
-    notify(`月額を設定できませんでした（${explainError(error)}）。`, "error");
+    notify(errorText("月額の設定", error), "error", [], null, null, errorCode("月額の設定", error));
     await refresh();
     return;
   }
@@ -2731,26 +2863,28 @@ function openBulkGrant(targets) {
   const credits = creditInput("", { placeholder: "例：500" });
   const note = textInput({ placeholder: "例：授業中に不足したため" });
   const eligible = targets.filter(canGrant);
+  const submit = el("button", {
+    type: "button",
+    className: "btn primary big",
+    text: `${eligible.length}人に追加`,
+    disabled: !eligible.length,
+    onclick: () => applyBulkGrant(targets, credits.value, note.value, submit),
+  });
   openSheet("bulk-grant", () =>
     setSheet({
       title: "クレジットを追加",
       body: [
         el("p", {
           className: "muted",
-          text: `選んだ ${targets.length} 人の今の枠に、1 人あたり同じ数を一時的に足します（繰り越しなし）。` +
-            (eligible.length < targets.length ? `今の枠が無い ${targets.length - eligible.length} 人は除きます。` : ""),
+          text: `選んだ ${targets.length} 人の今の枠に、同じ数を追加します。` +
+            (eligible.length < targets.length ? `今の枠がない ${targets.length - eligible.length} 人は除きます。` : ""),
+          title: "一時的な追加で、繰り越しはありません。",
         }),
-        field("1 人あたりのクレジット", credits, yenHint(credits)),
+        field("1 人あたりのクレジット", credits, yenHint(credits, 1)),
         field("メモ（任意。理由など）", note),
       ],
       foot: [
-        el("button", {
-          type: "button",
-          className: "btn primary big",
-          text: `${eligible.length}人に追加`,
-          disabled: !eligible.length,
-          onclick: () => applyBulkGrant(targets, credits.value, note.value),
-        }),
+        submit,
         cancelButton(),
       ],
     })
@@ -2761,11 +2895,31 @@ function openBulkGrant(targets) {
  * まとめて追加する。016 の DB では admin_grant_credits を 1 回（全員分が通るか、全部断られる。枠・段階は DB が人ごとに決める）。
  * 016 の前の DB では、今までどおり 1 人ずつ順に追加し、途中で失敗した人は理由を添えて知らせる
  */
-async function applyBulkGrant(targets, creditsText, noteText) {
+async function applyBulkGrant(targets, creditsText, noteText, button = null) {
+  // 送っている間の 2 回目の押しは無視し、ボタンを止める（組 13 U-05・A-02。1 人への追加 addGrant と同じ形）
+  if (bulkGrantBusy) return;
+  bulkGrantBusy = true;
+  const label = button ? button.textContent : "";
+  if (button) button.disabled = true;
+  try {
+    await sendBulkGrant(targets, creditsText, noteText, () => {
+      if (button) button.textContent = GRANT_BUSY_LABEL;
+    });
+  } finally {
+    bulkGrantBusy = false;
+    if (button) {
+      button.disabled = false;
+      button.textContent = label;
+    }
+  }
+}
+
+/** applyBulkGrant の中身。sending は確かめのあと、送る直前に呼ぶ */
+async function sendBulkGrant(targets, creditsText, noteText, sending) {
   clearNotice();
   const credits = parseGrantCredits(creditsText);
   if (credits === undefined) {
-    notify(`追加するクレジットは 1〜${formatCredits(MAX_CREDITS)} の整数で入力してください。`, "error");
+    notify(`クレジットは 1〜${formatCredits(MAX_CREDITS)} の整数です。`, "error");
     return;
   }
   const withWindow = targets.filter(canGrant);
@@ -2776,15 +2930,17 @@ async function applyBulkGrant(targets, creditsText, noteText) {
   if (!eligible.length) {
     notify(
       overTotal.length
-        ? `追加できる人がいません。${grantTotalProblem(overTotal[0], credits)}。`
-        : "今の枠がある人がいません（期間外・未設定の人には追加できません）。",
+        ? `全員が追加の上限（1 人 ${formatCredits(MAX_GRANT_TOTAL)} クレジット）を超えます。`
+        : "追加エラー：今の枠がある人がいません。",
       "error",
     );
     return;
   }
   const stageCount = eligible.filter(isStageStudent).length;
-  const stageNote = stageCount ? `（うち ${stageCount} 人は段階の回です。今の段階に付き、回の合計に数えます）` : "";
-  if (!confirm(`${eligible.length} 人の今の枠に、1 人あたり ${formatCredits(credits)} クレジット（${formatYen(credits)}）を追加しますか？${stageNote}`)) return;
+  const stageNote = stageCount ? `うち ${stageCount} 人は今の段階に付きます。` : "";
+  // 合わせていくつ配るかを 1 行で出す（暗算させない。組 13 U-05・A-05）
+  if (!confirm(`${eligible.length} 人の今の枠に、1 人あたり ${formatCredits(credits)} クレジットを追加しますか？\n${bulkGrantTotalLine(eligible.length, credits)}${stageNote ? `\n${stageNote}` : ""}`)) return;
+  sending();
   const note = String(noteText ?? "").trim() || null;
   let done = 0;
   const failed = [];
@@ -2792,7 +2948,7 @@ async function applyBulkGrant(targets, creditsText, noteText) {
     const { error } = await supabase.rpc("admin_grant_credits", { p_emails: eligible.map((r) => r.email), p_credits: credits, p_note: note });
     if (error) {
       // 通信の失敗では、追加が済んでいるかもしれない。「追加していません」とは言わず、読み直した名簿で確かめてもらう（U3-1）
-      notify(isNetworkFailure(error) ? MSG_BULK_GRANT_NETWORK_FAILURE : `追加できませんでした（全員分とも追加していません）。${explainError(error)}`, "error");
+      notify(isNetworkFailure(error) ? MSG_BULK_GRANT_NETWORK_FAILURE : `${errorText("追加", error)}\n誰にも追加していません。`, "error", [], null, null, isNetworkFailure(error) ? null : errorCode("追加", error));
       await refresh();
       return;
     }
@@ -2800,16 +2956,16 @@ async function applyBulkGrant(targets, creditsText, noteText) {
   } else {
     for (const r of eligible) {
       const { error } = await supabase.from("credit_grants").insert({ email: r.email, credits, note }).select("id").maybeSingle();
-      if (error) failed.push(`${r.email}：${explainError(error)}`);
+      if (error) failed.push(`${r.email}：${explainError(error, "追加")}`);
       else done++;
     }
   }
   const parts = [`${done} 人の今の枠に ${formatCredits(credits)} クレジットを追加しました。`];
   if (failed.length) parts.push(`次の ${failed.length} 人には追加できませんでした。`);
-  if (skipped.length) parts.push(`今の枠が無いため ${skipped.length} 人を除きました（${skipped.map((r) => r.email).join("、")}）。`);
+  if (skipped.length) parts.push(`今の枠がない ${skipped.length} 人を除きました（${skipped.map((r) => r.email).join("、")}）。`);
   if (overTotal.length) {
     parts.push(
-      `追加の合計が 1 人あたり ${formatCredits(MAX_GRANT_TOTAL)} を超えるため ${overTotal.length} 人を除きました（${overTotal.map((r) => r.email).join("、")}）。`,
+      `追加の上限を超える ${overTotal.length} 人を除きました（${overTotal.map((r) => r.email).join("、")}）。`,
     );
   }
   const clean = !failed.length && !skipped.length && !overTotal.length;
@@ -2822,7 +2978,7 @@ async function bulkStatus(targets, status) {
   clearNotice();
   if (!targets.length) return;
   const label = status === "active" ? "再開" : "停止";
-  const extra = status === "disabled" ? "\n（1 分ほどで MCP が使えなくなります）" : "";
+  const extra = status === "disabled" ? "\n約 1 分で MCP が使えなくなります。" : "";
   if (!confirm(`選んだ ${targets.length} 人の利用を${label}しますか？${extra}`)) return;
   const emails = targets.map((r) => r.email);
   const { data, error } = await supabase
@@ -2832,7 +2988,7 @@ async function bulkStatus(targets, status) {
     .in("role", ["student", "member"])
     .select("email");
   if (error) {
-    notify(`利用を${label}できませんでした（${explainError(error)}）。`, "error");
+    notify(errorText(label, error), "error", [], null, null, errorCode(label, error));
     await refresh();
     return;
   }
@@ -2860,7 +3016,11 @@ function buildAddUi() {
     placeholder: "student05@a-i-ken.jp\nstudent06@a-i-ken.jp, 受講者 06",
     autocomplete: "off",
   });
-  const bulk = field("メールアドレス（1行に1人）", bulkText, "「メールアドレス, 氏名」の形でも入れられます。登録済みの人は上書きせずにスキップします。");
+  const bulk = field(
+    "メールアドレス（1行に1人）",
+    bulkText,
+    el("span", { className: "hint", text: "「メールアドレス, 氏名」の形でも入力できます。", title: "登録済みの人は上書きせずにスキップします。" }),
+  );
   const role = (value, label, checked) => el("label", {}, el("input", { type: "radio", name: "add-role", value, checked }), label);
   const roles = el(
     "fieldset",
@@ -2890,12 +3050,13 @@ function buildAddUi() {
     "section",
     { className: "box" },
     el("h3", { text: "月額のクレジット（メンバー・講師）" }),
-    field("毎月（1日に戻る・繰越なし）", monthly, yenHint(monthly)),
+    field("毎月（1 日に戻る・繰り越しなし）", monthly, yenHint(monthly)),
     el("p", { className: "hint", text: `初期値は ${formatCredits(DEFAULT_MONTHLY_CREDITS)}。空欄にすると未設定（生成できません）。` }),
   );
   const adminNote = el("p", {
     className: "note-box",
-    text: "管理者はクレジットの枠の対象外です（直近 24 時間の上限のみ）。名簿・回・クレジットを操作できるようになります。",
+    text: "管理者はクレジットの枠の対象外です。",
+    title: "直近 24 時間の上限だけが効きます。名簿・回・クレジット・設定を操作できます。",
   });
   const submit = el("button", { type: "button", className: "btn primary big", id: "add-submit", onclick: () => submitAdd() });
 
@@ -2907,15 +3068,15 @@ function buildAddUi() {
     cohortField.hidden = missing;
     newCohortBtn.hidden = missing;
     if (missing) {
-      cohortPreview.replaceChildren(warnBox("DB の更新（回と会場：013）がまだ適用されていないため、回は設定せずに追加します。"));
+      cohortPreview.replaceChildren(warnBox("サーバーの更新が未適用です。回は設定せずに追加します。"));
       return;
     }
     const c = state.cohorts.find((x) => x.id === cohortSelect.value);
     if (!c) {
       cohortPreview.replaceChildren(
         state.cohortsStatus === "error"
-          ? warnBox(`回を読み込めませんでした。${state.cohortsError}`)
-          : warnBox("回が未設定のまま追加します（回を設定するまで生成できません）。"),
+          ? cohortsLoadWarn()
+          : warnBox("回が未設定のまま追加します。\n回を設定するまで生成できません。"),
       );
       return;
     }
@@ -3014,7 +3175,7 @@ function extrasForAdd(role) {
   if (isMonthlyRole(role)) {
     const { patch, problems } = parseCreditForm({ monthly_credits: addUi.monthly.value }, { partial: false, fields: MONTHLY_FIELDS });
     if (problems.length) {
-      notify("追加できません。月額クレジットを確認してください。", "error", problems);
+      notify("追加エラー：月額クレジットが正しくありません。", "error", problems);
       return null;
     }
     return patch;
@@ -3026,16 +3187,19 @@ function extrasForAdd(role) {
 async function insertMembers(rows) {
   const identity = currentIdentity();
   const stale = () => appClosed || !cohortCloseSameIdentity(currentIdentity(), identity);
-  const staleError = { message: "ログイン状態が変わりました。読み込み直してから追加してください。" };
-  if (stale()) return { error: staleError };
+  const staleError = { message: "ログイン状態が変わりました。\n再読み込みしてから追加してください。" };
+  // 画面の側で作った断りは、前置きを付けずにこのまま出す（text）。コードがあれば code
+  const staleResult = { error: staleError, text: staleError.message, code: null };
+  if (stale()) return staleResult;
   const existing = new Set();
   for (let i = 0; i < rows.length; i += 50) {
     const emails = rows.slice(i, i + 50).map((r) => r.email);
     const { data, error } = await supabase.from("members").select("email").in("email", emails);
-    if (stale()) return { error: staleError };
+    if (stale()) return staleResult;
     if (error) return { error };
     if (!Array.isArray(data) || data.some((r) => typeof r?.email !== "string" || !emails.includes(r.email))) {
-      return { error: { message: "登録済みの名簿を確認できませんでした。読み込み直してから追加してください。" } };
+      const message = "追加エラー：登録済みの名簿を確認できません。";
+      return { error: { message }, text: message, code: "E-ADM-54" };
     }
     for (const row of data) existing.add(row.email);
   }
@@ -3082,18 +3246,19 @@ async function addOne(role, extras) {
   const email = normalizeEmail(addUi.email.value);
   const problem = emailProblem(email);
   if (problem) {
-    notify(`追加できません：${problem}`, "error");
+    notify(`追加エラー：${problem}`, "error");
     return;
   }
   const name = addUi.name.value.trim();
   if (!(await confirmAddAsAdmin(role, [email]))) return;
   const result = await insertMembers([{ email, display_name: name || null, role, ...extras }]);
   if (result.error) {
-    notify(explainError(result.error), "error");
+    const failed = result.text ? { text: result.text, code: result.code ?? null } : errorInfo("追加", result.error);
+    notify(failed.text, "error", [], null, null, failed.code);
     return;
   }
   if (result.added === 0) {
-    notify(`${email} は既に登録済みのため、スキップしました（上書きはしていません）。`, "error");
+    notify(`${email} は登録済みです（上書きしていません）。`, "error");
   } else {
     notify(`${email} を追加しました。`);
     addUi.email.value = "";
@@ -3106,13 +3271,14 @@ async function addBulk(role, extras) {
   const { valid, invalid, duplicates } = parseBulk(addUi.bulkText.value);
   const problems = invalid.map((p) => `${p.line} 行目「${p.text}」：${p.reason}`);
   if (!valid.length) {
-    notify(invalid.length ? "追加できる行がありません。次の行を確認してください。" : "追加する行がありません。", "error", problems);
+    notify(invalid.length ? "追加エラー：すべての行に誤りがあります。" : "追加エラー：メールアドレスが未入力です。", "error", problems);
     return;
   }
   if (!(await confirmAddAsAdmin(role, valid.map((v) => v.email)))) return;
   const result = await insertMembers(valid.map((v) => ({ ...v, role, ...extras })));
   if (result.error) {
-    notify(explainError(result.error), "error", problems);
+    const failed = result.text ? { text: result.text, code: result.code ?? null } : errorInfo("追加", result.error);
+    notify(failed.text, "error", problems, null, null, failed.code);
     return;
   }
   // 登録済みでスキップした人は誰かを、折りたたみ［詳しく］のメールで見せる（U3-12。その人は当日使えない）
@@ -3192,11 +3358,11 @@ function cohortCloseBox(c) {
     ...(error ? [error] : cohortCloseLines(status)).map((text) => el("p", { className: error ? "warn-text small" : "hint", text })),
     cohortCloseCanAct(status, kind) ? el("button", {
       type: "button", className: kind === "close" ? "btn danger" : "btn",
-      text: kind === "close" ? "この回をクローズ" : "回を開き直す", disabled: state.cohortCloseBusy,
+      text: kind === "close" ? "この回をクローズ" : "回を再開する", disabled: state.cohortCloseBusy,
       onclick: () => changeAdminCohortClose(kind, c.id),
     }) : null,
     el("button", {
-      type: "button", className: "link-btn", text: "クローズの状態を読み直す", disabled: state.cohortCloseBusy,
+      type: "button", className: "link-btn", text: "最新にする", disabled: state.cohortCloseBusy,
       onclick: async () => { await loadCohortCloseStatus(c.id); renderAll(); },
     }),
   );
@@ -3207,7 +3373,7 @@ const adminCohortCloseAction = createCohortCloseAction({
   canStart: () => !appClosed && !state.cohortCloseBusy,
   // help（削除の予定・対象外・再開の期限。組 13 の INS-130 で lines から移した）は窓の下の注記に出す（落とさない）
   confirm: ({ title, lines, okText, help = null }) => ask({ title, lines, note: help, buttons: [
-    { label: "やめる", value: false }, { label: okText, value: true, kind: "danger" },
+    { label: "キャンセル", value: false }, { label: okText, value: true, kind: "danger" },
   ], cancelValue: false, focusValue: false }),
   onBusy: (busy) => {
     state.cohortCloseBusy = busy;
@@ -3223,9 +3389,9 @@ const adminCohortCloseAction = createCohortCloseAction({
   onSuccess: async (_status, raw, kind, isCurrent) => {
     if (!isCurrent()) return;
     notify(raw.changed === false
-      ? kind === "close" ? "この回はすでにクローズされています。" : "この回はすでに開き直されています。"
-      : kind === "close" ? "回をクローズしました。最新の名簿と削除予定を確認してください。"
-      : `回を開き直し、${raw.restored_count} 人を有効に戻しました。個別変更などで戻さなかった人は ${raw.skipped_count} 人です。`);
+      ? kind === "close" ? "この回はクローズ済みです。" : "この回は再開済みです。"
+      : kind === "close" ? "回をクローズしました。"
+      : `回を再開しました。\n有効に戻した受講者：${raw.restored_count} 人（対象外 ${raw.skipped_count} 人）`);
     await Promise.all([loadCohorts(), loadUsage()]);
     if (isCurrent()) await loadCohortCloseStatus(state.cohortId);
   },
@@ -3248,7 +3414,8 @@ function renderCohorts() {
     return;
   }
   if (state.cohortsStatus === "error") {
-    main.replaceChildren(errorBox(`回を読み込めませんでした。${state.cohortsError}`));
+    const failed = errorInfo("回の読み込み", state.cohortsErrorRaw);
+    main.replaceChildren(errorBox(failed.text, refresh, failed.code));
     return;
   }
   main.replaceChildren(...[
@@ -3260,7 +3427,7 @@ function renderCohorts() {
 function cohortCards() {
   if (!state.cohorts.length) {
     return emptyBox(
-      state.venues.length ? "回がまだありません。" : "回がまだありません。先に会場を追加してから、回を作ります。",
+      state.venues.length ? "回はまだありません" : "回はまだありません。先に会場を追加してください。",
       el("button", { type: "button", className: "btn primary", text: "回を作成", onclick: () => openCohortNew() }),
     );
   }
@@ -3296,7 +3463,7 @@ function cohortCards() {
               bar(u.pct),
             )
             : null,
-          c.has_unset_credits && c.current_period !== "after" ? warnBox("クレジットが未設定です（このままでは生成できません）", "span") : null,
+          c.has_unset_credits && c.current_period !== "after" ? warnBox("クレジットが未設定です（生成できません）。", "span") : null,
           el("span", { className: "meta" }, icon("users", 14), el("span", { className: "num", text: `受講者 ${Number(c.member_count ?? 0)}人` })),
         ),
       );
@@ -3316,7 +3483,7 @@ function cohortTable() {
       "section",
       { className: "list-panel" },
       head,
-      emptyBox(state.venues.length ? "回がまだありません。「回を作成」から作ります。" : "回がまだありません。先に下の「会場を追加」から会場を登録します。"),
+      emptyBox(state.venues.length ? "回はまだありません" : "回はまだありません。先に会場を追加してください。"),
     );
   }
   const th = el(
@@ -3392,9 +3559,9 @@ function venuesSection() {
         : el("button", { type: "button", className: "icon-btn bare", "aria-label": `${v.name}を編集`, onclick: () => openVenue(v) }, icon("edit")),
     )
   );
-  const list = items.length ? el("ul", { className: "venues" }, ...items) : el("p", { className: "muted small", text: "会場がありません。" });
+  const list = items.length ? el("ul", { className: "venues" }, ...items) : el("p", { className: "muted small", text: "会場はまだありません" });
   const addBtn = el("button", { type: "button", className: isDesktop() ? "btn" : "link-btn", text: "会場を追加", onclick: () => openVenue(null) });
-  const note = el("p", { className: "hint", text: "会場番号は回の ID の先頭 2 桁になります。番号を変えると、その会場の回の ID も変わります。" });
+  const note = el("p", { className: "hint", text: "会場番号は回の ID の先頭 2 桁です。", title: "番号を変えると、その会場の回の ID も変わります。" });
   if (isDesktop()) {
     return el("section", { className: "list-panel", "aria-labelledby": "venues-h" }, el("div", { className: "card-section-head" }, el("h2", { id: "venues-h", text: "会場" }), addBtn), list, el("div", { className: "panel-foot" }, note));
   }
@@ -3411,7 +3578,7 @@ let cohortSeq = 0;
 
 async function openCohort(id) {
   if (state.cohortDraft && state.cohortDraft.id !== id) {
-    if (!confirm(`${state.cohortDraft.id} の未保存の変更を捨てて、${id} を開きますか？`)) return;
+    if (!confirm(`${state.cohortDraft.id} の変更を破棄して、${id} を開きますか？`)) return;
     state.cohortDraft = null;
   }
   const seq = ++cohortSeq;
@@ -3423,7 +3590,7 @@ async function openCohort(id) {
     else renderCohorts();
     renderCohortAside();
   } else {
-    openSheet("cohort", () => setSheet({ title: id, body: [el("p", { className: "muted", text: "最新の状態を読み込んでいます…" })] }));
+    openSheet("cohort", () => setSheet({ title: id, body: [el("p", { className: "muted", text: "読み込み中…" })] }));
   }
   // 編集の前に読み直す（人数・使用・日付を最新に）
   await Promise.all([loadCohorts(), loadUsage(), loadStageInfo()]);
@@ -3435,10 +3602,8 @@ async function openCohort(id) {
   state.cohortLoading = false;
   if (!isDesktop() && sheetKind !== "cohort") return;
   if (!state.cohorts.some((c) => c.id === id)) {
-    notify(
-      state.cohortsStatus === "error" ? `回を読み込めませんでした。${state.cohortsError}` : `${id} は見つかりませんでした（削除・ID の変更があった可能性があります）。`,
-      "error",
-    );
+    const failed = state.cohortsStatus === "error" ? errorInfo("回の読み込み", state.cohortsErrorRaw) : { text: `${id} が見つかりません。`, code: null };
+    notify(failed.text, "error", [], null, null, failed.code);
     state.cohortId = null;
     if (sheetKind === "cohort") closeSheet();
     renderAll();
@@ -3469,7 +3634,7 @@ async function loadDeadlines(cohortId) {
             return { data: null, error };
           }
         },
-        confirm: ({ title, lines, okText }) => ask({ title, lines, buttons: [{ label: "やめる", value: false }, { label: okText, value: true, kind: "primary" }], cancelValue: false }),
+        confirm: ({ title, lines, okText }) => ask({ title, lines, buttons: [{ label: "キャンセル", value: false }, { label: okText, value: true, kind: "primary" }], cancelValue: false }),
         notify: (message, kind) => notify(message, kind),
         explain: explainError,
       });
@@ -3478,12 +3643,12 @@ async function loadDeadlines(cohortId) {
   } catch {
     if (state.deadlines !== d || d.cohortId !== cohortId) return;
     d.cohortId = null; // 次の描き直しで、もう一度読む
-    deadlinesHost.replaceChildren(el("p", { className: "muted small", text: "提出の受け付けの設定を読み込めませんでした。" }));
+    deadlinesHost.replaceChildren(el("p", { className: "muted small", text: "読み込みエラー：提出の受付を取得できません。" }));
   }
 }
 function submissionDeadlinesBox(c) {
   if (state.deadlines?.cohortId !== c.id) void loadDeadlines(c.id);
-  return el("section", { className: "box", id: "cohort-submissions-box" }, el("h3", { className: "minor", text: "提出の受け付けの終わり" }), deadlinesHost);
+  return el("section", { className: "box", id: "cohort-submissions-box" }, el("h3", { className: "minor", text: "提出の受付終了" }), deadlinesHost);
 }
 
 function cohortHead(c, titleId) {
@@ -3501,7 +3666,7 @@ function cohortMembers(c) {
 }
 
 /** 段階ごとの枠の回の、Day ごとのクレジットの代わりの 1 行（1280 の右の欄と 360 のシートで同じ文） */
-const STAGE_LIMIT_NOTE = "この回の上限は、段階ごとに決まります（下の「段階」で変えます）。";
+const STAGE_LIMIT_NOTE = "上限は段階ごとに決まります（下の［段階を編集］）。";
 
 function renderCohortSheet() {
   const c = state.cohorts.find((x) => x.id === state.cohortId);
@@ -3533,11 +3698,11 @@ function renderCohortSheet() {
       ),
       periodList(c, c.current_period, { credits: !stageMode }),
       stageMode ? el("p", { className: "note-box", text: STAGE_LIMIT_NOTE }) : null,
-      el("p", { className: "hint", text: "変更すると、所属している受講者全員に反映されます。" }),
+      el("p", { className: "hint", text: "所属する受講者全員に反映されます。" }),
     );
   setSheet({
     head: cohortHead(c, "sheet-title"),
-    body: [schedule, cohortSumBox(c), cohortCloseBox(c), ...stageBoxes(c), cohortStudentsBox(c, 5), cohortAddButtons(c), ...cohortManage(c)],
+    body: [schedule, cohortSumBox(c), cohortStudentsBox(c, 5), cohortAddButtons(c), ...stageBoxes(c), cohortCloseBox(c), ...cohortManage(c)],
   });
 }
 
@@ -3550,10 +3715,11 @@ function renderCohortAside() {
   }
   const c = state.cohortId && state.cohorts.find((x) => x.id === state.cohortId);
   if (!c) {
-    aside.replaceChildren(el("p", { className: "side-empty", text: "回を選ぶと、ここで設定できます。" }));
+    aside.replaceChildren(el("p", { className: "side-empty", text: "回を選んでください" }));
     return;
   }
-  aside.replaceChildren(cohortHead(c, "aside-cohort-title"), cohortEditForm(c), cohortSumBox(c), cohortCloseBox(c), ...stageBoxes(c), cohortStudentsBox(c, 5), cohortAddButtons(c), ...cohortManage(c));
+  // 並び（組 13・settings/DESIGN.md P-2 案 a）：回の編集の欄の次に合計と受講者、回のクローズは下へ（案 b は編集の欄が受講者の欄に見えたので撤退の線どおり戻した）
+  aside.replaceChildren(cohortHead(c, "aside-cohort-title"), cohortEditForm(c), cohortSumBox(c), cohortStudentsBox(c, 5), cohortAddButtons(c), ...stageBoxes(c), cohortCloseBox(c), ...cohortManage(c));
 }
 
 function cohortSumBox(c) {
@@ -3575,7 +3741,7 @@ function cohortSumBox(c) {
       bar(u.pct, false, "thick"),
     );
   } else if (u) {
-    content.push(warnBox(`${u.periodLabel}のクレジットが未設定です（このままでは生成できません）`));
+    content.push(warnBox(`${u.periodLabel}のクレジットが未設定です（生成できません）。`));
   } else {
     content.push(
       el("p", {
@@ -3595,7 +3761,7 @@ function cohortSumBox(c) {
       el("span", { className: "small muted num", text: `受講者 ${Number(c.member_count ?? 0)}人` }),
     ),
     ...content,
-    u ? el("p", { className: "hint", text: "1 人あたりのクレジット × 人数に対する使用（一時的な追加は含みません）。" }) : null,
+    u ? el("p", { className: "hint", text: "1 人あたりのクレジット × 人数に対する使用です。", title: "一時的な追加は含みません。" }) : null,
   );
 }
 
@@ -3628,7 +3794,7 @@ function cohortStudentsBox(c, limit) {
     "section",
     { className: "box tight" },
     el("div", { className: "box-head" }, el("h3", { text: "受講者" }), el("span", { className: "small muted", text: "残りの少ない順" })),
-    items.length ? el("ul", { className: "people" }, ...items) : el("p", { className: "muted small", text: "まだ所属している受講者がいません。" }),
+    items.length ? el("ul", { className: "people" }, ...items) : el("p", { className: "muted small", text: "所属する受講者はまだいません" }),
     members.length
       ? el("button", {
         type: "button",
@@ -3703,7 +3869,7 @@ function cohortInputs(values = {}, rule = null) {
   };
   const name = textInput({ placeholder: "例：第2回" });
   name.value = values.name ?? "";
-  const note = textInput({ placeholder: "例：講師 小野寺さん" });
+  const note = textInput({ placeholder: "例：講師 〇〇さん" });
   note.value = values.note ?? "";
   const idNow = () => cohortIdOf(venue.value, day1.value);
   return {
@@ -3742,7 +3908,8 @@ function creditsFieldset(f, currentPeriod = null) {
     el("div", { className: "grid-3" }, ...Object.entries(labels).map(([k, label]) => field(label, f.credits[k]))),
     el("span", {
       className: "hint",
-      text: `1 クレジット＝$0.01（約 ${yenPerCredit()} 円）。空欄のままだと、その期間は生成できません。${now ? "太枠は今の期間です。" : ""}`,
+      text: `空欄の期間は生成できません。${now ? "太枠は今の期間です。" : ""}`,
+      title: `1 クレジット＝$0.01（約 ${yenPerCredit()} 円）。`,
     }),
   );
 }
@@ -3766,7 +3933,10 @@ function openCohortNew({ returnToAdd = false } = {}) {
     const id = f.idNow();
     idText.textContent = id ?? `${f.venue.value || "__"}-______`;
     submit.textContent = id ? `${id} を作成する` : "作成する";
-    dup.textContent = id && state.cohorts.some((c) => c.id === id) ? `${id} は既にあります（同じ会場・同じ Day1 の回は作れません）。` : "";
+    const exists = !!id && state.cohorts.some((c) => c.id === id);
+    dup.textContent = exists ? `${id} はすでにあります。` : "";
+    if (exists) dup.setAttribute("title", "同じ会場・同じ Day1 の回は作れません。");
+    else dup.removeAttribute("title");
   };
   f.onChange(update);
   update();
@@ -3780,7 +3950,7 @@ function openCohortNew({ returnToAdd = false } = {}) {
       "div",
       { className: "preview-cell id-preview", "aria-live": "polite" },
       el("div", { className: "field" }, el("span", { className: "hint", text: "回の ID（自動）" }), idText, dup),
-      el("span", { className: "hint", text: "会場番号と Day1 の日付で決まります。同じ会場・同じ日の回は作れません。" }),
+      el("span", { className: "hint", text: "会場番号と Day1 の日付で決まります。", title: "同じ会場・同じ日の回は作れません。" }),
     ),
   );
   openSheet("cohort-new", () =>
@@ -3806,20 +3976,20 @@ async function createCohort(f, { returnToAdd }) {
   clearNotice();
   const { patch, problems } = parseCohortForm(f.read());
   if (problems.length) {
-    notify("作成できません。次の項目を確認してください。", "error", problems);
+    notify("作成エラー：入力に誤りがあります。", "error", problems);
     return;
   }
   const id = cohortIdOf(patch.venue_no, patch.day1_date);
   if (state.cohorts.some((c) => c.id === id)) {
-    notify(`${id} は既にあります（同じ会場・同じ Day1 の回は作れません）。`, "error");
+    notify(`${id} はすでにあります。`, "error");
     return;
   }
   const unset = ["day1_credits", "bridge_credits", "day2_credits"].filter((k) => patch[k] === null);
-  if (unset.length && !confirm(`クレジットが未設定の期間があります（その期間は生成できません）。このまま ${id} を作成しますか？`)) return;
+  if (unset.length && !confirm(`このまま ${id} を作成しますか？\nクレジットが未設定の期間は生成できません。`)) return;
   // id は送らない（DB が会場番号と Day1 から決める）
   const { data, error } = await supabase.from("cohorts").insert(patch).select("id").maybeSingle();
   if (error) {
-    notify(explainError(error), "error");
+    notify(errorText("作成", error), "error", [], null, null, errorCode("作成", error));
     return;
   }
   const newId = data?.id ?? id;
@@ -3846,7 +4016,7 @@ function cohortEditForm(c) {
   const idLine = el("p", { className: "note-box num", "aria-live": "polite" });
   const draftLine = el("p", { className: "hint warn-text", role: "status" });
   const showDraft = () => {
-    draftLine.textContent = state.cohortDraft?.id === c.id ? "未保存の変更があります（保存するまで反映されません。「元に戻す」で捨てます）。" : "";
+    draftLine.textContent = state.cohortDraft?.id === c.id ? "未保存の変更があります。" : "";
     draftLine.hidden = !draftLine.textContent;
   };
   const remember = () => {
@@ -3868,7 +4038,7 @@ function cohortEditForm(c) {
   showDraft();
   const update = () => {
     const id = f.idNow();
-    const parts = [`変更は所属している受講者 ${Number(c.member_count ?? 0)} 人全員に反映されます。`];
+    const parts = [`所属する受講者 ${Number(c.member_count ?? 0)} 人全員に反映されます。`];
     if (id && id !== c.id) parts.push(`回の ID が ${c.id} → ${id} に変わります。`);
     else parts.push("Day1 の日付・会場を変えると、回の ID も変わります。");
     idLine.textContent = parts.join("");
@@ -3894,7 +4064,7 @@ function cohortEditForm(c) {
       el("button", {
         type: "button",
         className: "btn",
-        text: state.cohortEditing && !isDesktop() ? "やめる" : "元に戻す",
+        text: state.cohortEditing && !isDesktop() ? "キャンセル" : "元に戻す",
         onclick: () => {
           state.cohortDraft = null;
           state.cohortEditing = false;
@@ -3914,12 +4084,12 @@ async function saveCohort(c, f) {
   clearNotice();
   const { patch, problems } = parseCohortForm(f.read());
   if (problems.length) {
-    notify("保存できません。次の項目を確認してください。", "error", problems);
+    notify("保存エラー：入力に誤りがあります。", "error", problems);
     return;
   }
   const newId = cohortIdOf(patch.venue_no, patch.day1_date);
   if (newId !== c.id && state.cohorts.some((x) => x.id === newId)) {
-    notify(`${newId} は既にあります（同じ会場・同じ Day1 の回にはできません）。`, "error");
+    notify(`${newId} はすでにあります。`, "error");
     return;
   }
   const available = stagesAvailable();
@@ -3929,15 +4099,15 @@ async function saveCohort(c, f) {
     if (stageMode) for (const k of ["day1_credits", "bridge_credits", "day2_credits"]) delete patch[k];
     const dateProblem = cohortDateProblem(cohortFull(c), patch);
     if (dateProblem) {
-      notify(`保存できません。${dateProblem}`, "error");
+      notify(`保存エラー：${dateProblem}`, "error");
       return;
     }
   }
   const lines = [`${c.id} の設定を保存しますか？`];
-  if (newId !== c.id) lines.push(`・回の ID が ${c.id} → ${newId} に変わります（所属する受講者は新しい ID に移ります）。`);
-  if (Number(c.member_count ?? 0) > 0) lines.push(`・所属している受講者 ${c.member_count} 人全員に反映されます。`);
+  if (newId !== c.id) lines.push(`・回の ID が ${c.id} → ${newId} に変わります。`);
+  if (Number(c.member_count ?? 0) > 0) lines.push(`・所属する受講者 ${c.member_count} 人全員に反映されます。`);
   if (patch.day1_date !== c.day1_date || patch.day2_date !== c.day2_date) {
-    lines.push("・日付を変えると、前の日付の枠に付けた一時的な追加は、新しい枠には数えられません。");
+    lines.push("・前の日付の枠に付けた追加は、新しい枠に数えません。");
   }
   if (!confirm(lines.join("\n"))) return;
   // id は送らない（会場番号・Day1 を変えると DB が計算し直す）。016 の DB では admin_update_cohort（日付の規則は DB が判定する）
@@ -3956,12 +4126,12 @@ async function saveCohort(c, f) {
     notFound = !error && !rowId;
   }
   if (error) {
-    notify(explainError(error), "error");
+    notify(errorText("保存", error), "error", [], null, null, errorCode("保存", error));
     await refresh();
     return;
   }
   if (notFound) {
-    notify("変更できませんでした（権限が無いか、対象が見つかりません）。", "error");
+    notify("保存されませんでした。\n再読み込みしてください。", "error");
   } else {
     state.cohortId = rowId;
     state.cohortEditing = false;
@@ -3978,10 +4148,10 @@ async function removeCohort(c) {
     notify(block, "error");
     return;
   }
-  if (!confirm(`${c.id} を削除しますか？（元に戻せません）`)) return;
+  if (!confirm(`${c.id} を削除しますか？\n元に戻せません。`)) return;
   const { data, error } = await supabase.from("cohorts").delete().eq("id", c.id).select("id");
-  if (error) notify(explainError(error), "error");
-  else if (!data?.length) notify("削除できませんでした（権限が無いか、対象が見つかりません）。", "error");
+  if (error) notify(errorText("削除", error), "error", [], null, null, errorCode("削除", error));
+  else if (!data?.length) notify("削除されませんでした。\n再読み込みしてください。", "error");
   else {
     notify(`${c.id} を削除しました。`);
     state.cohortId = null;
@@ -4011,8 +4181,8 @@ function openVenue(v) {
         el("p", {
           className: "hint",
           text: v && used
-            ? `この会場には回が ${used} 件あります。番号を変えると、その回の ID の先頭 2 桁も変わります。`
-            : "会場番号は回の ID の先頭 2 桁になります（例：06-261120）。",
+            ? `番号を変えると、回 ${used} 件の ID も変わります。`
+            : "会場番号は回の ID の先頭 2 桁です（例：06-261120）。",
         }),
         v
           ? el(
@@ -4028,7 +4198,9 @@ function openVenue(v) {
             }),
           )
           : null,
-        v && used ? el("p", { className: "hint", text: "回がある会場は削除できません（新しい回で選べないようにするには、上のチェックを外します）。" }) : null,
+        v && used
+          ? el("p", { className: "hint", text: "回がある会場は削除できません。", title: "新しい回で選べないようにするには、上のチェックを外します。" })
+          : null,
       ],
       foot: [
         el("button", { type: "button", className: "btn primary big", text: v ? "保存" : "追加する", onclick: () => saveVenue(v, { no: no.value, name: name.value, note: note.value, active: active.checked }) }),
@@ -4042,11 +4214,11 @@ async function saveVenue(v, raw) {
   clearNotice();
   const { patch, problems } = parseVenueForm(raw);
   if (problems.length) {
-    notify("保存できません。次の項目を確認してください。", "error", problems);
+    notify("保存エラー：入力に誤りがあります。", "error", problems);
     return;
   }
   if ((!v || patch.no !== v.no) && state.venues.some((x) => x.no === patch.no)) {
-    notify(`会場番号 ${patch.no} は既に使われています。`, "error");
+    notify(`会場番号 ${patch.no} はすでに使われています。`, "error");
     return;
   }
   let result;
@@ -4056,16 +4228,16 @@ async function saveVenue(v, raw) {
     const used = state.cohorts.filter((c) => c.venue_no === v.no);
     if (patch.no !== v.no && used.length) {
       const example = used[0].id;
-      if (!confirm(`会場番号を ${v.no} → ${patch.no} に変えると、この会場の回 ${used.length} 件の ID も変わります（例：${example} → ${patch.no}${example.slice(2)}）。よろしいですか？`)) return;
+      if (!confirm(`会場番号を ${v.no} → ${patch.no} に変更しますか？\n回 ${used.length} 件の ID も変わります（例：${example} → ${patch.no}${example.slice(2)}）。`)) return;
     }
     result = await supabase.from("venues").update(patch).eq("no", v.no).select("no");
   }
   if (result.error) {
-    notify(explainError(result.error), "error");
+    notify(errorText("保存", result.error), "error", [], null, null, errorCode("保存", result.error));
     return;
   }
   if (!result.data?.length) {
-    notify("保存できませんでした（権限が無いか、対象が見つかりません）。", "error");
+    notify("保存されませんでした。\n再読み込みしてください。", "error");
   } else {
     notify(v ? `会場 ${patch.no} を保存しました。` : `会場 ${patch.no}（${patch.name}）を追加しました。`);
     closeSheet();
@@ -4076,8 +4248,8 @@ async function saveVenue(v, raw) {
 async function removeVenue(v) {
   if (!confirm(`会場 ${v.no}（${v.name}）を削除しますか？`)) return;
   const { data, error } = await supabase.from("venues").delete().eq("no", v.no).select("no");
-  if (error) notify(explainError(error), "error");
-  else if (!data?.length) notify("削除できませんでした（権限が無いか、対象が見つかりません）。", "error");
+  if (error) notify(errorText("削除", error), "error", [], null, null, errorCode("削除", error));
+  else if (!data?.length) notify("削除されませんでした。\n再読み込みしてください。", "error");
   else {
     notify(`会場 ${v.no} を削除しました。`);
     closeSheet();
@@ -4101,7 +4273,8 @@ async function loadSettingsInfo() {
   // 保存より前に出した読み込み・より新しい読み込みに追い越された応答は捨てる（保存のあとの値を古い値に戻さない。Codex TASK-0092 F2）
   if (!gates.info.accept(ticket)) return true;
   if (error) {
-    S.error = explainError(error);
+    S.error = errorText("読み込み", error);
+    S.errorCode = errorCode("読み込み", error);
     if (S.status !== "ok") S.status = "error";
     return false;
   }
@@ -4110,6 +4283,7 @@ async function loadSettingsInfo() {
   applyFxRate(data?.fx_usd_jpy);
   S.status = "ok";
   S.error = "";
+  S.errorCode = null;
   S.infoAt = Date.now();
   return true;
 }
@@ -4121,13 +4295,15 @@ async function loadSettingsHistory() {
   if (appClosed) return false;
   if (!gates.history.accept(ticket)) return true;
   if (error) {
-    S.historyError = explainError(error);
+    S.historyError = errorText("読み込み", error);
+    S.historyErrorCode = errorCode("読み込み", error);
     if (S.historyStatus !== "ok") S.historyStatus = "error";
     return false;
   }
   S.history = data ?? [];
   S.historyStatus = "ok";
   S.historyError = "";
+  S.historyErrorCode = null;
   S.historyAt = Date.now();
   return true;
 }
@@ -4152,7 +4328,9 @@ async function loadModels({ resetDraft = false } = {}) {
   if (appClosed) return false;
   if (!gates.models.accept(ticket)) return true;
   if (status !== 200 || !Array.isArray(body?.models)) {
-    S.modelsError = status === 200 ? "モデルの一覧の形が正しくありません。" : explainApiError(status, body);
+    const failed = status === 200 ? { text: "読み込みエラー：モデル一覧の形式が不正です。", code: "E-ADM-54" } : apiErrorInfo(status, body, "モデル一覧");
+    S.modelsError = failed.text;
+    S.modelsErrorCode = failed.code;
     if (S.modelsStatus !== "ok") S.modelsStatus = "error";
     return false;
   }
@@ -4175,14 +4353,14 @@ async function loadModels({ resetDraft = false } = {}) {
     // 基準だけが黙って新しくならないよう、乗せ直すか捨てるかを選ばせる。Esc・背景は「乗せ直す」（下書きを捨てない側。保存はまだしない）
     const n = conflicts.reduce((sum, sc) => sum + pendingBy[sc.key], 0);
     keep = await ask({
-      title: "未保存のモデルの変更を、新しい設定に乗せ直しますか？",
+      title: "未保存の変更を引き継ぎますか？",
       lines: [
-        `読み込み直したところ、ほかの管理者がモデルの設定（${conflicts.map((sc) => sc.label).join("・")}）を変えていました。`,
-        `あなたの未保存の変更は ${n} 件です。乗せ直すと、あなたが変えたところだけを新しい設定に当てます（保存はまだしません）。`,
+        `ほかの管理者が ${conflicts.map((sc) => sc.label).join("・")} のモデル設定を変更しました。`,
+        `引き継ぐと、未保存の変更 ${n} 件を新しい設定に重ねます（保存はしません）。`,
       ],
       buttons: [
-        { label: "破棄して新しい設定を表示", value: false, kind: "danger" },
-        { label: "新しい設定に乗せ直す", value: true, kind: "primary" },
+        { label: "破棄する", value: false, kind: "danger" },
+        { label: "引き継ぐ", value: true, kind: "primary" },
       ],
       cancelValue: true,
     });
@@ -4201,10 +4379,11 @@ async function loadModels({ resetDraft = false } = {}) {
   S.resetNull = Object.fromEntries(carry.keep.map((key) => [key, true]));
   if (carry.lost.length) {
     // 消した区分は、下書きも基準（読み直した値）に戻してある。表示と合わせて、閉じるまで残す警告で知らせる
-    notify(`${carry.lost.map(scopeLabel).join("・")}の一覧がほかで変わったため、「制限なしに戻す」は取り消されました。表示は最新の設定に戻しています。もう一度押してから保存してください。`, "warn");
+    notify(`${carry.lost.map(scopeLabel).join("・")}の一覧が変更されました。\n再度［制限なしに戻す］を押して、保存してください。`, "warn");
   }
   S.modelsStatus = "ok";
   S.modelsError = "";
+  S.modelsErrorCode = null;
   S.modelsAt = Date.now();
   return true;
 }
@@ -4232,13 +4411,21 @@ async function loadStorageUsage() {
   const view = status === 200 ? storageUsageView(body) : null;
   if (!view) {
     const knownError = [0, 401, 403, 404, 503].includes(status);
-    S.storageError = status === 200 ? "Storage の集計の形が正しくありません。" : knownError ? explainApiError(status, body) : `Storage の使用量を読み込めませんでした（HTTP ${status}）。`;
+    if (!knownError && status !== 200) console.warn("Storage の使用量の読み込みの失敗:", status);
+    const failed = status === 200
+      ? { text: "読み込みエラー：Storage の集計の形式が不正です。", code: "E-ADM-54" }
+      : knownError
+      ? apiErrorInfo(status, body, "Storage")
+      : { text: "Storage の読み込みエラーが発生しました。", code: "E-ADM-99" };
+    S.storageError = failed.text;
+    S.storageErrorCode = failed.code;
     if (S.storageStatus !== "ok") S.storageStatus = "error";
     return false;
   }
   S.storage = body;
   S.storageStatus = "ok";
   S.storageError = "";
+  S.storageErrorCode = null;
   S.storageAt = Date.now();
   return true;
 }
@@ -4257,11 +4444,11 @@ async function loadSettingsAll(options = {}) {
   const [info, history, models, storage] = await Promise.all([loadSettingsInfo(), loadSettingsHistory(), loadModels(options), loadStorageUsage()]);
   if (appClosed) return { info: false, history: false, models: false, storage: false };
   const stale = [];
-  if (!info && S.status === "ok") stale.push(`上限と枠：${S.error}`);
+  if (!info && S.status === "ok") stale.push(`上限：${S.error}`);
   if (!history && S.historyStatus === "ok") stale.push(`履歴：${S.historyError}`);
   if (!models && S.modelsStatus === "ok") stale.push(`モデル：${S.modelsError}`);
   if (!storage && S.storageStatus === "ok") stale.push(`Storage：${S.storageError}`);
-  if (stale.length) notify("設定の一部を読み直せませんでした（前に読んだ値を出しています）。", "error", stale);
+  if (stale.length) notify("読み込みエラー：設定の一部を取得できません。\n前回の値を表示しています。", "error", stale);
   renderSettings();
   renderHeader();
   return { info, history, models, storage };
@@ -4342,7 +4529,7 @@ function pruneSelection() {
     S.edit = null;
   } else if (sel.kind === "template" && state.stages.loaded && !state.stages.templates.some((t) => t.id === sel.id)) {
     S.sel = null;
-    notify("選んでいたテンプレートは見つかりません（削除された可能性があります）。", "warn");
+    notify("テンプレートが見つかりません。", "warn");
   }
 }
 
@@ -4370,7 +4557,7 @@ function renderSettings() {
         ? []
         : stagesAvailable() || state.fresh.stages.stale
         ? [templatesSection()]
-        : [el("section", { className: "box" }, el("h3", { text: "段階テンプレート" }), el("p", { className: "muted", text: state.stages.loaded ? "段階テンプレートは、DB の更新（016）のあとで使えます。" : "読み込み中…" }))]),
+        : [el("section", { className: "box" }, el("h3", { text: "段階テンプレート" }), el("p", { className: "muted", text: state.stages.loaded ? "サーバーの更新が未適用です。" : "読み込み中…" }))]),
     );
     $("settings-history").replaceChildren(...(sub === "history" ? [historySection()] : []));
     renderSettingsAside();
@@ -4405,7 +4592,7 @@ async function switchSubtab(key, { focusTab = false } = {}) {
     return true;
   }
   if (S.busy) {
-    notify("設定の保存の結果を待っています。終わってから移ってください。");
+    notify("保存中です。\n完了までお待ちください。");
     return false;
   }
   if (!(await confirmLeaveSettings())) return false;
@@ -4426,10 +4613,10 @@ async function switchSubtab(key, { focusTab = false } = {}) {
 }
 
 /** 見出しつきの面。読み込み中・失敗（一度も読めていない）は中身の代わりに状態を、前に読んだ値なら上に印と再試行を出す */
-function partBox({ id, title, status, error, at, retry, side = null, content }) {
+function partBox({ id, title, status, error, errorCode: code = null, at, retry, side = null, content }) {
   let body;
-  if (status === "ok") body = [error ? staleLine(error, at, retry) : null, ...content()];
-  else if (status === "error") body = [errorBox(error, retry)];
+  if (status === "ok") body = [error ? staleLine(error, at, retry, code) : null, ...content()];
+  else if (status === "error") body = [errorBox(error, retry, code)];
   else body = [el("p", { className: "muted", text: "読み込み中…" })];
   return el(
     "section",
@@ -4439,18 +4626,25 @@ function partBox({ id, title, status, error, at, retry, side = null, content }) 
   );
 }
 
-/** 前に読んだ値を出しているときの印（全体を最新に見せない）。その部分だけの再試行 */
-function staleLine(error, at, retry) {
+/** 前に読んだ値を出しているときの印（全体を最新に見せない）。その部分だけの再試行。error は前置き付きの完成した文、code はエラーコード */
+function staleLine(error, at, retry, code = null) {
   return el(
     "div",
     { className: "stale-line", role: "status" },
-    el("p", {}, el("span", { "aria-hidden": "true", text: "⚠ " }), `前に読んだ値です（${checkedText(at) ?? "確認の時刻なし"}）。最新を読めませんでした：${error}`),
+    el(
+      "p",
+      {},
+      el("span", { "aria-hidden": "true", text: "⚠ " }),
+      `${error}\n前回（${checkedText(at) ?? "時刻不明"}）の値を表示しています。`,
+      codeTag(code),
+    ),
     el("button", { type: "button", className: "btn", text: "再試行", onclick: retry }),
   );
 }
 
-function warnLine(text) {
-  return el("p", { className: "warn-line" }, el("span", { "aria-hidden": "true", text: "⚠" }), el("span", { text }));
+/** 注意の 1 行。tip はホバーに出す続きの文 */
+function warnLine(text, tip = null) {
+  return el("p", { className: "warn-line", title: tip }, el("span", { "aria-hidden": "true", text: "⚠" }), el("span", { text }));
 }
 
 /** ① 直近 24 時間の利用の要約（全員の合計の見積額・上限・割合・回数・注意・内訳）。費用はドル */
@@ -4469,20 +4663,20 @@ function summaryContent() {
         type: "button",
         className: "icon-btn mobile-only",
         "data-reload": "",
-        "aria-label": "最新の状態を読み込む",
+        "aria-label": "最新にする",
         "data-tip": "最新にする",
         "data-focus-key": "sum-reload",
         onclick: onReload,
       }, icon("refresh", 18)),
     ),
   );
-  if (S.status === "error") return [head, errorBox(S.error, retryInfo)];
+  if (S.status === "error") return [head, errorBox(S.error, retryInfo, S.errorCode)];
   if (S.status !== "ok") return [head, el("p", { className: "muted", text: "読み込み中…" })];
   const u = usageSummaryView(S.info);
   const hasGlobal = availableLimits(settingsRow()).some((l) => l.key === "global_daily_cost_limit_usd");
   return [
     head,
-    S.error ? staleLine(S.error, S.infoAt, retryInfo) : null,
+    S.error ? staleLine(S.error, S.infoAt, retryInfo, S.errorCode) : null,
     el(
       "div",
       { className: "sum-figures" },
@@ -4497,7 +4691,7 @@ function summaryContent() {
       u.pctText ? el("span", { text: u.pctText }) : null,
       el("span", { text: u.countText }),
     ),
-    u.warn ? warnLine(u.warn) : null,
+    u.warn ? warnLine(u.warn, u.warnTip) : null,
     breakdownFold(),
     el(
       "div",
@@ -4580,16 +4774,19 @@ async function loadTrend() {
     // DB に 228 がまだ無い：欄に「DB の更新待ち」を出す（失敗の印は出さない）
     T.status = "missing";
     T.error = "";
+    T.errorCode = null;
     return true;
   }
   if (error || !trendDataOk(data)) {
-    T.error = error ? explainError(error) : "消費の推移の形が正しくありません。";
+    T.error = error ? errorText("読み込み", error) : "読み込みエラー：消費の推移の形式が不正です。";
+    T.errorCode = error ? errorCode("読み込み", error) : "E-ADM-54";
     if (T.status !== "ok") T.status = "error";
     return false;
   }
   T.data = data;
   T.status = "ok";
   T.error = "";
+  T.errorCode = null;
   T.at = Date.now();
   return true;
 }
@@ -4599,7 +4796,7 @@ const retryTrend = retryPart(loadTrend);
 function reloadTrendInBackground() {
   loadTrend().then((ok) => {
     if (appClosed) return;
-    if (!ok && state.trend.status === "ok") notify("消費の推移を読み直せませんでした（前に読んだ値を出しています）。", "error", [state.trend.error]);
+    if (!ok && state.trend.status === "ok") notify("読み込みエラー：消費の推移を取得できません。\n前回の値を表示しています。", "error", [state.trend.error]);
     renderTrend();
     renderHeader();
   });
@@ -4650,8 +4847,8 @@ function trendContent() {
     el("h3", { id: "trend-h", text: "消費の推移" }),
     T.at ? el("div", { className: "head-side" }, el("span", { className: "checked num", text: checkedText(T.at) })) : null,
   );
-  if (T.status === "missing") return [head, el("p", { className: "muted", text: "消費の推移は、DB の更新（228）のあとで使えます。" })];
-  if (T.status === "error") return [head, errorBox(T.error, retryTrend)];
+  if (T.status === "missing") return [head, el("p", { className: "muted", text: "サーバーの更新が未適用です。" })];
+  if (T.status === "error") return [head, errorBox(T.error, retryTrend, T.errorCode)];
   if (T.status !== "ok") return [head, el("p", { className: "muted", text: "読み込み中…" })];
   const plan = trendPlanNow();
   const view = trendView(T.data, T.range, plan);
@@ -4659,7 +4856,7 @@ function trendContent() {
   const has = view.total.jobs > 0;
   return [
     head,
-    T.error ? staleLine(T.error, T.at, retryTrend) : null,
+    T.error ? staleLine(T.error, T.at, retryTrend, T.errorCode) : null,
     trendControls(),
     el(
       "div",
@@ -4681,7 +4878,8 @@ function trendContent() {
     T.dim === "role" || T.dim === "cohort"
       ? el("p", {
         className: "trend-approx",
-        text: `${T.dim === "role" ? "区分" : "回"}は、今の名簿の値で分けた近似です（生成した時点の区分・回は記録していません）。` +
+        text: `${T.dim === "role" ? "区分" : "回"}は、今の名簿の値で分けた近似です。`,
+        title: "生成した時点の区分・回は記録していません。" +
           (T.dim === "role"
             ? "途中で区分を変えた人の生成は今の区分に入り、名簿から消えた人の生成は「名簿にない人」に入ります。"
             : "途中で回を変えた受講者の生成は今の回に入ります。回は受講者にだけ付くので、メンバー・講師・管理者・名簿から消えた人の生成は" +
@@ -4837,16 +5035,25 @@ function trendNotes(plan) {
     { className: "trend-notes" },
     el("p", {
       className: "hint",
-      text: "クレジットは、生成ごとの見積額から数えた消費です（1 クレジット＝$0.01。上限の枠と同じ数え方）。" +
+      text: "クレジットは見積額から数えた消費です。",
+      title: "1 クレジット＝$0.01。生成ごとの見積額から数えます。" +
         "投入できなかった生成と、提供元が失敗を返した生成（返金）は数えません。" +
         "名簿の「今月の消費（目安）」は失敗した生成も含む見積額なので、ここより大きくなることがあります。日付は日本時間です。",
     }),
     T.dim === "kind" ? el("p", { className: "hint", text: "「動画」には口パク（リップシンク）を含みます。" }) : null,
     plan.folded && T.dim === "model"
-      ? el("p", { className: "hint", text: `色は直近 12 か月で多く使った 7 つのモデルに付け、残りの ${plan.folded} つは「その他のモデル」にまとめています。` })
+      ? el("p", {
+        className: "hint",
+        text: "色は、直近 12 か月で多く使った 7 モデルに付けています。",
+        title: `残りの ${plan.folded} つは「その他のモデル」にまとめています。`,
+      })
       : null,
     plan.folded && T.dim === "cohort"
-      ? el("p", { className: "hint", text: `色は新しい回と「受講者以外」に付け、それより前の ${plan.folded} つの回は「回なし・それより前の回」にまとめています。` })
+      ? el("p", {
+        className: "hint",
+        text: "色は、新しい回と「受講者以外」に付けています。",
+        title: `それより前の ${plan.folded} つの回は「回なし・それより前の回」にまとめています。`,
+      })
       : null,
   );
 }
@@ -5139,9 +5346,10 @@ function limitsSection() {
   const updated = S.info?.settings?.updated_at;
   return partBox({
     id: "limits-h",
-    title: "上限と枠",
+    title: "上限",
     status: S.status,
     error: S.error,
+    errorCode: S.errorCode,
     at: S.infoAt,
     retry: retryInfo,
     side: updated ? el("span", { className: "meta num", text: `設定の最終変更 ${formatShortDateTime(updated)}` }) : null,
@@ -5165,14 +5373,15 @@ function storageSection() {
     title: "Storage の使用量と保存期限",
     status: S.storageStatus,
     error: S.storageError,
+    errorCode: S.storageErrorCode,
     at: S.storageAt,
     retry: retryStorage,
     side: S.storageAt ? el("span", { className: "checked num", text: checkedText(S.storageAt) }) : null,
     content: () => {
       const view = storageUsageView(S.storage, formatDateTime);
-      if (!view) return [el("p", { className: "error-text", text: "Storage の集計の形が正しくありません。再度読み込んでください。" })];
+      if (!view) return [el("p", { className: "error-text", text: "読み込みエラー：Storage の集計の形式が不正です。" }, codeTag("E-ADM-54"))];
       return [
-        el("p", { className: "hint", text: "保存済みのファイルの容量です。1 GB は 10 億バイト。容量が分からないファイルは、件数を分けて表示します。" }),
+        el("p", { className: "hint", text: "保存済みのファイルの容量です（1 GB＝10 億バイト）。", title: "容量が分からないファイルは、件数を分けて表示します。" }),
         el("ul", { className: "storage-usage-list", "aria-label": "バケットごとのファイル件数と容量" },
           ...view.buckets.map((row) => el("li", { className: "storage-usage-row" },
             el("span", { className: "storage-usage-label", text: row.label }),
@@ -5320,11 +5529,11 @@ async function saveEdit() {
   const key = e.key;
   const label = labelOf(key);
   const r = parseSettingInput(key, e.text, label);
-  if (r.problem) return showEditError(`${r.problem}。`);
+  if (r.problem) return showEditError(r.problem);
   const cur = currentOf(key);
   if (!sameSettingValue(cur, e.base)) {
     e.base = cur;
-    return showEditError(`読み込み直したところ、今の値が ${settingValueText(key, cur)} に変わっていました。確かめてから、もう一度保存してください。`);
+    return showEditError(`今の値が ${settingValueText(key, cur)} に変更されています。\n確認してから、再度保存してください。`);
   }
   if (sameSettingValue(r.value, cur)) return showEditError(`今の値と同じです（${settingValueText(key, cur)}）。`);
   // 全体の額（常に）・回数・1 回の上限・厳しくなる向きの上限は確かめる（条件は limitChangeCheck のまま）
@@ -5335,14 +5544,14 @@ async function saveEdit() {
       title: v.title,
       lines: v.lines,
       warnings: v.warnings,
-      buttons: [{ label: "やめる", value: false }, { label: v.ok, value: true, kind: v.warnings.length ? "danger" : "primary" }],
+      buttons: [{ label: "キャンセル", value: false }, { label: v.ok, value: true, kind: v.warnings.length ? "danger" : "primary" }],
     });
     if (S.edit !== e || appClosed) return;
     if (!ok) return focusEditInput();
     // 確かめているあいだに今の値が変わった（読み込み直し）なら、保存しない
     if (!sameSettingValue(currentOf(key), cur)) {
       e.base = currentOf(key);
-      return showEditError(`確かめているあいだに、今の値が ${settingValueText(key, currentOf(key))} に変わりました。もう一度確かめてから保存してください。`);
+      return showEditError(`確認中に値が ${settingValueText(key, currentOf(key))} に変更されました。\n再度確認してから保存してください。`);
     }
   }
   await commitSetting(key, r.value, `${label}を ${settingValueText(key, r.value)} にしました。`, e);
@@ -5356,10 +5565,10 @@ async function resetSetting(key) {
   if (cur === null) return;
   const label = labelOf(key);
   const v = resetConfirmView(key, label, cur);
-  const ok = await ask({ title: v.title, lines: v.lines, buttons: [{ label: "やめる", value: false }, { label: v.ok, value: true, kind: "primary" }] });
+  const ok = await ask({ title: v.title, lines: v.lines, lineTips: v.lineTips, buttons: [{ label: "キャンセル", value: false }, { label: v.ok, value: true, kind: "primary" }] });
   if (!ok || appClosed) return;
   if (!sameSettingValue(currentOf(key), cur)) {
-    notify("確かめているあいだに、今の値が変わりました。もう一度確かめてください。", "error");
+    notify("確認中に値が変更されました。\n再度確認してください。", "error");
     return;
   }
   await commitSetting(key, null, `${label}を「${settingValueText(key, null)}」にしました。`, S.edit?.key === key ? S.edit : null);
@@ -5386,12 +5595,13 @@ async function commitSetting(key, value, doneMessage, edit) {
   if (appClosed) return;
   if (error) {
     S.busy = false;
-    const msg = `保存できませんでした。${explainError(error)}`;
+    const failed = errorInfo("保存", error);
+    const msg = failed.text;
     if (edit) {
       edit.saving = false;
-      if (S.edit === edit) edit.error = `${msg}入力は残してあります。`;
+      if (S.edit === edit) edit.error = `${msg}\n入力は残っています。`;
     }
-    notify(msg, "error");
+    notify(msg, "error", [], null, null, failed.code);
     renderSettings();
     focusEditInput();
     // 保存の前後で、読み込み中だった上限・履歴の応答を捨てた。代わりを読み直して「読み込み中」のまま止めない（入力は残す。Codex TASK-0093 R2）
@@ -5406,7 +5616,7 @@ async function commitSetting(key, value, doneMessage, edit) {
   S.busy = false;
   if (appClosed) return;
   if (!read.info) {
-    notify(`${doneMessage}ただし、最新の値を読み直せませんでした（表示は前に読んだ値です）。同じ変更を送り直す必要はありません。`, "warn");
+    notify(`${doneMessage}\n表示の更新に失敗しました。再度保存する必要はありません。`, "warn");
   } else {
     notify(doneMessage, "ok", [], { label: "変更履歴を見る", onClick: openHistory });
   }
@@ -5441,13 +5651,13 @@ function limitReadPanel(key) {
         "dl",
         { className: "read-kv" },
         el("dt", { text: "効く対象" }),
-        el("dd", { text: settingDesc(key, S.info?.settings) }),
+        el("dd", { text: settingDesc(key, S.info?.settings), title: settingTip(key) || null }),
         el("dt", { text: "範囲" }),
         el("dd", { className: "num", text: settingRangeText(key) }),
         el("dt", { text: "設定の種類" }),
         el("dd", { text: src.kind === "db" ? "個別設定（この画面で決めた値）" : `既定（個別設定なし）` }),
         credits ? el("dt", { text: "クレジットの目安" }) : null,
-        credits ? el("dd", { className: "num", text: `${credits}（1 クレジット＝0.01 ドルの単純な換算。実際の消費は生成ごとに切り上げます）` }) : null,
+        credits ? el("dd", { className: "num", text: credits, title: "1 クレジット＝0.01 ドルの単純な換算です。実際の消費は生成ごとに切り上げます。" }) : null,
         u ? el("dt", { text: "今の利用" }) : null,
         u ? el("dd", { className: "num", text: `直近 24 時間の見積額 ${u.costText}${u.pctText ? `（${u.pctText}）` : ""}` }) : null,
         el("dt", { text: "最終変更" }),
@@ -5482,10 +5692,12 @@ function techDetails(key, cur) {
     ? "015"
     : "014";
   const lines = [
-    el("p", { className: "tech" }, "設定キー：", el("code", { text: key }), `（DB の app_settings。admin_update_settings で保存。DB の更新 ${since} の項目）`),
+    el("p", { className: "tech", title: "app_settings に admin_update_settings で保存します。" }, "設定キー：", el("code", { text: key }), `（DB の更新 ${since}）`),
     el("p", { className: "tech", text: cur === null ? "今は DB の値が空（null）です。" : `今の DB の値：${cur}` }),
   ];
-  if (spec && !spec.nullText) lines.push(el("p", { className: "tech", text: "空（null）のときは、サーバーの環境変数の値で動きます。その数値は、この画面からは読めません。" }));
+  if (spec && !spec.nullText) {
+    lines.push(el("p", { className: "tech", text: "空（null）のときは、サーバーの環境変数の値で動きます。", title: "その値はこの画面には表示できません。" }));
+  }
   else if (key === "job_max_credits") lines.push(el("p", { className: "tech", text: "空（null）は上限なしです（環境変数の既定はありません）。" }));
   else if (spec?.defaultValue !== undefined) lines.push(el("p", { className: "tech", text: `空（null）のときの値は ${spec.defaultValue} です（DB の既定と同じ）。` }));
   return el("details", { className: "plain-fold minor" }, el("summary", { "data-focus-key": "panel-tech" }, "詳しい情報"), el("div", { className: "fold-in" }, ...lines));
@@ -5543,7 +5755,7 @@ function limitEditPanel(key) {
         el("label", { for: "edit-input", className: "field-label", text: `新しい値（${settingUnitText(key)}）` }),
         input,
         el("p", { className: "hint num", id: "edit-hint", text: `範囲：${settingRangeText(key)}。${settingEmptyText(key)}` }),
-        el("p", { className: "hint", id: "edit-desc", text: settingDesc(key, S.info?.settings) }),
+        el("p", { className: "hint", id: "edit-desc", text: settingDesc(key, S.info?.settings), title: settingTip(key) || null }),
         errorNode,
       ),
     ],
@@ -5566,7 +5778,7 @@ function limitEditPanel(key) {
           onclick: () => resetSetting(key),
         })
         : null,
-      el("button", { type: "button", className: "btn", text: "やめる", "data-focus-key": "panel-cancel", disabled: e.saving, onclick: cancelEdit }),
+      el("button", { type: "button", className: "btn", text: "キャンセル", "data-focus-key": "panel-cancel", disabled: e.saving, onclick: cancelEdit }),
     ],
   };
 }
@@ -5626,8 +5838,8 @@ function renderSettingsBar() {
       el("button", {
         type: "button",
         className: "icon-btn",
-        "aria-label": "選択を外す",
-        "data-tip": "選択を外す",
+        "aria-label": "選択を解除",
+        "data-tip": "選択を解除",
         "data-focus-key": "bar-close",
         disabled: S.busy,
         onclick: closeSelection,
@@ -5752,6 +5964,7 @@ function modelsSection() {
     title: "モデル",
     status: S.modelsStatus,
     error: S.modelsError,
+    errorCode: S.modelsErrorCode,
     at: S.modelsAt,
     retry: retryModels,
     side,
@@ -5774,8 +5987,8 @@ function modelsSection() {
       ];
       const unknown = activeScopes(roles).reduce((n, sc) => n + unknownList(S.models, sc.key).length, 0);
       if (!S.modelsEditing) {
-        if (count) out.push(warnLine(`保存していないモデルの変更が ${count} 件あります。［変更を続ける］から保存するか、元に戻してください。`));
-        if (unknown) out.push(warnLine(`今のカタログに無いモデルが ${unknown} 件、設定に残っています（効果はありません。次に保存すると外します）。`));
+        if (count) out.push(warnLine(`未保存のモデルの変更が ${count} 件あります。\n［変更を続ける］から保存してください。`));
+        if (unknown) out.push(warnLine(`カタログにないモデルが ${unknown} 件あります。次の保存で外します。`));
         return out;
       }
       return [...out, ...modelEditor()];
@@ -5833,24 +6046,31 @@ function modelEditor() {
   if (roles) out.push(modelTabs(plan));
   const panel = [el("p", { className: "set-target num", text: `${scope === "all" ? "使える" : `${sLabel}が使える`}モード ${usable} / ${modes.length}（未保存の変更を含む）` })];
   if (scope === "all") {
-    panel.push(el("p", { className: "hint", text: "サーバーで許可されたものだけをオンにできます（「サーバー側で無効」は押せません）。保存するまで反映されません。" }));
+    panel.push(el("p", { className: "hint", text: "保存するまで反映されません。", title: "サーバーで許可されたモデルだけオンにできます。" }));
     const notice = roleListNotice(S.models);
-    if (notice) panel.push(el("p", { className: "note-box", text: notice }));
+    if (notice) panel.push(el("p", { className: "note-box", text: notice, title: roleListNoticeTip(S.models) }));
   } else {
     panel.push(
       el("p", {
         className: "hint",
-        text: `${sLabel}が使えるモデルを選びます。全体でオフのモデルは、ここでは変えられません。管理者には区分の制限はかかりません（全体の設定に従います）。`,
+        text: `${sLabel}が使えるモデルを選びます。`,
+        title: "全体でオフのモデルは、ここでは変えられません。管理者は全体の設定に従います。",
       }),
     );
     if (scopeList(S.models, scope) === null) {
-      panel.push(el("p", { className: "note-box", text: `今は制限なしです（全体でオンのモデルは、これから足すモデルも含めて、${sLabel}もすべて使えます。口パクなど明示が要るモデルは、このタブでオンにしたものだけ）。` }));
+      panel.push(
+        el("p", {
+          className: "note-box",
+          text: "今は制限なしです（全体でオンのモデルは、口パクなどを除きすべて使えます）。",
+          title: "これから追加するモデルも含みます。口パクなどは、このタブで個別にオンにしたものだけ使えます。",
+        }),
+      );
     }
     // 保存されている一覧が明示（null でない）のときは、全部オンに見えても出す（古い ID を外すだけの保存は明示の一覧のまま残るため）。
     // 一覧が null で未保存のオフがあるだけなら「元に戻す」で足りる
     if (Array.isArray(scopeList(S.models, scope)) && !S.resetNull[scope]) {
       panel.push(
-        el("p", { className: "hint", text: "今は一覧で決めています。新しく足したモデルは自動では使えるようになりません。" }),
+        el("p", { className: "hint", text: "今は一覧で決めています。新しいモデルは自動でオンになりません。" }),
         el("button", {
           type: "button",
           className: "btn restore-null",
@@ -5860,11 +6080,11 @@ function modelEditor() {
             const ok = await ask({
               title: `${sLabel}の制限をなくしますか？`,
               lines: [
-                `全体でオンのモデルは、これから足すモデルも含めて、${sLabel}もすべて使えるようになります。`,
-                "口パクなど、明示が要るモデルは使えなくなります（使わせるには、このタブでオンにして保存します）。",
+                `全体でオンのモデルは、これから追加するモデルも含め、すべて使えるようになります。`,
+                "口パクなど、個別にオンにするモデルは使えなくなります。",
                 "保存するまで反映されません。",
               ],
-              buttons: [{ label: "やめる", value: false }, { label: "制限なしに戻す", value: true, kind: "primary" }],
+              buttons: [{ label: "キャンセル", value: false }, { label: "制限なしに戻す", value: true, kind: "primary" }],
             });
             if (!ok) return;
             // 印だけを持つ。この区分の下書きは、表示・件数・確認の文・保存のたびに、今の全体の下書きから作る（effectiveDrafts）
@@ -5883,7 +6103,7 @@ function modelEditor() {
     unknownCount += unknown.length;
     if (unknown.length) {
       const where = sc.key === "all" ? "設定" : `${sc.label}の一覧`;
-      panel.push(warnBox(`今のカタログに無いモデルが ${unknown.length} 件、${where}に残っています（効果はありません。次に保存すると外します）。`));
+      panel.push(warnBox(`カタログにないモデルが ${unknown.length} 件、${where}にあります。次の保存で外します。`));
       unknownIds.push(`${where}：${unknown.join("、")}`);
     }
   }
@@ -5906,8 +6126,8 @@ function modelEditor() {
       el(
         "div",
         { className: "fold-in" },
-        el("p", { className: "tech", text: "「サーバー側で無効」は、サーバーの環境変数 ENABLED_PROVIDER_MODELS で許可されていないモデルです。「参照から動画」は fal の経路だけで使えます。" }),
-        ...unknownIds.map((t) => el("p", { className: "tech", text: `カタログに無い ID（${t}）` })),
+        el("p", { className: "tech", text: "「サーバー側で無効」は、サーバーの設定で使えないモデルです。", title: "「参照から動画」は fal の経路だけで使えます。" }),
+        ...unknownIds.map((t) => el("p", { className: "tech", text: `カタログにない ID（${t}）` })),
         el(
           "ul",
           { className: "tech" },
@@ -6090,15 +6310,16 @@ function modelItem(m, scope) {
     "div",
     { className: "model" },
     row,
-    m.provider_available ? null : el("p", { className: "small warn-text", text: "提供元が使えません（API キーが未設定など）。オンにしても生成できません。" }),
-    modes.length ? null : el("p", { className: "small muted", text: "振り分け先の経路が無いため使えません。" }),
+    m.provider_available ? null : el("p", { className: "small warn-text", text: "提供元が使えません。オンにしても生成できません。", title: "API キーが未設定などです。" }),
+    modes.length ? null : el("p", { className: "small muted", text: "振り分け先の経路がありません。" }),
     noteModes.length
       ? el("p", {
         className: "small muted",
         text: (noteModes.length < modes.length ? `「${noteModes.map((mode) => mode.label).join("」「")}」は` : "") +
           (scope === "all"
             ? "全体のタブでオンにして保存したときだけ使えます。"
-            : "この区分で使わせるには、全体のタブとこのタブの両方でオンにします。オンにすると、この区分の一覧は全体と同じ（制限なし）には戻らず、これから足すモデルもこのタブでオンにしないと使えません。"),
+            : "この区分で使わせるには、全体とこのタブの両方でオンにします。"),
+        title: scope === "all" ? null : "オンにすると、この区分の一覧は制限なしに戻らず、これから追加するモデルもこのタブでオンにしないと使えません。",
       })
       : null,
     wrap,
@@ -6146,20 +6367,22 @@ async function saveModels() {
   const plan = buildModelSave(S.models, effectiveDrafts(S.models, S.drafts, S.resetNull), roles, S.resetNull);
   if (!plan.entries.length) return;
   const labelOfModel = modelLabeler(S.models.models);
-  const lines = saveConfirmLines(plan, labelOfModel);
+  const detailTips = new Map();
+  const lines = saveConfirmLines(plan, labelOfModel, detailTips);
   const ok = await ask({
     title: lines[0],
-    lines: ["変えた区分とモデルは、下の内訳のとおりです。", "次の生成から、すぐに効きます。"],
+    lines: ["次の生成から反映されます。"],
     detail: lines.slice(1, -1),
+    detailTips,
     note: saveConfirmNote(plan),
-    buttons: [{ label: "やめる", value: false }, { label: "保存する", value: true, kind: "primary" }],
+    buttons: [{ label: "キャンセル", value: false }, { label: "保存する", value: true, kind: "primary" }],
   });
   if (!ok || appClosed) return;
   for (const warning of emptyScopeWarnings(plan)) {
     const sure = await ask({
       title: "生成できなくなる区分があります。保存しますか？",
-      lines: [warning.replace(/本当に保存しますか？$/, "").trim()],
-      buttons: [{ label: "やめる", value: false }, { label: "それでも保存する", value: true, kind: "danger" }],
+      lines: [warning],
+      buttons: [{ label: "キャンセル", value: false }, { label: "それでも保存する", value: true, kind: "danger" }],
     });
     if (!sure || appClosed) return;
   }
@@ -6172,12 +6395,12 @@ async function saveModels() {
     const fresh = await supabase.rpc("admin_get_settings");
     if (appClosed) return;
     if (fresh.error) {
-      notify(`保存できませんでした。${explainError(fresh.error)}（変更は残してあります）`, "error");
+      notify(`${errorText("保存", fresh.error)}\n変更は残っています。`, "error", [], null, null, errorCode("保存", fresh.error));
       return;
     }
     const drift = changedScopes(fresh.data?.settings, S.models, roles);
     if (drift.length) {
-      notify(`読み込んだあとに、ほかの管理者がモデルの設定（${drift.join("・")}）を変えたため、保存しませんでした。最新の設定を読み込み直しました。`, "error");
+      notify(`保存エラー：ほかの管理者が先に変更しました。\n最新の設定を確認して、再度保存してください。`, "error");
       S.busy = false;
       S.modelSaving = false;
       await loadSettingsAll();
@@ -6188,7 +6411,7 @@ async function saveModels() {
     for (const g of [gates.info, gates.models, gates.history]) g.invalidate();
     if (appClosed) return;
     if (error) {
-      notify(`保存できませんでした。${explainError(error)}（変更は残してあります）`, "error");
+      notify(`${errorText("保存", error)}\n変更は残っています。`, "error", [], null, null, errorCode("保存", error));
       S.busy = false;
       S.modelSaving = false;
       await loadSettingsAll();
@@ -6201,7 +6424,7 @@ async function saveModels() {
     const read = await loadSettingsAll({ resetDraft: true });
     if (appClosed) return;
     S.modelsEditing = false;
-    if (!read.models) notify(`モデルの設定を保存しました（${where}オン ${on} 件・オフ ${off} 件）。ただし、最新の一覧を読み直せませんでした。同じ変更を送り直す必要はありません。`, "warn");
+    if (!read.models) notify(`モデルの設定を保存しました（${where}オン ${on} 件・オフ ${off} 件）。\n表示の更新に失敗しました。再度保存する必要はありません。`, "warn");
     else notify(`モデルの設定を保存しました（${where}オン ${on} 件・オフ ${off} 件）。`, "ok", [], { label: "変更履歴を見る", onClick: openHistory });
   } finally {
     S.busy = false;
@@ -6223,7 +6446,7 @@ function historySection() {
     const shown = S.history.slice(0, S.historyShown);
     const rest = S.history.length - shown.length;
     content = [
-      S.historyError ? staleLine(S.historyError, S.historyAt, retryHistory) : null,
+      S.historyError ? staleLine(S.historyError, S.historyAt, retryHistory, S.historyErrorCode) : null,
       S.history.length
         ? el(
           "ol",
@@ -6237,7 +6460,7 @@ function historySection() {
             )
           ),
         )
-        : el("p", { className: "muted", text: "まだ変更はありません。" }),
+        : el("p", { className: "muted", text: "変更履歴はまだありません" }),
       rest > 0
         ? el("button", {
           type: "button",
@@ -6252,7 +6475,7 @@ function historySection() {
         : null,
     ];
   } else if (S.historyStatus === "error") {
-    content = [errorBox(S.historyError, retryHistory)];
+    content = [errorBox(S.historyError, retryHistory, S.historyErrorCode)];
   } else {
     content = [el("p", { className: "muted", text: "読み込み中…" })];
   }
@@ -6290,6 +6513,7 @@ function emptyStageState() {
     /** テンプレートの一覧（名前と段階）を最後に読めた時刻（ms）と、最後の読み込みの失敗 */
     templatesAt: null,
     templatesError: "",
+    templatesErrorRaw: null,
     /** cohorts の新しい列：id → { id, credit_mode, stage_template_id, stages_applied_at } */
     cohortInfo: new Map(),
     stages: [],
@@ -6391,6 +6615,8 @@ async function loadStageInfo() {
   // テンプレート（名前と段階）の読み込みの成功は、段階の情報全体とは別に持つ（一度も読めていないのに「前に読んだ値」「まだありません」と出さない）
   if (!tp.error && !ti.error) S.templatesAt = Date.now();
   S.templatesError = tp.error || ti.error ? explainError(tp.error || ti.error) : "";
+  // 表示する所が「テンプレートの読み込みエラー：」を付ける（生の誤りを持つ）
+  S.templatesErrorRaw = tp.error || ti.error || null;
   if (!ins.error) S.instructors = ins.data ?? [];
   if (!set.error) {
     S.limitT = set.data?.settings?.stage_grant_total_limit ?? 10000;
@@ -6458,7 +6684,7 @@ function templateGuideLine(templateId, s) {
 // 渡すと段階の欄全体が「016 が未適用」になるため）。「無い」は呼んだ RPC の名前で isMissingFunctionError を見る（3 章の誤りをさばく順）
 const MINUTES_READ_FN = "admin_cohort_stage_minutes";
 const MINUTES_SAVE_FN = "admin_set_cohort_stage_minutes";
-const MINUTES_NOT_SAVED = "分は保存されていません";
+const MINUTES_NOT_SAVED = "時間（分）は保存されていません";
 // 分の読み取り・合計・変わった段階を集める・答えの形の確かめは stage-minutes-lib.js（講師ページと共用）。ここは画面と RPC の呼び方だけ
 
 /** その回の段階の分の合計（日の種類ごと。今ある段階だけ数える。適用し直しで id が変わった段階は数えない） */
@@ -6550,7 +6776,7 @@ function rowsEditor(kind, initial, { canStructure, guides = null, minutes = fals
   // 組 10：分の合計（日の見出しの右）と 6 時間を超えたときの 1 行（保存は止めない）
   const minHead = withMinutes ? el("span", { className: "small muted num", "aria-live": "polite" }) : null;
   const minWarn = withMinutes ? el("p", { className: "warn-text small", hidden: true, text: MSG_DAY_MINUTES_WARN }) : null;
-  const addBtn = el("button", { type: "button", className: "btn", text: "段階を足す", onclick: () => {
+  const addBtn = el("button", { type: "button", className: "btn", text: "段階を追加", onclick: () => {
     read();
     rows.push({ id: null, label: "", title: "", credits: "", ...(guides ? { guide: "", start: "", end: "" } : {}), ...(withMinutes ? { minutes: "" } : {}) });
     errors = new Map();
@@ -6587,7 +6813,7 @@ function rowsEditor(kind, initial, { canStructure, guides = null, minutes = fals
   function guideRow(r, i) {
     const n = `${where} ${i + 1} 番目`;
     const select = el("select", { className: "input", "aria-label": `${n}の既定の案内`, "data-f": "guide", disabled: !!guides.readFailed });
-    if (guides.readFailed) select.append(el("option", { value: "", text: "既定の案内を読めませんでした" }));
+    if (guides.readFailed) select.append(el("option", { value: "", text: "既定の案内を読み込めません" }));
     else {
       select.append(el("option", { value: "", text: "案内なし" }));
       const opts = guides.options ?? [];
@@ -6716,13 +6942,17 @@ function stagesSection(c) {
   const out = [];
   if (stageMode) {
     out.push(
-      el("p", { className: "small", text: `テンプレート：${templateName(info.stage_template_id) ?? "（適用したテンプレートは削除されました）"}。適用したあとに変えた分は、テンプレートには戻りません。` }),
+      el("p", {
+        className: "small",
+        text: `テンプレート：${templateName(info.stage_template_id) ?? "（削除済み）"}`,
+        title: "適用したあとに変えた分は、テンプレートには戻りません。",
+      }),
     );
     const status = S.status.get(c.id);
     if (status?.current) {
       out.push(el("p", { className: "small strong", text: `今の段階：${stageName(status.current)}` }));
     } else if (status && status.period && !["day1", "bridge", "day2"].includes(status.period)) {
-      out.push(el("p", { className: "small muted", text: status.period === "before" ? "Day1 の 0:00 に、最初の段階に自動で入ります。" : "Day2 が終わりました。" }));
+      out.push(el("p", { className: "small muted", text: status.period === "before" ? "Day1 の 0:00 に、最初の段階に自動で入ります。" : "Day2 は終了しました。" }));
     }
     const totals = dayTotals(rows);
     const g = groupStagesByDay(rows);
@@ -6753,7 +6983,7 @@ function stagesSection(c) {
                 )
               ),
             )
-            : el("p", { className: "warn-text small", text: "段階がありません（このままでは、この日は生成できません）。" }),
+            : el("p", { className: "warn-text small", text: "段階がありません（この日は生成できません）。" }),
         ),
       );
     }
@@ -6762,19 +6992,20 @@ function stagesSection(c) {
       el("button", { type: "button", className: "btn", text: "段階を編集", onclick: (e) => openStageEditor(c.id, e.currentTarget) }),
       el("p", {
         className: "hint",
-        text: "名前・題名・クレジットはいつでも変えられます。順番と数は、その日が始まる前だけ変えられます（消した段階に付けた案内は外れます）。",
+        text: "順番と数は、その日が始まる前だけ変えられます。",
+        title: "名前・題名・クレジットはいつでも変えられます。消した段階に付けた案内は外れます。",
       }),
-      el("a", { className: "link-btn", href: "instructor", target: "_blank", rel: "noopener", text: "講師の画面を開く（別のタブ）" }),
+      el("a", { className: "link-btn", href: "instructor", target: "_blank", rel: "noopener", text: "講師ページを開く" }),
     );
   } else {
-    out.push(el("p", { className: "small", text: "今は Day ごとの枠です（Day1・ブリッジワーク・Day2 の 1 人あたりの上限）。" }));
+    out.push(el("p", { className: "small", text: "今は Day ごとの枠です。", title: "Day1・ブリッジワーク・Day2 の 1 人あたりの上限です。" }));
   }
   // テンプレートを適用する・枠の種類を戻す（Day1 が始まる前だけ）
   if (!rule.modeEditable) {
     out.push(
       el("p", {
         className: "hint",
-        text: stageMode ? "Day1 が始まったため、テンプレートの適用し直し・Day ごとの枠に戻すことはできません。" : "Day1 が始まったため、段階ごとの枠にはできません。",
+        text: stageMode ? "Day1 開始後は、再適用と枠の切り替えはできません。" : "Day1 開始後は、段階ごとの枠にできません。",
       }),
     );
   } else {
@@ -6790,11 +7021,11 @@ function stagesSection(c) {
       );
       select.addEventListener("change", () => S.pick.set(c.id, select.value));
       out.push(
-        field(stageMode ? "テンプレートを適用し直す" : "テンプレートを適用", select),
+        field(stageMode ? "テンプレートを再適用" : "テンプレートを適用", select),
         el("button", {
           type: "button",
           className: "btn primary",
-          text: stageMode ? "適用し直す（段階を全部入れ替える）" : "適用して、段階ごとの枠にする",
+          text: stageMode ? "再適用（段階を全部入れ替え）" : "適用して、段階ごとの枠にする",
           onclick: () => applyTemplate(c, select.value),
         }),
       );
@@ -6812,7 +7043,10 @@ function stagesSection(c) {
 const workshopLib = () => import("./admin-workshop-lib.js");
 
 /** 適用の前に、この回の案内の割り当てを読めなかったときの文（読めなければ適用を止める。workshop-ui 組 8 の 3.5） */
-const APPLY_READ_FAILED = "この回の案内の割り当てを読めませんでした。外れる案内を数えられないので、適用を止めました。［最新にする］のあと、もう一度押してください。";
+const APPLY_READ_FAILED = "適用エラー：案内の割り当てを取得できません。\n［最新にする］を押してください。";
+
+/** 組 8b：適用の前に、写しと今の既定を読めなかったときの文（読めなければ適用を止める。8.2） */
+const APPLY_DEFAULTS_READ_FAILED = "適用エラー：既定の案内を取得できません。\n［最新にする］を押してください。";
 
 /**
  * 回の今の段階と、案内の割り当て（admin_cohort_stage_guides）を読む。返り：{ stages } か null（読めなかった）。
@@ -6858,7 +7092,7 @@ async function applyTemplate(c, templateId) {
   const items = templateItemsOf(templateId);
   const problem = templateApplyProblem(items, full);
   if (problem) {
-    notify(`適用できません。${problem}`, "error");
+    notify(`適用エラー：${problem}`, "error");
     return;
   }
   const t = templateName(templateId);
@@ -6883,7 +7117,7 @@ async function applyTemplate(c, templateId) {
   const extra = read.missing ? { mode: "8" } : await readApplyDefaults(c.id);
   if (appClosed) return;
   if (!extra) {
-    notify(lib.APPLY_DIFF_READ_FAILED, "error");
+    notify(APPLY_DEFAULTS_READ_FAILED, "error");
     return;
   }
   if (extra.mode === "8b") {
@@ -6905,12 +7139,12 @@ async function applyTemplate(c, templateId) {
     warnings: spec.warnings,
     detail: spec.detail,
     note: spec.note,
-    buttons: [{ label: "やめる", value: false }, { label: spec.okLabel, value: true, kind: "primary" }],
+    buttons: [{ label: "キャンセル", value: false }, { label: spec.okLabel, value: true, kind: "primary" }],
   });
   if (!ok || appClosed) return;
   // 適用は 016 の RPC を 1 回だけ呼ぶ（画面で付け直さない。D3）
   const { error } = await supabase.rpc("admin_apply_stage_template", { p_cohort_id: c.id, p_template_id: templateId });
-  if (error) notify(explainError(error), "error");
+  if (error) notify(errorText("適用", error), "error", [], null, null, errorCode("適用", error));
   else notify(lib.applyResultText({ cohortName, templateName: t, lost: loss.count }));
   await refresh();
   if (!error && isStageCohort(c.id)) {
@@ -6953,7 +7187,7 @@ async function applyWithDefaults(c, templateId, { lib, t, already, hasStages, co
     warnings: spec.warnings,
     detail: spec.detail,
     note: spec.note,
-    buttons: [{ label: "やめる", value: false }, { label: spec.okLabel, value: true, kind: "primary" }],
+    buttons: [{ label: "キャンセル", value: false }, { label: spec.okLabel, value: true, kind: "primary" }],
   });
   if (!ok || appClosed) return;
   const { data, error } = await supabase.rpc(TPL_APPLY_FN, { p_cohort_id: c.id, p_template_id: templateId });
@@ -6961,7 +7195,7 @@ async function applyWithDefaults(c, templateId, { lib, t, already, hasStages, co
     if (isMissingFunctionError(error, TPL_APPLY_FN)) {
       markTemplateGuidesMissing();
       notify(lib.DEFAULTS_GONE, "error");
-    } else notify(explainError(error), "error");
+    } else notify(errorText("適用", error), "error", [], null, null, errorCode("適用", error));
   } else notify(lib.applyDiffResultText({ cohortName, templateName: t, attached: data?.attached, skipped: data?.skipped }));
   await refresh();
   if (!error && isStageCohort(c.id)) {
@@ -6973,11 +7207,11 @@ async function applyWithDefaults(c, templateId, { lib, t, already, hasStages, co
 async function setCreditMode(c, mode) {
   clearNotice();
   const text = mode === "day"
-    ? `${c.id} を Day ごとの枠に戻しますか？（Day1 が始まる前だけ戻せます。段階の設定は残ります）`
+    ? `${c.id} を Day ごとの枠に戻しますか？\n段階の設定は残ります。`
     : `${c.id} を、前に設定した段階ごとの枠にしますか？`;
   if (!confirm(text)) return;
   const { error } = await supabase.rpc("admin_set_cohort_credit_mode", { p_cohort_id: c.id, p_mode: mode });
-  if (error) notify(explainError(error), "error");
+  if (error) notify(errorText("変更", error), "error", [], null, null, errorCode("変更", error));
   else notify(mode === "day" ? `${c.id} を Day ごとの枠に戻しました。` : `${c.id} を段階ごとの枠にしました。`);
   await refresh();
 }
@@ -7061,7 +7295,7 @@ async function openStageEditor(cid, btn = null) {
         { className: "box" },
         el("div", { className: "box-head" }, el("h3", { text: DAY_KIND_LABELS[kind] }), editors[kind].head),
         readFailedLine ? el("p", { className: "warn-text small", text: "分を読み込めません（段階は保存できます）" }) : null,
-        started ? el("p", { className: "hint", text: "この日はもう始まっているため、名前・題名・クレジットだけ変えられます（順番と数は変えられません）。" }) : null,
+        started ? el("p", { className: "hint", text: "開始済みの日は、名前・題名・クレジットだけ変えられます。" }) : null,
         editors[kind].node,
       ),
     );
@@ -7099,7 +7333,7 @@ async function openStageEditor(cid, btn = null) {
     (retryBtn = el("button", {
       type: "button",
       className: "btn primary big",
-      text: "もう一度",
+      text: "再試行",
       onclick: async () => {
         if (busy || !retryNow) return;
         busy = true;
@@ -7113,7 +7347,7 @@ async function openStageEditor(cid, btn = null) {
           await refresh();
           return;
         }
-        lockText.textContent = `段階は保存しました。分は保存できませんでした${r.text ? `（${r.text}）` : ""}`;
+        lockText.textContent = `段階を保存しました。\n時間（分）は保存できませんでした。${r.text ?? ""}`;
         retryBtn.disabled = false;
       },
     })),
@@ -7124,7 +7358,7 @@ async function openStageEditor(cid, btn = null) {
     setSheet({
       title: `${cid} の段階`,
       body: [
-        el("p", { className: "muted", text: "1 つの段階の上限は 0〜10,000、1 日の合計は 10,000 までです。変えると、所属している受講者全員に効きます。" }),
+        el("p", { className: "muted", text: "1 つの段階の上限は 0〜10,000、1 日の合計は 10,000 までです。" }),
         ...body,
       ],
       foot: locked ? lockedFoot() : normalFoot,
@@ -7137,7 +7371,7 @@ async function openStageEditor(cid, btn = null) {
       locked = true;
       retryNow = retry;
       for (const b of body) disableInputs(b);
-      lockText.textContent = `段階は保存しました。分は保存できませんでした${text ? `（${text}）` : ""}`;
+      lockText.textContent = `段階を保存しました。\n時間（分）は保存できませんでした。${text ?? ""}`;
       draw();
     },
   };
@@ -7151,7 +7385,7 @@ async function openStageEditor(cid, btn = null) {
         const plan = await planStageSave(cid, groups, editors, minutesOrig);
         if (appClosed || plan.status === "closed") return;
         if (plan.status === "invalid") {
-          notify("保存できません。次の項目を確認してください。", "error", plan.problems);
+          notify("保存エラー：入力に誤りがあります。", "error", plan.problems);
           return;
         }
         if (plan.status === "ok") {
@@ -7160,7 +7394,7 @@ async function openStageEditor(cid, btn = null) {
             title: "保存してから開きますか？",
             lines: plan.structural ? [STAGE_SAVE_LINE] : [],
             warnings: plan.structural ? plan.warnings : [],
-            buttons: [{ label: "やめる", value: false }, { label: "保存して開く", value: true, kind: "primary" }],
+            buttons: [{ label: "キャンセル", value: false }, { label: "保存して開く", value: true, kind: "primary" }],
           });
           if (!ok || appClosed) return;
           if ((await runStageSave(cid, plan, mctx)) !== "saved") return;
@@ -7197,7 +7431,7 @@ async function saveStages(cid, groups, editors, m = {}) {
   clearNotice();
   const plan = await planStageSave(cid, groups, editors, m.minutes ?? null);
   if (plan.status === "invalid") {
-    notify("保存できません。次の項目を確認してください。", "error", plan.problems);
+    notify("保存エラー：入力に誤りがあります。", "error", plan.problems);
     return "none";
   }
   if (plan.status === "unchanged") {
@@ -7210,7 +7444,7 @@ async function saveStages(cid, groups, editors, m = {}) {
       title: `${cid} の段階を保存しますか？`,
       lines: [STAGE_SAVE_LINE],
       warnings: plan.warnings,
-      buttons: [{ label: "やめる", value: false }, { label: "保存する", value: true, kind: "primary" }],
+      buttons: [{ label: "キャンセル", value: false }, { label: "保存する", value: true, kind: "primary" }],
     });
     if (!ok || appClosed) return "none";
   }
@@ -7218,7 +7452,7 @@ async function saveStages(cid, groups, editors, m = {}) {
 }
 
 /** 016 の保存をするときの確かめの 1 行（［保存して開く］の確かめにもそのまま載せる。2.2） */
-const STAGE_SAVE_LINE = "所属している受講者全員の上限が変わります。";
+const STAGE_SAVE_LINE = "所属する受講者全員の上限が変わります。";
 
 /**
  * 保存の中身を決める（送らない）。m（組 10）：回の段階の編集で読んだ分（stage_id → 分。分の欄が無ければ null）。
@@ -7259,7 +7493,7 @@ async function planStageSave(cid, groups, editors, minutesOrig = null) {
         if (!p.ok) problems.push(`${DAY_KIND_LABELS[kind]}の ${i + 1} 番目：${MSG_MINUTES_INVALID}`);
         else read.push({ index: i, stageId: r.id ?? null, minutes: p.minutes });
       });
-      if (sumMinutes(read.map((x) => x.minutes)) > DAY_MINUTES_MAX) problems.push(`${DAY_KIND_LABELS[kind]}：1 日の合計は ${DAY_MINUTES_MAX} 分までです`);
+      if (sumMinutes(read.map((x) => x.minutes)) > DAY_MINUTES_MAX) problems.push(`${DAY_KIND_LABELS[kind]}：1 日の合計は ${DAY_MINUTES_MAX} 分までです。`);
       // 保存済みの段階は変わった物だけ（lib の collectMinuteChanges）。新しく足した行は id が 016 の保存のあとに決まるので、順番を持っておく
       for (const it of collectMinuteChanges(minutesOrig, read.filter((x) => x.stageId))) minuteItems.push({ day: kind, index: null, id: it.stage_id, minutes: it.minutes });
       for (const x of read) if (!x.stageId && x.minutes !== null) minuteItems.push({ day: kind, index: x.index, id: null, minutes: x.minutes });
@@ -7280,7 +7514,7 @@ async function planStageSave(cid, groups, editors, minutesOrig = null) {
     }
     const read = lib ? await readCohortStageGuides(cid) : null;
     if (appClosed) return { status: "closed" };
-    const line = read ? lib.stageRemovalLine(removed, read.stages) : "消す段階に案内が付いているかを読めませんでした（付いていれば外れます）。";
+    const line = read ? lib.stageRemovalLine(removed, read.stages) : "案内の割り当てを取得できません。消す段階に案内が付いていれば外れます。";
     if (line) warnings.push(line);
   }
   return { status: "ok", plans, structural: plans.length > 0, warnings, minuteItems };
@@ -7301,7 +7535,7 @@ async function runStageSave(cid, plan, m = {}) {
       : await supabase.rpc("admin_update_cohort_stage", { p_stage_id: p.id, p_label: p.label, p_title: p.title, p_credits: p.credits });
     if (error) {
       // 段階の id が決まっていないので、分は送らない（2.1 の保存の 5）
-      notify(`保存の途中で止まりました。${explainError(error)}`, "error", minutesChanged ? [MINUTES_NOT_SAVED] : []);
+      notify(`${errorText("保存", error)}\n一部の段階は保存済みの可能性があります。`, "error", minutesChanged ? [MINUTES_NOT_SAVED] : [], null, null, errorCode("保存", error));
       await refresh();
       return "stopped";
     }
@@ -7328,11 +7562,12 @@ async function runStageSave(cid, plan, m = {}) {
     else items.push({ stage_id: id, minutes: it.minutes });
   }
   const send = async () => {
-    if (unresolved) return { ok: false, text: "" };
+    if (unresolved) return { ok: false, unresolved: true, error: null, text: "" };
     const r = await rpcSettled(MINUTES_SAVE_FN, { p_cohort_id: cid, p_items: items });
     if (r.error) {
-      // 「無い」の誤りの hint は 016 の名前の候補なので出さない。ほかは DB の理由（hint）をそのまま
-      return { ok: false, text: isMissingFunctionError(r.error, MINUTES_SAVE_FN) ? "" : String(r.error.hint ?? "") };
+      // 原因の文は explainError の表の文（DB の hint は console だけ。文の決まり 3.7）。原因が分からなければ空にする
+      const cause = explainErrorInfo(r.error);
+      return { ok: false, error: r.error, text: cause.kind === "unknown" ? "" : cause.text };
     }
     const n = normalizeStageMinutes(r.data, cid);
     if (n && !appClosed) state.stages.minutes.set(cid, { status: "ok", byId: n.byStage });
@@ -7348,10 +7583,11 @@ async function runStageSave(cid, plan, m = {}) {
   }
   if (plan.structural) {
     if (typeof m.onMinutesFailed === "function") m.onMinutesFailed({ retry: send, text: r.text });
-    else notify(`段階は保存しました。分は保存できませんでした${r.text ? `（${r.text}）` : ""}`, "error");
+    else notify(`段階を保存しました。\n時間（分）は保存できませんでした。${r.text ?? ""}`, "error");
     return "minutes";
   }
-  notify(`分は保存できませんでした。${r.text}`, "error");
+  const failed = r.unresolved ? { text: "時間の保存エラー：段階を特定できません。", code: null } : errorInfo("時間の保存", r.error);
+  notify(failed.text, "error", [], null, null, failed.code);
   return "failed";
 }
 
@@ -7373,8 +7609,8 @@ function instructorsSection(c) {
     el("h3", { text: "担当の講師" }),
     boxes.length
       ? el("div", { className: "stack" }, ...boxes)
-      : el("p", { className: "hint", text: "講師がいません。名簿で、講師にする人の区分を「講師」にします。" }),
-    stale.length ? el("p", { className: "warn-text small", text: `次の人は講師でないか停止中です（保存すると担当から外れます）：${stale.join("、")}` }) : null,
+      : el("p", { className: "hint", text: "講師がいません。名簿で区分を「講師」にしてください。" }),
+    stale.length ? el("p", { className: "warn-text small", text: `講師でない・停止中の人は、保存すると担当から外れます：${stale.join("、")}` }) : null,
     el("button", {
       type: "button",
       className: "btn",
@@ -7382,7 +7618,7 @@ function instructorsSection(c) {
       disabled: !boxes.length && !assigned.size,
       onclick: (e) => saveInstructors(c, e.currentTarget.closest("section")),
     }),
-    el("p", { className: "hint", text: "担当の講師は、講師の画面で、この回の段階を進める・戻す・クレジットを追加できます。" }),
+    el("p", { className: "hint", text: "担当の講師は、講師ページで段階の操作とクレジットの追加ができます。" }),
   );
 }
 
@@ -7390,7 +7626,7 @@ async function saveInstructors(c, section) {
   clearNotice();
   const emails = [...section.querySelectorAll('input[type="checkbox"]:checked')].map((i) => i.value);
   const { error } = await supabase.rpc("admin_set_cohort_instructors", { p_cohort_id: c.id, p_emails: emails });
-  if (error) notify(explainError(error), "error");
+  if (error) notify(errorText("保存", error), "error", [], null, null, errorCode("保存", error));
   else notify(emails.length ? `${c.id} の担当を ${emails.length} 人にしました。` : `${c.id} の担当を、なしにしました。`);
   await refresh();
 }
@@ -7450,23 +7686,38 @@ function templatesSection() {
   );
 }
 
+/**
+ * テンプレートの読み込みの失敗の文：テンプレートの誤りがあれば「テンプレートの読み込みエラー：原因」、
+ * 無い（段階の情報の読み込みの失敗で古いだけ）なら「読み込みエラー：段階の情報を取得できません。」
+ */
+function templatesLoadError() {
+  const S = state.stages;
+  return S.templatesErrorRaw
+    ? errorInfo("テンプレートの読み込み", S.templatesErrorRaw)
+    : { text: "読み込みエラー：段階の情報を取得できません。", code: null };
+}
+
 /** テンプレートの一覧の中身：一度も読めていない失敗は「読み込めませんでした」＋再試行、前に読めていれば「前に読んだ値」＋再試行 */
 function templatesBody(items) {
   const S = state.stages;
   if (S.templatesAt === null) {
-    if (S.templatesError || state.fresh.stages.stale) return [errorBox(`テンプレートの一覧を読み込めませんでした。${S.templatesError}`, retryStages)];
+    if (S.templatesError || state.fresh.stages.stale) {
+      const failed = templatesLoadError();
+      return [errorBox(failed.text, retryStages, failed.code)];
+    }
     return [el("p", { className: "muted", text: "読み込み中…" })];
   }
+  const failed = templatesLoadError();
   return [
-    S.templatesError || state.fresh.stages.stale ? staleLine(S.templatesError || "段階の情報を読めませんでした（通信の失敗など）。", S.templatesAt, retryStages) : null,
-    items.length ? el("ul", { className: "set-rows", "aria-label": "段階テンプレート" }, ...items) : el("p", { className: "muted", text: "テンプレートがまだありません。" }),
+    S.templatesError || state.fresh.stages.stale ? staleLine(failed.text, S.templatesAt, retryStages, failed.code) : null,
+    items.length ? el("ul", { className: "set-rows", "aria-label": "段階テンプレート" }, ...items) : el("p", { className: "muted", text: "テンプレートはまだありません" }),
   ];
 }
 
 /** 選んだテンプレートの読む欄：候補に出すか・メモ・各日の段階と合計・［変更］、一番下に分けて［削除］ */
 function templatePanel(id) {
   const t = state.stages.templates.find((x) => x.id === id);
-  if (!t) return { title: "テンプレート", body: [el("p", { className: "muted", text: "このテンプレートは見つかりません（削除された可能性があります）。" })], foot: [] };
+  if (!t) return { title: "テンプレート", body: [el("p", { className: "muted", text: "テンプレートが見つかりません。" })], foot: [] };
   const items = templateItemsOf(id);
   const g = groupStagesByDay(items);
   const totals = dayTotals(items);
@@ -7500,7 +7751,7 @@ function templatePanel(id) {
           )
         ),
       ),
-      el("p", { className: "hint", text: "テンプレートは、回の「段階」から適用します。変更・削除は、すでに適用した回には影響しません。" }),
+      el("p", { className: "hint", text: "テンプレートは、回の段階の欄から適用します。", title: "変更・削除は、すでに適用した回に影響しません。" }),
       el(
         "details",
         { className: "plain-fold minor" },
@@ -7521,7 +7772,7 @@ function templatePanel(id) {
       el(
         "div",
         { className: "danger-zone" },
-        el("p", { className: "hint", text: "削除は取り消せません。" }),
+        el("p", { className: "hint", text: "元に戻せません。" }),
         el("button", { type: "button", className: "btn danger", text: "このテンプレートを削除", disabled: busy, onclick: () => deleteTemplate(t) }),
       ),
     ],
@@ -7607,17 +7858,17 @@ async function openTemplateEditor(t) {
   let saving = false;
   // 既定を読めない・使っている途中で包む RPC が無くなったら、保存を止める（名前やメモだけの変更でも。8.3・8.5）
   let locked = guideMode === "error";
-  const lockSave = () => {
+  const lockSave = (reason = "既定の案内を読み込めません") => {
     locked = true;
     saveBtn.disabled = true;
-    saveBtn.title = "既定の案内を読めないので、保存できません";
+    saveBtn.title = reason;
   };
   const saveBtn = el("button", {
     type: "button",
     className: "btn primary big",
     text: "保存",
     disabled: locked,
-    title: locked ? "既定の案内を読めないので、保存できません" : null,
+    title: locked ? "既定の案内を読み込めません" : null,
     onclick: async () => {
       if (saving || locked) return;
       saving = true;
@@ -7672,12 +7923,12 @@ async function openTemplateEditor(t) {
           text: guideMode === "8" ? "1 つの段階の上限は 0〜10,000、1 日の合計は 10,000 までです。" : gd.lib?.TEMPLATE_GUIDE_FOOT ?? "",
         }),
       ],
-      foot: [saveBtn, cancelButton("やめる")],
+      foot: [saveBtn, cancelButton("キャンセル")],
     })
   );
   if (guideMode === "error") {
     notify(
-      gd.lib?.TEMPLATE_GUIDES_READ_FAILED ?? "既定の案内を読めませんでした。このまま保存すると既定が消えるので、保存を止めています。［閉じる］のあと、もう一度開いてください。",
+      gd.lib?.TEMPLATE_GUIDES_READ_FAILED ?? "読み込みエラー：既定の案内を取得できません。\n保存できません。編集を閉じてから、再度開いてください。",
       "error",
     );
   }
@@ -7710,7 +7961,7 @@ async function saveTemplate(t, f) {
     items = g.items;
   }
   if (problems.length) {
-    notify("保存できません。次の項目を確認してください。", "error", problems);
+    notify("保存エラー：入力に誤りがあります。", "error", problems);
     return;
   }
   state.settings.busy = true;
@@ -7730,7 +7981,7 @@ async function saveTemplate(t, f) {
     if (guideMode === "8b" && isMissingFunctionError(error, TPL_SAVE_FN)) {
       // 使っている途中で DB が戻された：016 に切り替えて送り直さない。保存を止め、最新にしてもらう（8.5）
       markTemplateGuidesMissing();
-      f.lockSave?.();
+      f.lockSave?.("サーバーの更新が未適用です");
       notify(f.lib.DEFAULTS_GONE, "error");
       await loadStageInfo();
       if (!appClosed) renderSettings();
@@ -7739,8 +7990,9 @@ async function saveTemplate(t, f) {
     const target = guideMode === "8b" ? f.lib.templateSaveErrorTarget(error, items) : null;
     if (target?.area === "row") f.editors[target.dayKind]?.setError?.(target.index, target.text);
     // シートは閉じず、入力を残す。捨てた段階の読み込みの代わりを読み直す（読み込み中のまま止めない）
-    if (target?.area === "band") notify(target.text, "error");
-    else notify(`保存できませんでした。${explainError(error)}（入力は残してあります）`, "error");
+    // 画面の不具合（missing_key）のコード（E-ADM-53）は文に入れず、別の値で渡す（決まり 3.2）
+    if (target?.area === "band") notify(target.text, "error", [], null, null, target.code ?? null);
+    else notify(`${errorText("保存", error)}\n入力は残っています。`, "error", [], null, null, errorCode("保存", error));
     await loadStageInfo();
     if (!appClosed) renderSettings();
     return;
@@ -7755,8 +8007,8 @@ async function deleteTemplate(t) {
   if (state.settings.busy) return;
   const ok = await ask({
     title: `テンプレート「${t.name}」を削除しますか？`,
-    lines: ["削除は取り消せません。"],
-    buttons: [{ label: "やめる", value: false }, { label: "削除する", value: true, kind: "danger" }],
+    lines: ["元に戻せません。"],
+    buttons: [{ label: "キャンセル", value: false }, { label: "削除する", value: true, kind: "danger" }],
   });
   if (!ok || appClosed) return;
   state.settings.busy = true;
@@ -7767,7 +8019,7 @@ async function deleteTemplate(t) {
   state.settings.busy = false;
   if (appClosed) return;
   if (error) {
-    notify(`削除できませんでした。${explainError(error)}`, "error");
+    notify(errorText("削除", error), "error", [], null, null, errorCode("削除", error));
     await loadStageInfo();
     if (!appClosed) renderSettings();
     return;
@@ -7802,7 +8054,7 @@ function openAccount() {
             const v = freshnessView(p);
             return [
               el("dt", { text: label }),
-              el("dd", { text: `${v.text ?? (v.failed ? "読み込めていません" : "読み込み中…")}${v.stale ? "（一部は前に読んだ値）" : ""}` }),
+              el("dd", { text: `${v.text ?? (v.failed ? "読み込みエラー" : "読み込み中…")}${v.stale ? "（一部は古い値）" : ""}` }),
             ];
           }),
         ),
@@ -7811,7 +8063,7 @@ function openAccount() {
         el("button", {
           type: "button",
           className: "btn primary big",
-          text: "最新の状態を読み込む",
+          text: "最新にする",
           "data-reload": "",
           onclick: async () => {
             if (refreshing > 0) return;
@@ -7836,7 +8088,7 @@ async function main() {
     } catch {
       // 無視
     }
-    fatal("ログインできませんでした。管理者の Google アカウントでログインし直してください。");
+    fatal("ログインできませんでした。\n管理者のアカウントで再度ログインしてください。");
     $("status").append(
       el("button", { type: "button", className: "gsi-btn", onclick: signIn }, el("span", { className: "gsi-g", "aria-hidden": "true" }), el("span", { className: "gsi-label", text: "Google でログイン" })),
     );
@@ -7844,11 +8096,11 @@ async function main() {
   }
   if (loginReturn.code) {
     // Google から戻った：admin-api でサーバーが交換・登録する（登録できたときだけトークンが来る）
-    $("status").replaceChildren(el("p", { className: "muted", text: "ログインしています…" }));
+    $("status").replaceChildren(el("p", { className: "muted", text: "ログイン中…" }));
     show("status");
     const done = await finishSignIn(loginReturn.code);
     if (done.error) {
-      showLoginNote(done.error);
+      showLoginNote(done.error, done.code ?? null);
       show("login");
       return;
     }
@@ -7857,7 +8109,7 @@ async function main() {
 
   const { data: { session }, error } = await supabase.auth.getSession();
   if (error) {
-    fatal("ログイン状態を確認できませんでした。ページを開き直してください。");
+    fatal("ログインエラー：状態を確認できません。\nページを再読み込みしてください。");
     return;
   }
   if (!session) {
@@ -7868,7 +8120,8 @@ async function main() {
   // （開き直し・トークンの更新で 12 時間は延びない）。管理コンソールのセッションでなければログアウトして、ログインからやり直す
   const st = await consoleStatus();
   if (st.error) {
-    fatal(`ログインの状態を確認できませんでした。${explainError(st.error)}`);
+    const failed = errorInfo("ログイン", st.error);
+    fatal(failed.text, failed.code);
     return;
   }
   if (st.stale) {
@@ -7879,9 +8132,10 @@ async function main() {
   if (!st.admin || st.expiresAt === null) {
     await closeConsole(
       loginReturn.code
-        ? "ログインを確かめられませんでした。もう一度ログインしてください。"
-        : `管理コンソールのログインが終わっているか、ログインしてから ${ADMIN_SESSION_LIMIT_MS / 3600000} 時間たちました。もう一度ログインしてください。`,
+        ? "ログインエラー：状態を確認できません。\n再度ログインしてください。"
+        : "ログインが無効になりました。\n再度ログインしてください。",
       st.identity,
+      loginReturn.code ? null : `ログインが終了したか、有効期限（${ADMIN_SESSION_LIMIT_MS / 3600000} 時間）が切れています。`,
     );
     return;
   }
@@ -7913,7 +8167,8 @@ async function main() {
   const email = normalizeEmail(googleEmail ?? session.user.email ?? "");
   myEmail = email;
   if (adminError) {
-    fatal(`権限を確認できませんでした。${explainError(adminError)}`);
+    const failed = errorInfo("権限の確認", adminError);
+    fatal(failed.text, failed.code);
     return;
   }
   if (!isAdmin) {
@@ -8019,7 +8274,7 @@ async function onSiteNavClick(e) {
   // タブを替えるとき〔switchTab〕と同じ。Codex TASK-0189 F189-01）
   if (state.settings.busy) {
     e.preventDefault();
-    notify("設定の保存の結果を待っています。終わってから移ってください。");
+    notify("保存中です。\n完了までお待ちください。");
     return;
   }
   if (!unsavedSettings().length) return;
@@ -8036,4 +8291,7 @@ window.addEventListener("beforeunload", (e) => {
   e.returnValue = "";
 });
 
-main().catch((e) => fatal(`エラーが発生しました：${e?.message || e}`));
+main().catch((e) => {
+  console.error("管理コンソールの起動に失敗しました", e);
+  fatal("表示エラーが発生しました。\nページを再読み込みしてください。", "E-ADM-99", String(e?.message || e));
+});

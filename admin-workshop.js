@@ -35,8 +35,10 @@ import {
   deriveName,
   emptyGuide,
   errorField,
+  errorInfo,
   explainError,
   FIELD_LABELS,
+  forbiddenWarningItems,
   forbiddenWarnings,
   guideListRow,
   guideOptionsFor,
@@ -138,6 +140,9 @@ dialog.wg-dialog::backdrop { background: var(--scrim, rgba(26, 30, 38, 0.62)); }
 .wg-msg.err { background: var(--surface-2, #F6F7F9); color: var(--danger, #96413A); border: 1px solid var(--danger-line, #E2CDC9); }
 .wg-row-err { color: var(--danger, #96413A); font-size: 12.5px; margin: 2px 0 0; }
 .wg-msg ul { margin: 4px 0 0; padding-left: 18px; }
+/* 組 13：文の中の改行で 1 行目と次の手を 2 行にする（画面の文の決まり 1）。エラーコードは最後の文の後ろに小さく薄く（決まり 3.2） */
+.wg-msg, .wg-row-err { white-space: pre-line; }
+dialog.wg-dialog .err-code { margin-left: 2px; font-size: 12px; font-weight: 400; color: var(--muted, #4C525F); white-space: nowrap; }
 .wg-confirm { flex: 1 1 100%; border: 2px solid var(--accent, #26396E); border-radius: 12px; padding: 8px 12px; background: var(--surface, #fff); }
 .wg-confirm p { margin: 2px 0; font-size: 13px; }
 .wg-scroll td select { width: 100%; }
@@ -224,19 +229,28 @@ function bookIcon() {
   return svg;
 }
 
+/** エラーコードの印（決まり 3.2。文の定数に入れず、最後の文の後ろに小さく薄く出す。無ければ null） */
+function codeMark(code) {
+  return code ? el("span", { className: "err-code", text: `（${code}）` }) : null;
+}
+/** 画面の文（文字列か、errorInfo の { text, code }）を要素の中身にする（コードは別の要素） */
+function msgParts(m) {
+  return m && typeof m === "object" ? [m.text, codeMark(m.code)] : [m];
+}
+
 /** 閉じたかを確かめる間隔（ミリ秒） */
 const CLOSE_CHECK_MS = 300;
 
 /** 見出しの ？ の中身（3.2）。組 8b の既定の機能があるときは 1 文目を替える（8.1。あとの 2 文はそのまま） */
 const HELP_MAIN_FIRST = "段階ごとに案内を選び、［まとめて保存］で付けます。";
 const HELP_MAIN_REST =
-  "公開した版は、受講者の AI が次に案内を読み直したときから使われます。受講者の AI に届くのは、段階ごとの枠の回で、受講者向けのスイッチ（WORKSHOP_GUIDE）が入っているときだけです。";
+  "公開した版は、受講者の AI が次に案内を読み込んだときから使われます。段階ごとの枠の回で、受講者向けのスイッチが入っているときだけ届きます。";
 const HELP_MAIN = `${HELP_MAIN_FIRST}${HELP_MAIN_REST}`;
 const HELP_MAIN_8B = `${HELP_MAIN_FIRST_8B}${HELP_MAIN_REST}`;
 /** 最初のひと言の ？ の中身（3.3） */
-const HELP_OPENING = "大切なことと手順 1 から、画面が作ります。直したいときは［書き直す］を押してください。";
+const HELP_OPENING = "大切なことと手順 1 から自動で作ります。修正するときは［書き直す］を押してください。";
 /** 既定の最初のひと言を DB が断ったとき（3.9 の表） */
-const OPENING_TOO_LONG = "自動で作った最初のひと言が長すぎます。［書き直す］で短くするか、大切なことを短くしてください。";
+const OPENING_TOO_LONG = "最初のひと言が決まりに合いません。\n［書き直す］で修正してください。";
 
 /**
  * 左のメニューに［案内］を足す。返り：{ open, dispose }
@@ -308,13 +322,14 @@ export function mountWorkshopGuide({ supabase, menu, isClosed, ask, askDiscard }
   const S = {
     view: "cohort",
     guides: null,
-    guidesError: "",
+    /** 案内の一覧・回の読み込みの誤り（DB の error。描くときに errorInfo で文にする。無ければ null） */
+    guidesError: null,
     cohorts: null,
-    cohortsError: "",
+    cohortsError: null,
     /** 回の id → { credit_mode, stage_template_id }。読めなければ null（framesError） */
     frames: null,
     framesError: false,
-    /** 回の id → admin_cohort_stage_guides の返り（使っている所と回ごとの表）・読めなかった回の誤り */
+    /** 回の id → admin_cohort_stage_guides の返り（使っている所と回ごとの表）・読めなかった回の誤り（DB の error） */
     assign: new Map(),
     assignErrors: new Map(),
     cohortId: "",
@@ -360,13 +375,15 @@ export function mountWorkshopGuide({ supabase, menu, isClosed, ask, askDiscard }
   let disposed = false;
   let observer;
 
+  /** 窓の上の知らせ。text・items の各行は文字列か errorInfo の { text, code }（コードは文の後ろに小さく出す） */
   function setMsg(kind, text, items = []) {
-    if (!text) {
+    const head = text && typeof text === "object" ? text : { text, code: null };
+    if (!head.text) {
       msg.replaceChildren();
       return;
     }
-    const box = el("div", { className: `wg-msg ${kind}` }, el("div", { text }));
-    if (items.length) box.append(el("ul", {}, ...items.map((t) => el("li", { text: t }))));
+    const box = el("div", { className: `wg-msg ${kind}` }, el("div", {}, ...msgParts(head)));
+    if (items.length) box.append(el("ul", {}, ...items.map((t) => el("li", {}, ...msgParts(t)))));
     msg.replaceChildren(box);
   }
 
@@ -432,7 +449,7 @@ export function mountWorkshopGuide({ supabase, menu, isClosed, ask, askDiscard }
         detail: spec.detail ?? [],
         note: spec.note ?? null,
         buttons: [
-          { label: spec.cancelLabel ?? "やめる", value: false },
+          { label: spec.cancelLabel ?? "キャンセル", value: false },
           { label: spec.okLabel, value: true, kind: spec.kind ?? "primary" },
         ],
         cancelValue: false,
@@ -456,8 +473,8 @@ export function mountWorkshopGuide({ supabase, menu, isClosed, ask, askDiscard }
   async function confirmDiscard(what, okLabel) {
     if (typeof askDiscard === "function") return (await askDiscard(what, okLabel)) === true;
     return await confirmAsk({
-      title: "保存していない変更を破棄しますか？",
-      lines: [`${what}は、まだ保存していません。`],
+      title: "変更を破棄しますか？",
+      lines: [`${what}は失われます。`],
       okLabel,
       kind: "danger",
       cancelLabel: "編集を続ける",
@@ -497,7 +514,7 @@ export function mountWorkshopGuide({ supabase, menu, isClosed, ask, askDiscard }
     const { data, error } = await rpc("admin_workshop_guides");
     if (my !== seq.guides || checkClosed()) return false;
     S.guides = error ? null : (data ?? []);
-    S.guidesError = error ? explainError(error) : "";
+    S.guidesError = error ?? null;
     return !error;
   }
   async function loadCohorts() {
@@ -505,7 +522,7 @@ export function mountWorkshopGuide({ supabase, menu, isClosed, ask, askDiscard }
     const { data, error } = await rpc("admin_cohorts");
     if (my !== seq.cohorts || checkClosed()) return;
     S.cohorts = error ? [] : (data ?? []);
-    S.cohortsError = error ? explainError(error) : "";
+    S.cohortsError = error ?? null;
   }
   /** 回の枠（credit_mode）。admin_cohorts は返さないので cohorts の列を読む。読めなければ null（札は今の判定のまま） */
   async function loadFrames() {
@@ -530,7 +547,7 @@ export function mountWorkshopGuide({ supabase, menu, isClosed, ask, askDiscard }
     if (my !== seq.assign.get(cid) || checkClosed()) return;
     if (error) {
       S.assign.delete(cid);
-      S.assignErrors.set(cid, explainError(error));
+      S.assignErrors.set(cid, error);
     } else {
       S.assign.set(cid, data ?? { stages: [], orphans: [] });
       S.assignErrors.delete(cid);
@@ -858,7 +875,7 @@ export function mountWorkshopGuide({ supabase, menu, isClosed, ask, askDiscard }
   const publishLabel = () => (S.dirty || !S.sel?.id ? "保存して公開…" : "公開する…");
   const bandCountText = (n) => (n ? `あと ${n} か所` : "あと 0 か所");
   function openingPreview(form) {
-    return composeOpening(form) || "（大切なことと手順 1 を入れると、ここに作ります）";
+    return composeOpening(form) || "（大切なことと手順 1 を入力すると、ここに作ります）";
   }
   /**
    * 作った最初のひと言が決まり（80 字・2 文・問い 1）に収まらなければ、作った文を入れた欄を開く（D1）。開いたら true。
@@ -909,10 +926,10 @@ export function mountWorkshopGuide({ supabase, menu, isClosed, ask, askDiscard }
       if (field === "name") {
         S.nameError = nameErrorText(error);
         S.nameEditing = true;
-        setMsg("err", `保存できませんでした。${S.nameError}`);
+        setMsg("err", `保存エラー：${S.nameError}`);
       } else {
         setProblem(error.hint ? String(error.hint) : "", field);
-        setMsg("err", `保存できませんでした。${explainError(error)}`);
+        setMsg("err", errorInfo("保存", error));
       }
       render();
       return null;
@@ -935,16 +952,18 @@ export function mountWorkshopGuide({ supabase, menu, isClosed, ask, askDiscard }
       const args = chk.ok ? chk.args : assignmentArgs(at.cohortId, at.stage, data.id, "", "").args;
       const r = await rpc("admin_set_cohort_stage_guide", args);
       if (checkClosed()) return null;
-      if (r.error) notes.push(`段階（${stageRowName(at.stage)}）に付けられませんでした。${explainError(r.error)}`);
+      if (r.error) notes.push(errorInfo(`段階（${stageRowName(at.stage)}）への割り当て`, r.error));
       else {
         S.rowDrafts.delete(key);
         S.rowErrors.delete(key);
-        notes.push(`段階（${stageRowName(at.stage)}）に付けました（まだ公開していません）。`);
+        notes.push(`段階（${stageRowName(at.stage)}）に付けました（未公開）。`);
       }
       await loadAssignFor(at.cohortId);
     }
-    if (S.problem) setMsg("warn", "下書きを保存しました。公開する前に、次を直してください。", [S.problem.text, ...notes, ...warns]);
-    else if (warns.length) setMsg("warn", "下書きを保存しました。受講者に届く文の言葉を確かめてください。", [...notes, ...warns]);
+    // 言葉の警告の言い換えの案は、一覧の後ろに 1 回だけ（forbiddenWarningItems）
+    const warnItems = forbiddenWarningItems(warns);
+    if (S.problem) setMsg("warn", "下書きを保存しました。\n公開の前に、次を修正してください。", [S.problem.text, ...notes, ...warnItems]);
+    else if (warns.length) setMsg("warn", "下書きを保存しました。\n受講者に届く文の言葉を確認してください。", [...notes, ...warnItems]);
     else setMsg("ok", "下書きを保存しました。", notes);
     // 一覧を読み直す（公開に使う sha は、保存が返した sha のまま。読み直しで差し替えない）
     await loadGuides();
@@ -1000,7 +1019,7 @@ export function mountWorkshopGuide({ supabase, menu, isClosed, ask, askDiscard }
     const sel = S.sel;
     if (!target || S.busy || checkClosed()) return;
     if (my !== epoch || !sel || sel.id !== target.id || sel.sha !== target.sha || S.dirty) {
-      setMsg("err", "公開の対象が変わりました。もう一度［保存して公開…］から確かめてください。");
+      setMsg("err", "公開の対象が変更されました。\n再度、公開のボタンを押してください。");
       render();
       return;
     }
@@ -1014,11 +1033,13 @@ export function mountWorkshopGuide({ supabase, menu, isClosed, ask, askDiscard }
     if (checkClosed() || S.sel !== sel) return;
     if (error) {
       if (error.hint) setProblem(String(error.hint));
-      setMsg("err", `公開できませんでした。${problemText(explainError(error))}`);
+      // 既定のままの最初のひと言を DB が断ったときは、欄の文に読み替える（3.9）
+      const opening = problemText("");
+      setMsg("err", opening ? `公開エラー：${opening}` : errorInfo("公開", error));
     } else {
       setProblem("");
       if (data?.published) setMsg("ok", `版 ${data.version} を公開しました。`);
-      else setMsg("ok", `下書きは前に公開した版と同じなので、版は進めませんでした（版 ${data?.version}）。`);
+      else setMsg("ok", `公開済みの版と同じです（版 ${data?.version}）。`);
     }
     await loadGuides();
     if (checkClosed()) return;
@@ -1029,7 +1050,7 @@ export function mountWorkshopGuide({ supabase, menu, isClosed, ask, askDiscard }
     return S.problem?.area === "opening" && S.sel?.openingAuto ? OPENING_TOO_LONG : text;
   }
 
-  /** ［案内を止める…］［案内を再開…］：保存済みの下書きと今の sha のまま active だけを替える（編集中の入力は送らない） */
+  /** ［案内を停止…］［案内を再開…］：保存済みの下書きと今の sha のまま active だけを替える（編集中の入力は送らない） */
   async function toggleActive() {
     const sel = S.sel;
     if (!sel?.id || !sel.saved || S.busy || checkClosed()) return;
@@ -1052,12 +1073,12 @@ export function mountWorkshopGuide({ supabase, menu, isClosed, ask, askDiscard }
     });
     S.busy = false;
     if (checkClosed() || S.sel !== sel) return;
-    if (error) setMsg("err", `${wasActive ? "止められませんでした" : "再開できませんでした"}。${explainError(error)}`);
+    if (error) setMsg("err", errorInfo(wasActive ? "停止" : "再開", error));
     else {
       sel.sha = data.draft_sha256;
       sel.saved.active = !wasActive;
       sel.active = !wasActive;
-      setMsg("ok", wasActive ? "案内を止めました。" : "案内を再開しました。");
+      setMsg("ok", wasActive ? "案内を停止しました。" : "案内を再開しました。");
     }
     await loadGuides();
     if (checkClosed()) return;
@@ -1124,7 +1145,7 @@ export function mountWorkshopGuide({ supabase, menu, isClosed, ask, askDiscard }
       if (checkClosed()) return;
       if (error) {
         ng++;
-        S.rowErrors.set(j.key, `保存できませんでした。${explainError(error)}`);
+        S.rowErrors.set(j.key, errorInfo("保存", error));
       } else {
         ok++;
         // 送ったあとに同じ行をまた変えていたら、その下書きは残す
@@ -1170,7 +1191,7 @@ export function mountWorkshopGuide({ supabase, menu, isClosed, ask, askDiscard }
     }
     S.busy = false;
     if (ng) setMsg("err", `${ok ? `${ok} 件を外し、` : ""}${ng} 件は外せませんでした。${last}`);
-    else setMsg("ok", `段階が無くなった割り当てを ${ok} 件外しました。`);
+    else setMsg("ok", `段階がなくなった割り当てを ${ok} 件外しました。`);
     await Promise.all([loadAssignFor(cid), loadGuides()]);
     if (checkClosed()) return;
     render();
@@ -1227,10 +1248,10 @@ export function mountWorkshopGuide({ supabase, menu, isClosed, ask, askDiscard }
     if (key) live.fk.set(key, input);
     return wrap;
   }
-  /** 欄の下の「入れてください」と DB の理由 */
+  /** 欄の下の「入力してください。」と DB の理由 */
   function appendFieldNotes(wrap, key, required) {
     if (required) {
-      const miss = el("p", { className: "wg-row-err", text: "入れてください", hidden: true });
+      const miss = el("p", { className: "wg-row-err", text: "入力してください。", hidden: true });
       live.miss.set(key, miss);
       wrap.append(miss);
     }
@@ -1262,7 +1283,7 @@ export function mountWorkshopGuide({ supabase, menu, isClosed, ask, askDiscard }
         el("button", {
           type: "button",
           className: "wg-btn small",
-          text: `${itemLabel}を足す`,
+          text: `${itemLabel}を追加`,
           title: `${maxItems} つまで`,
           onclick: () => {
             (f[key] ??= []).push("");
@@ -1316,7 +1337,7 @@ export function mountWorkshopGuide({ supabase, menu, isClosed, ask, askDiscard }
             type: "button",
             className: "wg-btn small",
             text: open ? "▾" : "▸",
-            title: "受講者が決めること・AI が引き受けてよい操作",
+            title: "受講者が決めること・AI が実行してよい操作",
             "aria-label": `手順 ${i + 1} の詳しく`,
             "aria-expanded": open ? "true" : "false",
             onclick: () => {
@@ -1359,7 +1380,7 @@ export function mountWorkshopGuide({ supabase, menu, isClosed, ask, askDiscard }
       );
       box.append(row);
       for (const k of ["step", "first_question"]) {
-        const miss = el("p", { className: "wg-row-err", text: `手順 ${i + 1} の${FIELD_LABELS[k]}を入れてください`, hidden: true });
+        const miss = el("p", { className: "wg-row-err", text: `手順 ${i + 1} の${FIELD_LABELS[k]}を入力してください。`, hidden: true });
         live.miss.set(`flow.${i}.${k}`, miss);
         box.append(miss);
         if (S.problem?.key === `flow.${i}.${k}`) box.append(el("p", { className: "wg-row-err", role: "alert", text: S.problem.text }));
@@ -1375,7 +1396,7 @@ export function mountWorkshopGuide({ supabase, menu, isClosed, ask, askDiscard }
           field(FIELD_LABELS.ai_may_do, s.ai_may_do, (v) => (s.ai_may_do = v), {
             key: `flow.${i}.ai_may_do`,
             max: 80,
-            title: "受講者の了承のあとに、AI が引き受けてよい操作。空なら、AI は操作の前に了承を取ります",
+            title: "受講者の了承のあとに、AI が実行してよい操作です。空欄なら、AI は操作の前に毎回了承を取ります。",
           }),
         );
         box.append(el("div", { className: "wg-step" }, more));
@@ -1388,7 +1409,7 @@ export function mountWorkshopGuide({ supabase, menu, isClosed, ask, askDiscard }
         el("button", {
           type: "button",
           className: "wg-btn small",
-          text: "＋ 手順を足す",
+          text: "＋ 手順を追加",
           title: "7 つまで",
           onclick: () => {
             f.flow.push({ step: "", first_question: "", student_decides: "", ai_may_do: "" });
@@ -1521,7 +1542,7 @@ export function mountWorkshopGuide({ supabase, menu, isClosed, ask, askDiscard }
         el("button", {
           type: "button",
           className: "wg-btn small",
-          text: "ヒントを足す",
+          text: "ヒントを追加",
           title: "6 つまで",
           onclick: () => {
             f.hints.push({ when: "", say: "" });
@@ -1538,7 +1559,8 @@ export function mountWorkshopGuide({ supabase, menu, isClosed, ask, askDiscard }
       d.append(field(FIELD_LABELS.finish_minutes, String(f.finish_minutes ?? ""), (v) => (f.finish_minutes = v), {
         key: "finish_minutes",
         type: "number",
-        title: "5〜60 分。既定は 20。制作時間の残りがこの分になったら、AI が仕上げを手伝う進め方に替えます",
+        hint: "5〜60 分（既定 20）",
+        title: "制作時間の残りがこの分になったら、AI が仕上げを手伝う進め方に替えます。",
       }));
     }
     d.append(field("メモ（受講者には届きません）", sel.note, (v) => (sel.note = v), { key: "note", multiline: true, max: 400 }));
@@ -1546,14 +1568,14 @@ export function mountWorkshopGuide({ supabase, menu, isClosed, ask, askDiscard }
   }
 
   function editorStatus(sel) {
-    if (!sel.id) return { text: "まだ保存していません", tone: "muted" };
+    if (!sel.id) return { text: "未保存", tone: "muted" };
     const g = guideById(sel.id);
     if (!g) return { text: "", tone: "muted" };
     const st = guideState(
       { guide_id: g.id, guide_kind: g.kind, guide_active: g.active, published_version: g.published_version },
       { via: g.last_published_via },
     );
-    return { text: `${st.text}${g.has_pending_draft ? "｜直しかけあり" : ""}`, tone: st.tone };
+    return { text: `${st.text}${g.has_pending_draft ? "｜未公開の変更あり" : ""}`, tone: st.tone };
   }
 
   function editor() {
@@ -1607,7 +1629,7 @@ export function mountWorkshopGuide({ supabase, menu, isClosed, ask, askDiscard }
         el("button", {
           type: "button",
           className: `wg-btn small${on ? " danger" : ""}`,
-          text: on ? "案内を止める…" : "案内を再開…",
+          text: on ? "案内を停止…" : "案内を再開…",
           disabled: S.busy,
           onclick: () => toggleActive(),
         }),
@@ -1619,7 +1641,8 @@ export function mountWorkshopGuide({ supabase, menu, isClosed, ask, askDiscard }
       required: true,
       multiline: true,
       max: 120,
-      title: "目安 40 字前後・理由だけを 1 文で。途中で読み直したときにも、AI がそのまま言います",
+      hint: "40 字前後・理由だけを 1 文で",
+      title: "AI が途中で案内を再度読み込んだときも、そのまま言います。",
     }));
     scroll.append(field(FIELD_LABELS.goal, f.goal, (v) => (f.goal = v), { key: "goal", required: true, multiline: true, max: 120 }));
     scroll.append(
@@ -1634,7 +1657,7 @@ export function mountWorkshopGuide({ supabase, menu, isClosed, ask, askDiscard }
         "div",
         { className: "wg-msg warn" },
         el("div", { text: "受講者に届く文の言葉" }),
-        el("ul", {}, ...warns.map((w) => el("li", { text: w }))),
+        el("ul", {}, ...forbiddenWarningItems(warns).map((w) => el("li", { text: w }))),
       ));
     }
 
@@ -1656,7 +1679,7 @@ export function mountWorkshopGuide({ supabase, menu, isClosed, ask, askDiscard }
       text: publishLabel(),
       disabled: off,
       "aria-disabled": off ? "true" : undefined,
-      title: missing.length ? "入れていない欄があるので、まだ公開できません" : undefined,
+      title: missing.length ? "未入力の欄があります" : undefined,
       onclick: () => savePublish(),
     });
     band.append(live.publish);
@@ -1669,7 +1692,7 @@ export function mountWorkshopGuide({ supabase, menu, isClosed, ask, askDiscard }
     const cancel = el("button", {
       type: "button",
       className: "wg-btn",
-      text: sp.cancelLabel ?? "やめる",
+      text: sp.cancelLabel ?? "キャンセル",
       onclick: () => cancelInlineConfirm(),
     });
     live.confirmCancel = cancel;
@@ -1725,7 +1748,7 @@ export function mountWorkshopGuide({ supabase, menu, isClosed, ask, askDiscard }
     const scroll = el("div", { className: "wg-scroll" });
     const band = el("div", { className: "wg-band" });
     if (S.cohorts === null) {
-      scroll.append(el("p", { text: "読み込んでいます…" }));
+      scroll.append(el("p", { text: "読み込み中…" }));
       return el("section", { className: "wg-pane wg-left" }, scroll);
     }
     const sel = el("select", { id: "wg-cohort", disabled: S.busy, "data-fk": "cohort" });
@@ -1739,15 +1762,15 @@ export function mountWorkshopGuide({ supabase, menu, isClosed, ask, askDiscard }
     sel.addEventListener("change", () => chooseCohort(sel.value, sel));
     live.fk.set("cohort", sel);
     scroll.append(el("div", { className: "wg-field" }, el("label", { for: "wg-cohort", text: "回" }), sel));
-    if (S.cohortsError) scroll.append(el("div", { className: "wg-msg err", text: `回を読めませんでした。${S.cohortsError}` }));
-    if (S.guidesError) scroll.append(el("div", { className: "wg-msg err", text: `案内の一覧を読めませんでした。${S.guidesError}` }));
+    if (S.cohortsError) scroll.append(el("div", { className: "wg-msg err" }, ...msgParts(errorInfo("回の読み込み", S.cohortsError))));
+    if (S.guidesError) scroll.append(el("div", { className: "wg-msg err" }, ...msgParts(errorInfo("案内の読み込み", S.guidesError))));
     const cid = S.cohortId;
     if (!cid) return el("section", { className: "wg-pane wg-left" }, scroll);
     const err = S.assignErrors.get(cid);
-    if (err) scroll.append(el("div", { className: "wg-msg err", text: `この回の割り当てを読めませんでした。${err}` }));
+    if (err) scroll.append(el("div", { className: "wg-msg err" }, ...msgParts(errorInfo("割り当ての読み込み", err))));
     const a = S.assign.get(cid);
     if (!a) {
-      if (!err) scroll.append(el("p", { text: "読み込んでいます…" }));
+      if (!err) scroll.append(el("p", { text: "読み込み中…" }));
       return el("section", { className: "wg-pane wg-left" }, scroll);
     }
     // 組 8b：回のテンプレートの名前（テンプレートが無い回・既定の機能が無いときは出さない。8.1）
@@ -1755,16 +1778,16 @@ export function mountWorkshopGuide({ supabase, menu, isClosed, ask, askDiscard }
     const tplName = tplId ? S.tplNames?.get(tplId) : null;
     if (tplName) scroll.append(el("p", { className: "wg-hint", text: `テンプレート：${tplName}` }));
     const mode = S.frames ? S.frames.get(cid)?.credit_mode : undefined;
-    if (S.framesError) scroll.append(el("p", { className: "wg-hint", text: "回の枠を読めませんでした。" }));
+    if (S.framesError) scroll.append(el("p", { className: "wg-hint", text: "読み込みエラー：回の枠を取得できません。" }));
     else if (mode && mode !== "stage") {
-      scroll.append(el("p", { className: "wg-tone-warn", text: "この回は Day ごとの枠なので、案内は受講者に出ません。" }));
+      scroll.append(el("p", { className: "wg-tone-warn", text: "Day ごとの枠の回では、案内は受講者に出ません。" }));
     }
     const orphans = a.orphans ?? [];
     if (orphans.length) {
       const box = el(
         "div",
         { className: "wg-msg warn" },
-        el("div", { text: `段階が無くなった割り当てが ${orphans.length} 件あります（受講者には出ません）` }),
+        el("div", { text: `段階がなくなった割り当てが ${orphans.length} 件あります（受講者には出ません）。` }),
       );
       for (const o of orphans) {
         box.append(el(
@@ -1810,7 +1833,7 @@ export function mountWorkshopGuide({ supabase, menu, isClosed, ask, askDiscard }
     if (!stages.length) {
       scroll.append(el("p", {
         className: "wg-hint",
-        text: "この回には段階がありません。回の画面でテンプレートを適用すると、段階ができます。",
+        text: "この回には段階がありません。［回］でテンプレートを適用してください。",
       }));
     } else {
       const t = el("table");
@@ -1945,7 +1968,7 @@ export function mountWorkshopGuide({ supabase, menu, isClosed, ask, askDiscard }
       "tr",
       target ? { className: "wg-target" } : {},
       el("td", { className: "wg-stage-name" }, el("span", { text: stageRowName(s) }), mark),
-      el("td", {}, g, originWide, rowErr ? el("p", { className: "wg-row-err", role: "alert", text: rowErr }) : null),
+      el("td", {}, g, originWide, rowErr ? el("p", { className: "wg-row-err", role: "alert" }, ...msgParts(rowErr)) : null),
       stCell,
       el("td", { className: "wg-ops-cell" }, times, originBtn, op),
     );
@@ -1995,9 +2018,9 @@ export function mountWorkshopGuide({ supabase, menu, isClosed, ask, askDiscard }
       }),
     ));
     if (S.guidesError) {
-      scroll.append(el("div", { className: "wg-msg err", text: `一覧を読めませんでした。${S.guidesError}` }));
-    } else if (S.guides === null) scroll.append(el("p", { text: "読み込んでいます…" }));
-    else if (!S.guides.length) scroll.append(el("p", { className: "wg-hint", text: "まだ案内がありません。" }));
+      scroll.append(el("div", { className: "wg-msg err" }, ...msgParts(errorInfo("案内の読み込み", S.guidesError))));
+    } else if (S.guides === null) scroll.append(el("p", { text: "読み込み中…" }));
+    else if (!S.guides.length) scroll.append(el("p", { className: "wg-hint", text: "案内はまだありません" }));
     else {
       const t = el("table");
       const head = el("tr");

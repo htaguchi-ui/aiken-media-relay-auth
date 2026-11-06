@@ -275,8 +275,9 @@ export function workRow(work) {
 
 const SCOPE_BADGE_LABELS = { public: "公開", lecture: "講義内", private: "完全非公開" };
 /**
- * 公開範囲のバッジ。種類（ワークショップ・ブリッジワーク）によらず、作品ごとに出す（公開・講義内・完全非公開）。
- * 組 11 から、ワークショップの作品も提出の直後に 3 つから選び、あとからマイページで変えられる（決定 A）（stageKind は呼び出しの形を保つために受け取るだけ）
+ * 公開範囲のバッジ。種類（ワークショップ・ブリッジワーク）によらず、作品ごとに今の範囲を出す（公開・講義内・完全非公開）。
+ * 組 11 から、作品は提出の直後に範囲を選び、あとからマイページで変えられる（決定 A）。D-1106-120x から、ワークショップで選べるのは公開・講義内の 2 つ
+ * （完全非公開はブリッジワークだけ）。前に完全非公開で出したワークショップの作品は、その札のまま出す（stageKind は呼び出しの形を保つために受け取るだけ）
  */
 export function scopeBadge(work, stageKind) {
   return { label: SCOPE_BADGE_LABELS[work.scope], tone: work.scope };
@@ -446,22 +447,30 @@ export const PUBLIC_NOT_YET = "「公開」は準備中です。";
  */
 export const PUBLIC_BLOCKED_LINK_HELP = `${PUBLIC_BLOCKED_LINK}${PUBLIC_BLOCKED_TIPS[PUBLIC_BLOCKED_LINK]}`;
 
+/** 一覧の ？ の中の完全非公開の行の後ろに足す 1 文（D-1106-120x。完全非公開はブリッジワークだけ） */
+export const PRIVATE_BRIDGE_ONLY_HELP = "ブリッジワークの動画だけ選べます。";
+
 /**
- * 一覧の ？ の中：3 つの範囲の名前と説明（提出の窓の 3 つの丸と同じ文。並びは一覧の選ぶ欄と同じ）と、「公開」を今は選べないときの理由（選べるなら null）。
+ * 一覧の ？ の中：3 つの範囲の名前と説明（提出の窓の丸と同じ文。並びは一覧の選ぶ欄と同じ）と、「公開」を今は選べないときの理由（選べるなら null）。
+ * 完全非公開の行の後ろには「ブリッジワークの動画だけ選べます。」を足す（D-1106-120x）。
  * 一覧の行には説明も理由も出さない（行を詰めるため。D-1105-121x。提出の窓は D-1104-130x-c のまま）
  */
 export function myScopeHelp(ctx) {
   const blocked = publicBlockedReason(ctx);
   return {
-    lines: ["public", "lecture", "private"].map((s) => `${SCOPE_CHOICE_LABELS[s]}：${SCOPE_CHOICE_NOTES[s]}`),
+    lines: ["public", "lecture", "private"].map((s) => `${SCOPE_CHOICE_LABELS[s]}：${SCOPE_CHOICE_NOTES[s]}${s === "private" ? PRIVATE_BRIDGE_ONLY_HELP : ""}`),
     note: blocked === PUBLIC_BLOCKED_LEGAL ? PUBLIC_NOT_YET : blocked === PUBLIC_BLOCKED_LINK ? PUBLIC_BLOCKED_LINK_HELP : blocked,
   };
 }
 
 const SCOPE_RANK = { private: 0, lecture: 1, public: 2 };
 
+/** ワークショップの作品を完全非公開に変えようとしたときの理由（画面の選ぶ欄には出さないので、ふだんは届かない最後の守り。D-1106-120x） */
+export const PRIVATE_BRIDGE_ONLY_REASON = "「完全非公開」はブリッジワークの動画だけ選べます。";
+
 /**
- * 公開範囲を変えるときの流れ（設計 5.2）。種類（ワークショップ・ブリッジワーク）によらない（組 11。決定 A のあとの main の決め）。
+ * 公開範囲を変えるときの流れ（設計 5.2）。組 11（決定 A のあとの main の決め）の流れに、D-1106-120x の種類の守りを足した物。
+ * - 完全非公開へ変えられるのはブリッジワークの作品だけ（kind が bridge でない作品は、ワークショップとして断る。今が完全非公開の作品の講義内・公開への変更は通す）。
  * - サーバーが変えられないとした作品（can_change_scope が偽）は変えられない。
  * - 狭める変更（公開→講義内・完全非公開、講義内→完全非公開）は確認だけ。
  * - 「公開」にする変更は、同意の文の全文とチェックの欄（Google のログインで、法務の確認済みの版があるときだけ）。
@@ -470,6 +479,7 @@ const SCOPE_RANK = { private: 0, lecture: 1, public: 2 };
  */
 export function scopeChangePlan(work, next, ctx) {
   if (!SCOPES.includes(next) || next === work.scope) return { ok: false, reason: "公開範囲は変更されていません。" };
+  if (next === "private" && work.kind !== "bridge") return { ok: false, reason: PRIVATE_BRIDGE_ONLY_REASON };
   if (!work.canChangeScope) return { ok: false, reason: SCOPE_FIXED_NOTE };
   if (next === "public") {
     const blocked = publicBlockedReason(ctx);

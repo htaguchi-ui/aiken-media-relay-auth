@@ -15,18 +15,18 @@
 <!-- ログインの確かめ・RPC の接続先へ先につないでおく（supabase-js の fetch は資格情報なしなので crossorigin） -->
 <link rel="preconnect" href="https://tnzwhwitgnzoehbjrmoy.supabase.co" crossorigin>
 <link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=IBM+Plex+Sans+JP:wght@400;500;600;700&amp;display=swap">
-<link rel="stylesheet" href="/r/2751bb45fefd/studio.css">
-<link rel="stylesheet" href="/r/2751bb45fefd/gsi-button.css">
-<link rel="stylesheet" href="/r/2751bb45fefd/site-nav.css">
-<link rel="modulepreload" href="/r/2751bb45fefd/admin-lib.js">
-<link rel="modulepreload" href="/r/2751bb45fefd/auth-storage.js">
-<link rel="modulepreload" href="/r/2751bb45fefd/cohort-close-lib.js">
-<link rel="modulepreload" href="/r/2751bb45fefd/share-lib.js">
-<link rel="modulepreload" href="/r/2751bb45fefd/site-nav.js">
-<link rel="modulepreload" href="/r/2751bb45fefd/stage-lib.js">
-<link rel="modulepreload" href="/r/2751bb45fefd/stage-minutes-lib.js">
-<link rel="modulepreload" href="/r/2751bb45fefd/storage-usage-lib.js">
-<link rel="modulepreload" href="/r/2751bb45fefd/submissions-lib.js">
+<link rel="stylesheet" href="/r/0692eb951f2f/studio.css">
+<link rel="stylesheet" href="/r/0692eb951f2f/gsi-button.css">
+<link rel="stylesheet" href="/r/0692eb951f2f/site-nav.css">
+<link rel="modulepreload" href="/r/0692eb951f2f/admin-lib.js">
+<link rel="modulepreload" href="/r/0692eb951f2f/auth-storage.js">
+<link rel="modulepreload" href="/r/0692eb951f2f/cohort-close-lib.js">
+<link rel="modulepreload" href="/r/0692eb951f2f/share-lib.js">
+<link rel="modulepreload" href="/r/0692eb951f2f/site-nav.js">
+<link rel="modulepreload" href="/r/0692eb951f2f/stage-lib.js">
+<link rel="modulepreload" href="/r/0692eb951f2f/stage-minutes-lib.js">
+<link rel="modulepreload" href="/r/0692eb951f2f/storage-usage-lib.js">
+<link rel="modulepreload" href="/r/0692eb951f2f/submissions-lib.js">
 <style>
   /* 色・余白・角丸・ボタン・上部の帯の土台は共通の studio.css（マイページと同じ値。--muted・--low-text は重要な数字が明暗とも 7:1 になる値）。
      ここには管理コンソールだけが使う変数と、一覧・表・シートの形を置く（同じ名前の部品は、ここが後に読まれるので勝つ） */
@@ -69,6 +69,11 @@
   .ellipsis { white-space: nowrap; overflow: hidden; text-overflow: ellipsis; min-width: 0; }
   .strong { font-weight: 600; }
   .error-text { color: var(--danger); }
+  /* 組 13：文の 1 行目と次の手は、同じ要素の中で改行して 2 行にする（画面の文の決まり 1。文の中の改行をそのまま出す）。
+     エラーコードは最後の文の後ろに小さく薄く出す（決まり 3.2。文の定数とは別の値） */
+  :is(.error-text, .hint, .warn-text, .note-box, .muted, .field-error, .notice-text, #status, #login-note):not(.ellipsis),
+  :is(.warn-box, .warn-line) > span, .stale-line p, .ask-body p, .ask-detail li, #notice li, .empty p { white-space: pre-line; }
+  .err-code { margin-left: 2px; font-size: 12px; font-weight: 400; color: var(--muted); white-space: nowrap; }
   h1, h2, h3, p { margin: 0; }
   a { color: var(--accent); }
   button, input, select, textarea { font: inherit; color: inherit; }
@@ -135,7 +140,8 @@
     min-height: 44px; border-radius: 12px; border: 1px solid var(--line-2); background: var(--surface); color: var(--text-3);
     font-weight: 700; display: flex; align-items: center; justify-content: center; cursor: pointer; padding: 0 6px; text-align: center;
   }
-  .choice > label:has(input:checked) { background: var(--accent-soft); color: var(--accent-soft-text); border: 2px solid var(--accent); }
+  .choice > label:has(input:checked) { position: relative; z-index: 1; background: var(--sel-bg, var(--accent-soft)); color: var(--accent-soft-text); border-color: transparent; box-shadow: var(--sel-shadow, 0 0 0 1px var(--accent-soft-line)); }
+  .choice > label:has(input:checked)::before { content: "✓"; content: "✓" / ""; margin-right: 4px; }
   .choice > label:has(input:focus-visible) { outline: 2px solid var(--accent); outline-offset: 2px; }
   .choice input, .seg input { position: absolute; opacity: 0; width: 1px; height: 1px; pointer-events: none; }
 
@@ -322,7 +328,7 @@
     display: flex; align-items: center; gap: 12px; min-height: 60px; padding: 10px 14px; border-radius: 14px; background: var(--surface);
     border: 1px solid var(--line); cursor: pointer;
   }
-  .pick:has(input:checked) { border: 2px solid var(--accent); padding: 9px 13px; }
+  .pick:has(input:checked) { position: relative; z-index: 1; border-color: transparent; background: var(--sel-card-bg, var(--surface)); box-shadow: var(--sel-shadow, 0 0 0 1px var(--accent-soft-line)); }
   .pick.disabled { cursor: not-allowed; opacity: 0.6; }
   .pick input[type="checkbox"] { width: 22px; height: 22px; margin: 0; flex: none; accent-color: var(--accent); }
   .pick-text { display: flex; flex-direction: column; min-width: 0; flex: 1 1 auto; }
@@ -382,6 +388,10 @@
   .grants .plus { font-size: 16px; font-weight: 700; color: var(--ok-fg); min-width: 56px; }
   .grants .gtext { display: flex; flex-direction: column; min-width: 0; flex: 1 1 auto; }
   .grant-form { display: flex; flex-direction: column; gap: 10px; padding: 12px; background: var(--surface-2); border-radius: 12px; }
+  /* 追加の欄の「あと 8,500 まで ?」（組 13 U-05）：文の直後に ？。開いた説明は欄の地の色と分ける */
+  .grant-room > summary { justify-content: flex-start; gap: 8px; min-height: 32px; }
+  .grant-room .help-text { color: var(--text-2); }
+  .grant-room .help-body { margin: 4px 0 0; background: var(--surface); font-size: 13px; }
   .menu { background: var(--surface); border: 1px solid var(--line); border-radius: 16px; overflow: hidden; }
   .menu > * + * { border-top: 1px solid var(--line-soft); }
   .mrow {
@@ -441,7 +451,7 @@
     padding: 6px 8px; margin-left: -8px; border: 0; border-radius: var(--r-s); background: transparent; color: var(--text); text-align: left; font-size: 14px;
   }
   .set-item:hover { background: var(--surface-2); }
-  .set-li.is-selected .set-item { background: var(--accent-soft); box-shadow: inset 3px 0 0 var(--accent); }
+  .set-li.is-selected .set-item { position: relative; z-index: 1; background: var(--sel-bg, var(--accent-soft)); box-shadow: var(--sel-shadow, 0 0 0 1px var(--accent-soft-line)); }
   .set-name { font-weight: 600; overflow-wrap: anywhere; }
   .set-line { display: flex; flex-wrap: wrap; align-items: baseline; gap: 0 10px; min-width: 0; }
   .set-val { font-weight: 700; font-variant-numeric: tabular-nums; overflow-wrap: anywhere; }
@@ -623,7 +633,7 @@
   .check input { width: 22px; height: 22px; margin: 0; accent-color: var(--accent); }
   .radio-list { display: flex; flex-direction: column; gap: 8px; }
   .radio-card { display: flex; align-items: center; gap: 12px; min-height: 56px; padding: 10px 14px; border: 1px solid var(--line); border-radius: 14px; background: var(--surface); cursor: pointer; }
-  .radio-card:has(input:checked) { border: 2px solid var(--accent); padding: 9px 13px; }
+  .radio-card:has(input:checked) { position: relative; z-index: 1; border-color: transparent; background: var(--sel-card-bg, var(--surface)); box-shadow: var(--sel-shadow, 0 0 0 1px var(--accent-soft-line)); }
   .radio-card input { width: 20px; height: 20px; margin: 0; flex: none; accent-color: var(--accent); }
   .radio-card .rtext { display: flex; flex-direction: column; min-width: 0; }
   .note-box { padding: 10px 12px; background: var(--surface-2); border-radius: 10px; font-size: 12px; color: var(--text-2); }
@@ -750,7 +760,7 @@
     .account { display: flex; align-items: center; gap: 8px; font-size: 13px; color: var(--muted); min-width: 0; white-space: nowrap; }
     .account .icon-btn { width: 40px; height: 40px; border-radius: var(--r-s); color: var(--text); }
     .avatar { width: 40px; height: 40px; border-radius: var(--r-s); }
-    /* 左のメニュー：縦に並べ、ヘッダーの下に貼り付ける。今いる所は、選んだ行と同じ組（--accent-soft の地と左の --accent の線） */
+    /* 左のメニュー：縦に並べ、ヘッダーの下に貼り付ける。今いる所は、明るい面と淡い縁と影で浮かせる（highlight/SPEC.md） */
     .admin-shell { max-width: 1240px; margin: 0 auto; display: grid; grid-template-columns: 184px minmax(0, 1fr); align-items: start; }
     .side-menu {
       position: sticky; top: var(--topbar-h); display: flex; flex-direction: column; gap: 4px; margin: 0; padding: 20px 0 20px 24px;
@@ -759,7 +769,7 @@
     body.selecting .side-menu { display: flex; } /* 広い幅は選択中も残す（選択の見出しは名簿の枠の中） */
     .side-item { justify-content: flex-start; gap: 10px; min-height: 44px; padding: 0 12px; border-radius: var(--r-s); font-size: 15px; font-weight: 600; }
     .side-item:hover { background: var(--surface-2); color: var(--text); }
-    .side-item[aria-current="page"] { background: var(--accent-soft); color: var(--accent-soft-text); font-weight: 700; box-shadow: inset 3px 0 0 var(--accent); }
+    .side-item[aria-current="page"] { background: var(--sel-lift-bg, var(--accent-soft)); color: var(--accent-soft-text); font-weight: 700; box-shadow: var(--sel-shadow, 0 0 0 1px var(--accent-soft-line)); }
     .content { max-width: none; margin: 0; padding: 20px 24px 40px 16px; display: flex; flex-direction: column; gap: 16px; min-width: 0; }
     body.selecting .content { padding-bottom: 120px; }
     body.selecting #overview { display: grid !important; }
@@ -814,12 +824,12 @@
     .trow.head { min-height: 0; padding: 10px 16px; font-size: 12px; color: var(--muted); border-bottom: 1px solid var(--line-soft); }
     .trow.cohort { grid-template-columns: minmax(0, 1.2fr) minmax(0, 1.4fr) minmax(0, 1.6fr) minmax(0, 0.8fr) minmax(0, 1.6fr); min-height: 64px; }
     button.trow:hover { background: var(--surface-2); }
-    .trow.is-selected { background: var(--accent-soft); box-shadow: inset 3px 0 0 var(--accent); }
+    .trow.is-selected, button.trow.is-selected:hover { position: relative; z-index: 1; background: var(--sel-bg, var(--accent-soft)); box-shadow: var(--sel-shadow-row, inset 0 0 0 1px var(--accent-soft-line)); }
     .cell { display: flex; flex-direction: column; gap: 2px; min-width: 0; align-items: flex-start; }
     .cell.stretch { align-items: stretch; gap: 4px; }
     .cell > * { max-width: 100%; }
     .pick { border-radius: 0; border: 0; min-height: 56px; padding: 10px 16px; }
-    .pick:has(input:checked) { border: 0; padding: 10px 16px; background: var(--accent-soft); box-shadow: inset 3px 0 0 var(--accent); }
+    .pick:has(input:checked) { border: 0; padding: 10px 16px; background: var(--sel-bg, var(--accent-soft)); box-shadow: var(--sel-shadow-row, inset 0 0 0 1px var(--accent-soft-line)); }
     .selhead { padding: calc(10px + env(safe-area-inset-top)) 16px 10px; border-bottom: 1px solid var(--line-soft); }
     .selhead h2 { font-size: 16px; }
     .sel-hint { padding: 10px 16px; border-bottom: 1px solid var(--line-soft); }
@@ -865,6 +875,21 @@
     body.setbar .content { padding-bottom: 40px; }
     body.setbar .save-bar { bottom: 0; }
   }
+  /* 設定の項目のまとまりをカードに・右の欄が出る幅ではいつも 2 段の行（組 13・settings/DESIGN.md P-1・F-2） */
+  /* まとまりがあるときだけ外の枠を消す：読み込み中・失敗は今の箱のまま */
+  #settings-main > .box:has(> .set-group) { background: transparent; border: 0; border-radius: 0; padding: 0; gap: 12px; }
+  #settings-main > .box:has(> .set-group) > .box-head h3 { font-size: 16px; }
+  /* カードは縁と面だけ。影は付けない（選んだ行の --sel-shadow をいちばん浮かせる）。overflow は付けない（影と縁が切れる。highlight/SPEC.md §4.3）。
+     左の余白は 16px 以上（.set-item の margin-left: -8px と選んだ行の影の分） */
+  #settings-main > .box:has(> .set-group) > .set-group { background: var(--surface); border: 1px solid var(--line); border-radius: 16px; padding: 12px 16px 4px; }
+  #settings-main > .box:has(> .set-group) > .set-group + .set-group { margin-top: 0; }
+  #settings-main > .box:has(> .set-group) > .set-group > h4 { margin: 0 0 4px; font-size: 14px; color: var(--text); letter-spacing: 0; }
+  @media (min-width: 900px) { #settings-main > .box:has(> .set-group) > .set-group { padding: 14px 20px 6px; } }
+  /* 右の欄が出る幅では［利用と上限］の行をいつも 2 段に：1 段目に名前、2 段目に値と対象。右の欄を開いても行の形が変わらない（F-2） */
+  @media (min-width: 68.75em) {
+    #settings-main .set-item { grid-template-columns: minmax(0, 1fr); min-height: 56px; }
+    #settings-main .set-line { display: flex; }
+  }
   /* 横向きのスマホ（高さが低い）：画面を圧迫するので固定しない */
   @media (orientation: landscape) and (max-height: 500px) {
     :root, :root:has(body.selecting) { --topbar-h: 0px; }
@@ -881,6 +906,39 @@
   @media (max-width: 360px) {
     .grid-3 { grid-template-columns: repeat(2, minmax(0, 1fr)); }
     .choice { grid-template-columns: repeat(2, minmax(0, 1fr)); }
+  }
+  /* 選んだ項目の強調の切り替え（組 13）：120ms まで。動きを減らす設定では動かさない */
+  @media (prefers-reduced-motion: no-preference) {
+    .set-item, .side-item, .trow, .pick, .choice > label, .radio-card { transition: background-color var(--sel-motion, 120ms ease-out), box-shadow var(--sel-motion, 120ms ease-out); }
+  }
+  @media (forced-colors: active) {
+    .set-li.is-selected .set-item, .side-item[aria-current="page"], .trow.is-selected, .pick:has(input:checked),
+    .choice > label:has(input:checked), .radio-card:has(input:checked) { outline: 2px solid Highlight; outline-offset: -2px; }
+    /* 選んだ物に focus があるときは、輪を外へ出す（中の輪＝選んだ・外の輪＝focus。選んだ印の輪に focus の輪が隠れない） */
+    .set-li.is-selected .set-item:focus-visible, .side-item[aria-current="page"]:focus-visible, button.trow.is-selected:focus-visible,
+    .choice > label:has(input:checked):has(input:focus-visible) { outline-offset: 2px; }
+  }
+  /* キーボードの輪（focus-visible）は、隣の選んだ物（z-index: 1）より前に出す（組 13）。輪の 4 辺が隣の面の下に隠れないように */
+  .set-item:focus-visible, .side-item:focus-visible, button.trow:focus-visible, .choice > label:has(input:focus-visible) { position: relative; z-index: 2; }
+  /* 選んだ物の中の文字（組 13・版 4）：どの文字も、選んだ面の上で前の比以上にする（受け入れ基準「文字と背景のコントラストは今と同じ以上」）。
+     変数を選んだ物に置き、中の文字に受け継がせる。前の面が --accent-soft だった物は、明るい配色では #EAF2FF の方が明るいので今の値のまま比が上がる。
+     明るい配色で前の面が白だったカード（ラジオのカード・狭い幅の選ぶカード）は、#EAF2FF の上で白の上の前の比以上になる濃い値にする
+     （--text 17.79≥17.76・--text-2 8.15≥8.11・--muted 7.90≥7.84・--accent-soft-text 12.48≥12.46・--warn-fg 7.14≥7.10・--low-strong 8.90≥8.88）。暗い配色は下の塊が上書きする。
+     カードは文字の色を body から受け継ぐ（変数は受け継いだ色を決め直さない）ので、color: var(--text) をカードに置く */
+  .radio-card:has(input:checked), .pick:has(input:checked) { --text: #07080A; --text-2: #434852; --muted: #444A56; --accent-soft-text: #1C2A4F; --warn-fg: #694A28; --low-strong: #643624; color: var(--text); }
+  /* 暗い配色：選んだ面（行 #293355・カード #212944）が前（#1E2741・#161B2B）より明るいので、中の文字を明るい値に替えて前の比以上にする
+     （行／カード：--text 白 12.36≥12.28／14.33≥14.24・--text-2 #D5D9E0 8.73≥8.72／10.12≥10.11・--muted #B1B7C3 6.14≥6.12／7.12≥7.10・
+     --accent-soft-text #DFE5F7 9.82≥9.80・--warn-fg #F2DCC0 9.28≥9.27・--low-strong #F4C0A5 7.61≥7.37／8.81≥8.55）
+     --track #3A4670：選んだ行の中の残りの棒の地（前の #262E44 は面との比 1.09 でほとんど見えない。#3A4670 で 1.35・棒の色 #A9B9E9 と 4.72）。
+     つまみ（.seg・狭い幅の .side-item）は前のまま（地より明るくすると、文字の比を前以上に保てない） */
+  @media (prefers-color-scheme: dark) {
+    .set-li.is-selected .set-item, .trow.is-selected, .pick:has(input:checked), .choice > label:has(input:checked), .radio-card:has(input:checked) {
+      --text: #FFFFFF; --text-2: #D5D9E0; --muted: #B1B7C3; --accent-soft-text: #DFE5F7; --warn-fg: #F2DCC0; --low-strong: #F4C0A5;
+    }
+    .trow.is-selected, .pick:has(input:checked) { --track: #3A4670; }
+  }
+  @media (prefers-color-scheme: dark) and (min-width: 900px) {
+    .side-item[aria-current="page"] { --accent-soft-text: #DFE5F7; }
   }
 </style>
 </head>
@@ -907,7 +965,7 @@
 <section id="denied" class="center-card" hidden aria-labelledby="denied-title">
   <span class="brand-sub">A.I.KEN Studio</span>
   <h1 id="denied-title">管理コンソール</h1>
-  <p class="error-text">管理者の権限がありません。</p>
+  <p class="error-text">ログインエラー：管理者の権限がありません。<br>［ログアウト］を押し、管理者のアカウントでログインしてください。<span class="err-code">（E-LOG-54）</span></p>
   <p class="muted">ログイン中のアカウント：<span id="denied-email" class="tabular"></span></p>
   <button type="button" class="btn" id="denied-logout-btn">ログアウト</button>
 </section>
@@ -926,7 +984,7 @@
       <nav class="site-nav" id="site-nav" aria-label="ページの移動" hidden></nav>
       <div class="account">
         <span id="checked-at" class="checked tabular"></span>
-        <button type="button" class="icon-btn" id="reload-btn" aria-label="最新の状態を読み込む" data-tip="最新にする">
+        <button type="button" class="icon-btn" id="reload-btn" aria-label="最新にする" data-tip="最新にする">
           <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true" focusable="false"><path d="M20 11a8 8 0 1 0-2.34 5.66"/><path d="M20 4v7h-7"/></svg>
         </button>
       </div>
@@ -991,9 +1049,9 @@
       <div class="set-split">
         <div class="set-col" id="settings-panel" role="tabpanel" aria-labelledby="subtab-usage">
           <section id="settings-summary" class="box set-summary" aria-labelledby="sum-h"></section>
+          <div id="settings-main"></div>
           <!-- 消費の推移（228：admin_usage_trend）。今月（日ごと）・直近 12 か月（月ごと）を、モデル・区分・回・種類で色分けした積み上げの棒（admin.js の renderTrend） -->
           <section id="settings-trend" class="box trend" aria-labelledby="trend-h" hidden></section>
-          <div id="settings-main"></div>
           <div id="settings-storage"></div>
           <div id="settings-models"></div>
           <div id="settings-templates"></div>
@@ -1012,7 +1070,7 @@
 
 <dialog id="sheet" class="sheet" aria-labelledby="sheet-title"></dialog>
 <dialog id="ask" class="ask" aria-labelledby="ask-title"></dialog>
-<script type="module" src="/r/2751bb45fefd/topbar-height.js"></script>
-<script type="module" src="/r/2751bb45fefd/admin.js"></script>
+<script type="module" src="/r/0692eb951f2f/topbar-height.js"></script>
+<script type="module" src="/r/0692eb951f2f/admin.js"></script>
 </body>
 </html>

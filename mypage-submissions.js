@@ -387,7 +387,7 @@ export function createMySubmissions(o) {
       el("div", { className: "my-meta muted small", text: myWorkMeta(w) }),
       // ブリッジワークの目的は 2 段目の下に、行の幅いっぱいで（狭い幅で札の横に細く折り返さない）
       purpose ? el("div", { className: "my-purpose small", text: purpose }) : null,
-      // 公開範囲を変える欄は、種類（ワークショップ・ブリッジワーク）によらず、サーバーの can_change_scope だけで出す（組 11）
+      // 公開範囲を変える欄を出すかは、種類（ワークショップ・ブリッジワーク）によらず、サーバーの can_change_scope だけで決める（組 11）。選択肢は種類で絞る（scopeControl。D-1106-120x）
       el("div", { className: "my-ops" }, ...ops),
     );
   }
@@ -395,6 +395,7 @@ export function createMySubmissions(o) {
   /**
    * 公開範囲を変える欄（変えられないときは出さない。サーバーの can_change_scope に従う）。
    * 選択肢は札と同じ短い名前（SCOPE_LABELS。説明は一覧の上の ？ の中。D-1105-121x）。［変更する］は、今と違う値を選んだときだけ押せる（組 13 の U-13。欄のすぐ横なので名詞を省く）
+   * 完全非公開はブリッジワークの作品だけに出す（D-1106-120x）。今が完全非公開のワークショップの作品だけは、今の値として残す（消すと select の値と札が食い違う。講義内・公開へは変えられ、戻れない）
    */
   function scopeControl(w) {
     if (!w.canChangeScope) return null;
@@ -403,7 +404,7 @@ export function createMySubmissions(o) {
     const select = mark(el(
       "select",
       { className: "input compact-select", "aria-label": myWorkScopeLabel(w) },
-      ...SCOPE_ORDER.map((s) => el("option", { value: s, text: SCOPE_LABELS[s], ...(s === w.scope ? { selected: true } : {}), ...(s === "public" && blocked ? { disabled: true } : {}) })),
+      ...SCOPE_ORDER.filter((s) => s !== "private" || w.kind === "bridge" || w.scope === "private").map((s) => el("option", { value: s, text: SCOPE_LABELS[s], ...(s === w.scope ? { selected: true } : {}), ...(s === "public" && blocked ? { disabled: true } : {}) })),
     ), `${w.workId}|select`);
     shownScopes.set(select, w.scope);
     /** 選んでいる値（まだ値が無い間は今の範囲） */

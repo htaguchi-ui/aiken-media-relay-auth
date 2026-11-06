@@ -60,6 +60,27 @@
     --tip-bg: #E8EAF0; --tip-text: #0E1220;
   }
 }
+/* 選んだ項目の強調（組 13・highlight/SPEC.md）：左の帯は使わず、明るい面＋淡い縁＋2 段の影で浮かせる */
+:root {
+  --sel-bg: #EAF2FF;                       /* 白い箱の中で選んだ面 */
+  --sel-lift-bg: #FFFFFF;                  /* 灰色の地の上で選んだ面 */
+  --sel-card-bg: #EAF2FF;                  /* 前の面が白だったカード（ラジオのカード・狭い幅の選ぶカード）で選んだ面 */
+  --sel-edge: rgba(38, 57, 110, 0.18);     /* 淡い縁（紺の 18%） */
+  --sel-shadow: 0 0 0 1px var(--sel-edge), 0 1px 2px rgba(22, 30, 56, 0.08), 0 4px 12px -4px rgba(22, 30, 56, 0.18);
+  --sel-shadow-row: inset 0 0 0 1px var(--sel-edge), 0 1px 2px rgba(22, 30, 56, 0.08), 0 2px 6px -1px rgba(22, 30, 56, 0.16);
+  --sel-motion: 120ms ease-out;
+}
+@media (prefers-color-scheme: dark) {
+  :root {
+    --sel-bg: #293355;                     /* 前の #1E2741 より明るく、白の文字で前の比 12.28 以上（12.36）。hover #1C2234 との比 1.28・#222A3E と 1.16 */
+    --sel-lift-bg: #293355;
+    --sel-card-bg: #212944;                /* 前の面 #161B2B のカード：白の文字で前の比 14.24 以上（14.33）。選んでいないカードとの比 1.20 */
+    --sel-glint: inset 0 1px 0 rgba(255, 255, 255, 0.07);  /* 上の縁の細い光（暗い地では影より効く） */
+    --sel-edge: rgba(169, 185, 233, 0.40);
+    --sel-shadow: var(--sel-glint), 0 0 0 1px var(--sel-edge), 0 1px 2px rgba(0, 0, 0, 0.45), 0 4px 12px -4px rgba(0, 0, 0, 0.6);
+    --sel-shadow-row: var(--sel-glint), inset 0 0 0 1px var(--sel-edge), 0 1px 2px rgba(0, 0, 0, 0.45), 0 2px 6px -1px rgba(0, 0, 0, 0.6);
+  }
+}
 
 /* ---- 土台 ---- */
 * { box-sizing: border-box; }

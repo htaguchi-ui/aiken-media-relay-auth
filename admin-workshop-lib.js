@@ -25,7 +25,7 @@ export const FIELD_LABELS = {
   step: "手順の名前",
   first_question: "最初の問いかけ",
   student_decides: "受講者が決めること",
-  ai_may_do: "AI が引き受けてよい操作",
+  ai_may_do: "AI が実行してよい操作",
   done_when: "完成の目安",
   optional_polish: "任意の仕上げ",
   avoid: "やってはいけないこと",
@@ -37,12 +37,12 @@ export const FIELD_LABELS = {
   finish_minutes: "仕上げに切り替える残り時間（分）",
 };
 
-/** 公開の確かめの文（3.4）：lines の 2 行目・11/18 からの注意（warnings）・急ぐときの note */
-export const PUBLISH_LINE = "受講者の AI は、次に案内を読み直したときから新しい版を使います。";
-export const PUBLISH_LATE_WARNING = "11/18 より後の公開は、田口さんの承認が要ります。";
-export const PUBLISH_HURRY_NOTE = "急ぐときは、講師から受講者に「案内を読み直して」と伝えてもらってください。";
 /** この日（日本時間）から、公開の確かめに 11/18 の注意を出す */
 export const PUBLISH_LATE_FROM = "2026-11-18";
+/** 公開の確かめの文（3.4）：lines の 2 行目・11/18 からの注意（warnings）・急ぐときの note。注意の日付は PUBLISH_LATE_FROM から作る（当日を含む） */
+export const PUBLISH_LINE = "受講者の AI は、次に案内を読み込んだときから新しい版を使います。";
+export const PUBLISH_LATE_WARNING = `${monthDay(PUBLISH_LATE_FROM)} 以降の公開は、統括の承認が必要です。`;
+export const PUBLISH_HURRY_NOTE = "急ぐときは、受講者が AI に「案内を読み直して」と頼むよう、講師から伝えてください。";
 
 /** 新しい案内の空の形
  * @param {string} kind
@@ -186,11 +186,18 @@ export function forbiddenWordsIn(body) {
   return found;
 }
 
-/** 警告の文（1 行ずつ） */
+/** 警告の文（1 行ずつ）。言い換えの案（FORBIDDEN_HINT）は警告ごとに繰り返さず、一覧の後ろに 1 回だけ出す（forbiddenWarningItems） */
 export function forbiddenWarnings(body) {
-  return forbiddenWordsIn(body).map((f) =>
-    `「${f.label}」に「${f.word}」があります。受講者に届く文では使わない言葉です（目標・完成の目安・受け付け・制作時間などに言い換えてください）。`
-  );
+  return forbiddenWordsIn(body).map((f) => `「${f.label}」に受講者向けでない言葉「${f.word}」があります。`);
+}
+
+/** 言葉の警告の一覧の後ろに 1 回だけ出す言い換えの案 */
+export const FORBIDDEN_HINT = "目標・完成の目安などに言い換えてください。";
+
+/** 言葉の警告の一覧（警告が 1 つ以上あれば、後ろに言い換えの案を 1 回だけ足す）
+ * @param {string[]} warnings */
+export function forbiddenWarningItems(warnings) {
+  return warnings.length ? [...warnings, FORBIDDEN_HINT] : [];
 }
 
 /** 一覧（［案内の一覧］）の 1 行の表示。公開の札は guideState と同じ言葉（3.6・3.8）。割り当ての数（assignment_count）は
@@ -224,9 +231,7 @@ export function guideOptionsFor(dayKind, guides) {
     .filter((g) => g.kind === kind)
     .map((g) => ({
       id: g.id,
-      label: `${str(g.name)}${g.published_version == null ? "（まだ公開していない）" : ""}${
-        g.active === false ? "（無効）" : ""
-      }`,
+      label: `${str(g.name)}${g.published_version == null ? "（未公開）" : ""}${g.active === false ? "（停止中）" : ""}`,
     }));
 }
 
@@ -266,36 +271,91 @@ export function assignmentArgs(cohortId, stage, guideId, start, end) {
     };
   }
   const s = timeValue(start), e = timeValue(end);
-  if (s === undefined || e === undefined) return { ok: false, message: "時刻は 10:00 の形で入れてください。" };
-  if ((s === null) !== (e === null)) {
-    return {
-      ok: false,
-      message: "時刻表の目安は、始まりと終わりの両方を入れてください（入れないときは両方とも空に）。",
-    };
-  }
-  if (s !== null && s >= e) return { ok: false, message: "時刻表の目安は、始まりを終わりより前にしてください。" };
-  if (!gid && s !== null) return { ok: false, message: "時刻表の目安は、案内を選んだ段階にだけ入れられます。" };
+  if (s === undefined || e === undefined) return { ok: false, message: "時刻は 10:00 の形です。" };
+  if ((s === null) !== (e === null)) return { ok: false, message: "始まりと終わりは、両方入力するか両方空にしてください。" };
+  if (s !== null && s >= e) return { ok: false, message: "始まりは終わりより前の時刻です。" };
+  if (!gid && s !== null) return { ok: false, message: "時刻は、案内を選んだ段階にだけ入力できます。" };
   return {
     ok: true,
     args: { p_cohort_id: cohortId, p_stage_id: stage.stage_id, p_guide_id: gid, p_planned_start: s, p_planned_end: e },
   };
 }
 
-/** DB の誤りを画面の文にする（hint は日本語の理由。無ければ形で決めた文） */
-export function explainError(error) {
-  if (!error) return "";
+// ---- 失敗の文（文の決まり 3.7）。admin-lib.js の explainErrorInfo・errorInfo と同じ組み立て・同じ文（admin-workshop.js の import の関係を
+// 変えないために、ここに持つ。admin-lib.js は読まない） ----
+
+/** 通信の失敗の文（前置きを付けずに単独で出す。admin-lib.js の MSG_NETWORK_FAILURE と同じ文） */
+export const MSG_NETWORK_FAILURE = "通信エラー：接続できませんでした。\nインターネット接続を確認してください。";
+/** ログインの期限切れの文（前置きを付けずに単独で出す。admin-lib.js の MSG_LOGIN_EXPIRED と同じ文） */
+export const MSG_LOGIN_EXPIRED = "ログインの有効期限が切れました。\nページを再読み込みしてください。";
+/** 管理者の権限が無いときの完成した文（E-LOG-54。admin-lib.js の MSG_ADMIN_ONLY と同じ文。原因の部品は「管理者の権限がありません。」） */
+export const MSG_ADMIN_ONLY = "権限エラー：管理者の権限がありません。\n再度ログインしてください。";
+
+/** 日本語を含むか（DB の hint が画面の文か） */
+function hasJapanese(t) {
+  return /[\u0080-\uffff]/.test(str(t));
+}
+
+/**
+ * DB の誤りの原因（前置きの無い原因の文）。返り：{ text, kind, code }
+ * - kind："cause"（呼び出し側が「〇〇エラー：」を付ける）・"perm"（権限。完成した文は MSG_ADMIN_ONLY）・
+ *   "alone"（通信の失敗・ログインの期限切れ。前置きを付けない）・"unknown"（原因が分からない。text は ""。文は errorInfo が作る）
+ * - code：エラーコード（決まり 3.1 に当たる物だけ。unknown の E-ADM-99 は errorInfo が付ける）
+ * 下書きの版の重なり（guide_draft_conflict）は DB の hint より先に見る。hint は日本語の理由のときだけ使う。サーバーの message は console だけ
+ * @param {any} error
+ * @returns {{ text: string, kind: "cause" | "perm" | "alone" | "unknown", code: string | null }}
+ */
+export function explainErrorInfo(error) {
+  if (!error) return { text: "", kind: "cause", code: null };
   const msg = str(error.message);
-  if (error.code === "42501" || msg === "admin_only") {
-    return "管理者の権限がありません。管理コンソールにログインし直してください。";
-  }
-  if (error.code === "PGRST202") {
-    return "この画面に要るサーバー側の準備がまだできていません（管理者に知らせてください）。";
-  }
-  if (error.hint) return str(error.hint);
+  if (error.code === "42501" || msg === "admin_only") return { text: "管理者の権限がありません。", kind: "perm", code: "E-LOG-54" };
+  if (error.code === "PGRST202") return { text: "サーバーの更新が未適用です。", kind: "cause", code: "E-ADM-50" };
   if (msg === "guide_draft_conflict") {
-    return "ほかの操作で下書きが変わりました。読み直してから、もう一度保存してください。";
+    return { text: "ほかの操作で下書きが変更されました。\n［最新にする］のあと、再度お試しください。", kind: "cause", code: null };
   }
-  return `うまくいきませんでした（${msg || "理由不明"}）。`;
+  if (hasJapanese(error.hint)) return { text: str(error.hint), kind: "cause", code: null };
+  if (/JWT|session|token/i.test(msg)) return { text: MSG_LOGIN_EXPIRED, kind: "alone", code: null };
+  if (/fetch|network/i.test(msg)) return { text: MSG_NETWORK_FAILURE, kind: "alone", code: null };
+  console.warn("原因が分からないエラー:", error?.code ?? "", msg);
+  return { text: "", kind: "unknown", code: null };
+}
+
+/**
+ * DB の誤りの前置きの無い原因の文（画面に出すときは errorInfo・errorText を通す）。原因が分からないときは「{op}エラーが発生しました。」
+ * （op が無ければ「エラーが発生しました。」）
+ * @param {any} error
+ * @param {string} [op]
+ */
+export function explainError(error, op = "") {
+  const info = explainErrorInfo(error);
+  if (info.kind === "unknown") return op ? `${op}エラーが発生しました。` : "エラーが発生しました。";
+  return info.text;
+}
+
+/**
+ * 画面に出す完成した文とエラーコード（文の決まり 3.7）。op は操作の名前（「保存」「公開」「回の読み込み」など）。
+ * 通信の失敗・ログインの期限切れは前置きを付けずに単独、権限は MSG_ADMIN_ONLY、原因が分かる物は「{op}エラー：原因」、
+ * 原因が分からない物は「{op}エラーが発生しました。」（E-ADM-99）。返り：{ text, code }（code は文に入れず、小さく別に出す。決まり 3.2）
+ * @param {string} op
+ * @param {any} error
+ * @returns {{ text: string, code: string | null }}
+ */
+export function errorInfo(op, error) {
+  if (!error) return { text: "", code: null };
+  const info = explainErrorInfo(error);
+  if (info.kind === "unknown") return { text: `${op}エラーが発生しました。`, code: "E-ADM-99" };
+  if (info.kind === "alone") return { text: info.text, code: info.code };
+  if (info.kind === "perm") return { text: MSG_ADMIN_ONLY, code: info.code };
+  return { text: `${op}エラー：${info.text}`, code: info.code };
+}
+
+/**
+ * errorInfo の文だけ
+ * @param {string} op
+ * @param {any} error
+ */
+export function errorText(op, error) {
+  return errorInfo(op, error).text;
 }
 
 /** "2026-11-20" → "11/20"（読めなければそのまま） */
@@ -382,9 +442,9 @@ export function composeOpening(form) {
 /** 最初のひと言が DB の決まり（80 字・2 文・問いかけ 1 つ）に収まるか。返り：{ ok, reason }（reason は欄の下の 1 行） */
 export function openingFits(text) {
   const t = str(text).trim();
-  if (charCount(t) > OPENING_MAX) return { ok: false, reason: "80 字を超えています。短くしてください" };
-  if (sentenceCount(t) > 2) return { ok: false, reason: "2 文までにしてください" };
-  if (questionCount(t) > 1) return { ok: false, reason: "問いかけは 1 つにしてください" };
+  if (charCount(t) > OPENING_MAX) return { ok: false, reason: "80 字までです。" };
+  if (sentenceCount(t) > 2) return { ok: false, reason: "2 文までです。" };
+  if (questionCount(t) > 1) return { ok: false, reason: "問いかけは 1 つまでです。" };
   return { ok: true, reason: "" };
 }
 
@@ -504,11 +564,11 @@ export function guideState(row, { creditMode = undefined, pending = false, via =
   if (row.day_kind && row.guide_kind && (row.day_kind === "bridge") !== (row.guide_kind === "bridge")) {
     return { key: "kind", text: "出ない 種類が違う", tone: "warn" };
   }
-  if (row.guide_active === false) return { key: "inactive", text: "止めている", tone: "warn" };
+  if (row.guide_active === false) return { key: "inactive", text: "停止中", tone: "warn" };
   if (row.published_version === null || row.published_version === undefined) return { key: "unpublished", text: "未公開", tone: "warn" };
   return {
     key: pending ? "pending" : "published",
-    text: `公開中 版 ${row.published_version}${pending ? "・直しかけ" : ""}${via === "ops_script" ? "（手順書で公開）" : ""}`,
+    text: `公開中 版 ${row.published_version}${pending ? "・未公開の変更あり" : ""}${via === "ops_script" ? "（手順書で公開）" : ""}`,
     tone: "ok",
   };
 }
@@ -603,15 +663,15 @@ export function publishAsk({ name, used = [], today = todayJst() }) {
 export function activeAsk({ name, used = [], active }) {
   const where = used.length ? usedInText(used).replace(/^使っている所：/, "") : "";
   const line = active
-    ? where ? `使っている所（${where}）の受講者の AI は、今から案内を使わなくなります。` : "まだどの段階にも付いていないので、受講者には変わりません。"
+    ? where ? `使っている所（${where}）の受講者の AI は、今から案内を使わなくなります。` : "まだどの段階にも付いていません。"
     : where ? `使っている所（${where}）の受講者の AI は、今から公開した版の案内を使います。` : "まだどの段階にも付いていません。";
   return {
-    title: active ? `「${str(name)}」を止めますか？` : `「${str(name)}」を再開しますか？`,
+    title: active ? `「${str(name)}」を停止しますか？` : `「${str(name)}」を再開しますか？`,
     lines: [line],
     warnings: /** @type {string[]} */ ([]),
     detail: /** @type {string[]} */ ([]),
-    note: "編集中の入力は送りません（保存した下書きのまま、止める・再開するだけです）。",
-    okLabel: active ? "止める" : "再開する",
+    note: "編集中の入力は、停止・再開に含まれません。",
+    okLabel: active ? "停止する" : "再開する",
     kind: active ? "danger" : "primary",
   };
 }
@@ -638,7 +698,7 @@ export function planApplyLoss(stages) {
     .sort((a, b) => (order[a.day_kind] ?? 9) - (order[b.day_kind] ?? 9) || Number(a.seq ?? 0) - Number(b.seq ?? 0));
   const item = (/** @type {any} */ s) => `${stageShort(s)}：「${str(s.guide_name)}」${minutesText(s.minutes)}`;
   const detail = hit.length >= 3
-    ? [item(hit[0]), `ほか ${hit.length - 1} か所（［ワークショップの案内］で確かめられます）`]
+    ? [item(hit[0]), `ほか ${hit.length - 1} か所`]
     : hit.map(item);
   return { count: hit.length, detail };
 }
@@ -653,20 +713,20 @@ export function applyAsk({ cohortName, templateName, memberCount = 0, already, h
   /** @type {string[]} */
   const lines = [];
   const first = !already && !hasStages;
-  if (first) lines.push("この回の枠が、Day ごとではなく、ワークショップごとの段階になります。");
+  if (first) lines.push("この回の枠が、ワークショップごとの段階になります。");
   else if (already) lines.push("段階を全部入れ替えます（名前・クレジットの変更は消えます）。");
-  else lines.push("この回の枠が段階ごとになり、残っていた段階は全部入れ替わります（名前・クレジットの変更は消えます）。");
-  if (Number(memberCount) > 0) lines.push(`所属している受講者 ${Number(memberCount)} 人全員に効きます。`);
+  else lines.push("枠が段階ごとになり、段階はすべて入れ替わります（名前・クレジットの変更は消えます）。");
+  if (Number(memberCount) > 0) lines.push(`所属する受講者 ${Number(memberCount)} 人全員に反映されます。`);
   const L = first ? 0 : loss?.count ?? 0;
   return {
     title: `${str(cohortName)} に「${str(templateName)}」を適用しますか？`,
     lines,
-    warnings: L > 0 ? [`この回で付けた案内 ${L} か所は外れます。自動では付け直しません。`] : [],
+    warnings: L > 0 ? [`この回で付けた案内 ${L} か所は外れます。自動では元に戻りません。`] : [],
     detail: L > 0 ? loss.detail : [],
     note: first
-      ? "Day1 が始まる前なら、「Day ごとの枠に戻す」で戻せます。始まったあとは戻せません。"
+      ? "Day1 の開始前なら、［Day ごとの枠に戻す］で戻せます。"
       : L > 0
-      ? "適用のあと、［ワークショップの案内］の［回ごと］で付け直してください。"
+      ? "適用後に、［ワークショップの案内］の［回ごと］で再度付けてください。"
       : null,
     okLabel: "適用する",
     kind: "primary",
@@ -677,7 +737,7 @@ export function applyAsk({ cohortName, templateName, memberCount = 0, already, h
  * @param {{ cohortName: string, templateName: string, lost?: number }} o */
 export function applyResultText({ cohortName, templateName, lost = 0 }) {
   return `${str(cohortName)} にテンプレート「${str(templateName)}」を適用しました。${
-    lost > 0 ? `外れた案内 ${lost} か所は、［ワークショップの案内］で付け直してください。` : ""
+    lost > 0 ? `外れた案内 ${lost} か所は、［ワークショップの案内］で再度付けてください。` : ""
   }`;
 }
 
@@ -705,6 +765,8 @@ const STEP_FIELDS = [
   ["の名前", "step"],
   ["の最初の問いかけ", "first_question"],
   ["の受講者が決めること", "student_decides"],
+  ["の AI が実行してよい操作", "ai_may_do"],
+  // DB の検査の理由（workshop_guide.sql の workshop_field_problem）は前の欄の名前のまま（DB の文は変えない）。どちらの名前でも同じ欄に結ぶ
   ["の AI が引き受けてよい操作", "ai_may_do"],
 ];
 /** @type {[string, string][]} */
@@ -796,9 +858,9 @@ export function missingFunction(error, name) {
 }
 
 /** 既定（写し・テンプレートの既定）を読めなかったときの 1 行（8.4） */
-export const DEFAULTS_READ_FAILED = "既定の案内を読めませんでした";
+export const DEFAULTS_READ_FAILED = "既定の案内を読み込めません";
 /** 使っている途中で包む RPC が無くなったとき（8.5。016 に送り直さない） */
-export const DEFAULTS_GONE = "既定の案内の機能が使えなくなりました。画面を最新にしてから、もう一度操作してください。";
+export const DEFAULTS_GONE = "既定の案内の機能が使えません。\n［最新にする］のあと、再度お試しください。";
 /** 窓の見出しの ？ の 1 文目（8.1。あとの 2 文は組 8 のまま） */
 export const HELP_MAIN_FIRST_8B = "テンプレートで付いた案内を、回ごとに替えられます。";
 
@@ -849,7 +911,7 @@ export const ORIGIN_TEXT = {
   mismatch: "段階がテンプレートと違います",
 };
 /** 「段階がテンプレートと違います」のホバー（8.4） */
-export const ORIGIN_MISMATCH_TITLE = "この段階の名前か題名が、テンプレートの同じ順番の段階と違うので、既定を付けません。";
+export const ORIGIN_MISMATCH_TITLE = "テンプレートと名前・題名が違う段階には、既定を付けません。";
 
 /**
  * 由来の札（6.5 の表の 8 つの順）。stage：段階（day_kind・seq・label・title）、row：今の割り当て（guide_id・planned_start・planned_end。
@@ -967,9 +1029,9 @@ export function applyDiffAsk({ cohortName, templateName, memberCount = 0, alread
   /** @type {string[]} */
   const lines = [];
   const first = !already && !hasStages;
-  if (first) lines.push("この回の枠が、Day ごとではなく、ワークショップごとの段階になります。");
+  if (first) lines.push("この回の枠が、ワークショップごとの段階になります。");
   else if (already) lines.push("段階を全部入れ替えます（名前・クレジットの変更は消えます）。");
-  else lines.push("この回の枠が段階ごとになり、残っていた段階は全部入れ替わります（名前・クレジットの変更は消えます）。");
+  else lines.push("枠が段階ごとになり、段階はすべて入れ替わります（名前・クレジットの変更は消えます）。");
   const { N, M, E, K, attach } = diff;
   if (attach > 0) {
     const part = first || M < 1
@@ -979,28 +1041,28 @@ export function applyDiffAsk({ cohortName, templateName, memberCount = 0, alread
       : `（うち ${M} か所は、新しいテンプレートの既定に替わります）`;
     lines.push(`案内は、テンプレートの既定を ${attach} か所に付けます${part}。`);
   } else if (!first && hasRows) lines.push("このテンプレートには既定の案内がありません。付けた案内は外れます。");
-  if (Number(memberCount) > 0) lines.push(`所属している受講者 ${Number(memberCount)} 人全員に効きます。`);
+  if (Number(memberCount) > 0) lines.push(`所属する受講者 ${Number(memberCount)} 人全員に反映されます。`);
   /** @type {string[]} */
   const warnings = [];
   if (!first && N > 0) {
     const tail = sameTemplate
-      ? E > 0 ? `適用すると、テンプレートの既定に戻ります（既定の無い ${E} か所は外れます）。` : "適用すると、テンプレートの既定に戻ります。"
+      ? E > 0 ? `テンプレートの既定に戻ります（既定のない ${E} か所は外れます）。` : "テンプレートの既定に戻ります。"
       : E > 0
-      ? `適用すると、新しいテンプレートの既定になります（既定の無い ${E} か所は外れます）。`
-      : "適用すると、新しいテンプレートの既定になります。";
+      ? `新しいテンプレートの既定になります（既定のない ${E} か所は外れます）。`
+      : "新しいテンプレートの既定になります。";
     warnings.push(`この回で書き換えた段階が ${N} か所あります。${tail}`);
   }
   const note = K > 0
     ? `手順書で付けた記録 ${K} 件も消えます（台帳に残っています）。`
     : first
-    ? "Day1 が始まる前なら、「Day ごとの枠に戻す」で戻せます。始まったあとは戻せません。"
+    ? "Day1 の開始前なら、［Day ごとの枠に戻す］で戻せます。"
     : null;
   const items = first ? [] : diff.items ?? [];
   // 組 10：分の行（段階の無い回への初めての適用では、分を入れた段階が無いので出さない）
   const lost = first ? null : minutesLostPart(minutesLost);
   let minutesRow = lost ? `${lost}。` : null;
   const rows = () => lines.length + warnings.length + (minutesRow ? 1 : 0) + detail.length + (note ? 1 : 0);
-  let detail = items.length <= 2 ? [...items] : [items[0], `ほか ${items.length - 1} か所（［ワークショップの案内］で確かめられます）`];
+  let detail = items.length <= 2 ? [...items] : [items[0], `ほか ${items.length - 1} か所`];
   if (detail.length && rows() > ASK_LIMITS.total) {
     detail = [items.length > 1 ? `${items[0]} ほか ${items.length - 1} か所` : items[0]];
   }
@@ -1036,28 +1098,29 @@ function minutesLostPart(n) {
 export function applyDiffResultText({ cohortName, templateName, attached = 0, skipped = 0 }) {
   const a = Number(attached) || 0, s = Number(skipped) || 0;
   return `${str(cohortName)} にテンプレート「${str(templateName)}」を適用しました。${a > 0 ? `案内を ${a} か所に付けました。` : ""}${
-    s > 0 ? `${s} か所は、テンプレートの段階が変わっていたので付けていません。テンプレートの［変更］で既定を選び直してください。` : ""
+    s > 0 ? `${s} か所は付けていません。テンプレートの［変更］で既定を再度選んでください。` : ""
   }`;
 }
 
 /** 包む適用 RPC の前に読めなかったとき（8.2） */
-export const APPLY_DIFF_READ_FAILED =
-  "この回の案内の割り当てを読めませんでした。書き換えた段階を数えられないので、適用を止めました。［最新にする］のあと、もう一度押してください。";
+export const APPLY_DIFF_READ_FAILED = "適用エラー：案内の割り当てを取得できません。\n［最新にする］を押してください。";
 
 // ---- テンプレートの編集（T1。8.3） ----
 
 /** テンプレートの編集の「既定の案内」の ？ の中身（8.3） */
 export const TEMPLATE_GUIDE_HELP = "回にこのテンプレートを適用すると、各段階にこの案内が付きます。回ごとに替えるときは［ワークショップの案内］の［回ごと］で行います。";
 /** テンプレートの編集のシートの下の 1 行（8.3） */
-export const TEMPLATE_GUIDE_FOOT = "既定の案内は、これから適用する回に付きます。すでに適用した回は変わりません。";
+export const TEMPLATE_GUIDE_FOOT = "既定の案内は、これから適用する回だけに付きます。";
 /** 既定か案内の一覧を読めなかったとき（8.3。保存を止める） */
-export const TEMPLATE_GUIDES_READ_FAILED = "既定の案内を読めませんでした。このまま保存すると既定が消えるので、保存を止めています。［閉じる］のあと、もう一度開いてください。";
-/** 画面の書き誤り（missing_key）で DB が断ったとき（8.3） */
-export const TEMPLATE_MISSING_KEY = "画面の不具合で保存できませんでした。画面を最新にしてください。";
+export const TEMPLATE_GUIDES_READ_FAILED = "読み込みエラー：既定の案内を取得できません。\n保存できません。編集を閉じてから、再度開いてください。";
+/** 画面の書き誤り（missing_key）で DB が断ったとき（8.3。コードは TEMPLATE_MISSING_KEY_CODE。文に入れず別に出す） */
+export const TEMPLATE_MISSING_KEY = "保存エラーが発生しました。\n［最新にする］を押してください。";
+/** TEMPLATE_MISSING_KEY のエラーコード（画面の不具合。開発の担当の対応が要る） */
+export const TEMPLATE_MISSING_KEY_CODE = "E-ADM-53";
 
 /** matches_item が偽の既定を外して表示したときの 1 行（8.3） */
 export function templateHiddenLine(n) {
-  return n > 0 ? `テンプレートの段階が別の画面で変わったため、既定の案内 ${n} か所を外して表示しています。保存すると確定します。` : "";
+  return n > 0 ? `テンプレートの段階が変更されました。\n既定の案内 ${n} か所を外します（保存で確定）。` : "";
 }
 
 /**
@@ -1084,14 +1147,14 @@ export function templateDefaultRows(defaults, templateId) {
   return { byPos, hidden };
 }
 
-/** テンプレートの編集の既定の案内の選択肢（日の種類に合う種類だけ。後ろに「未公開」「止めている」） */
+/** テンプレートの編集の既定の案内の選択肢（日の種類に合う種類だけ。後ろに「未公開」「停止中」） */
 export function templateGuideOptions(dayKind, guides) {
   const kind = dayKind === "bridge" ? "bridge" : "workshop";
   return (guides ?? [])
     .filter((g) => g.kind === kind)
     .map((g) => ({
       id: g.id,
-      label: `${str(g.name)}${g.published_version == null ? "（未公開）" : ""}${g.active === false ? "（止めている）" : ""}`,
+      label: `${str(g.name)}${g.published_version == null ? "（未公開）" : ""}${g.active === false ? "（停止中）" : ""}`,
     }));
 }
 
@@ -1113,10 +1176,10 @@ export function templateItemsWithGuides(items, days) {
     let s = null, e = null;
     if (it.day_kind !== "bridge") {
       const a = timeValue(r.start), b = timeValue(r.end);
-      if (a === undefined || b === undefined) problems.push(`${where}：時刻は 10:00 の形で入れてください`);
-      else if ((a === null) !== (b === null)) problems.push(`${where}：時刻の目安は、始まりと終わりの両方を入れてください（入れないときは両方とも空に）`);
-      else if (a !== null && b !== null && a >= b) problems.push(`${where}：時刻の目安は、始まりを終わりより前にしてください`);
-      else if (!gid && a !== null) problems.push(`${where}：時刻の目安は、既定の案内を選んだ段階にだけ入れられます`);
+      if (a === undefined || b === undefined) problems.push(`${where}：時刻は 10:00 の形です。`);
+      else if ((a === null) !== (b === null)) problems.push(`${where}：始まりと終わりは、両方入力するか両方空にしてください。`);
+      else if (a !== null && b !== null && a >= b) problems.push(`${where}：始まりは終わりより前の時刻です。`);
+      else if (!gid && a !== null) problems.push(`${where}：時刻の目安は、既定の案内を選んだ段階にだけ入力できます。`);
       else {
         s = a;
         e = b;
@@ -1136,14 +1199,14 @@ export function templateItemsWithGuides(items, days) {
  */
 export function templateSaveErrorTarget(error, items) {
   const d = errorDetail(error);
-  if (d?.reason === "missing_key") return { area: "band", text: TEMPLATE_MISSING_KEY };
+  if (d?.reason === "missing_key") return { area: "band", text: TEMPLATE_MISSING_KEY, code: TEMPLATE_MISSING_KEY_CODE };
   const i = Number(d?.index) - 1;
   if (d && d.index !== null && d.index !== undefined && Number.isInteger(i) && i >= 0 && items?.[i]) {
     return {
       area: "row",
       dayKind: items[i].day_kind,
       index: Number(items[i].seq) - 1,
-      text: str(error?.hint) || explainError(error),
+      text: str(error?.hint) || explainError(error, "保存"),
     };
   }
   return null;

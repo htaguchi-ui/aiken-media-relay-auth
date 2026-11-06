@@ -13,6 +13,7 @@
 // 断りの文のエラーコード（uploadErrorCode）は文の後ろに小さく薄く、ホバーの補足（uploadTip）は title に出す（組 13 の文言の表）。
 import {
   acceptText,
+  allowedScopes,
   checkFileName,
   checkHead,
   checkSize,
@@ -22,6 +23,7 @@ import {
   dupConfirmBody,
   errorCodeOf,
   initialScopeStep,
+  isBridge,
   judgeProbe,
   PROBE_FRAME_TIMEOUT_MS,
   PROBE_META_TIMEOUT_MS,
@@ -654,6 +656,8 @@ export function createMyUpload(o) {
     u.scopeTitle = el("h2", { id: "upload-scope-title", tabindex: "-1", text: TEXT.scopeStepTitle });
     u.stageLine = el("div", { className: "upload-stage-line", "data-upload": "stage-line" });
     u.radios = new Map();
+    // 丸は 3 つとも 1 回だけ作り、選べない範囲（ワークショップの完全非公開）は update で項目ごと隠す（D-1106-120x）
+    u.scopeItems = new Map();
     const items = SCOPE_ORDER.map((opt) => {
       const r = el("input", { type: "radio", name: "upload-scope", value: opt.value });
       r.addEventListener("change", go(() => {
@@ -667,7 +671,9 @@ export function createMyUpload(o) {
         u.publicNote = el("span", { className: "small muted", "data-upload": "public-note", hidden: true });
         kids.push(u.publicNote);
       }
-      return el("div", { className: "upload-scope-item" }, ...kids);
+      const item = el("div", { className: "upload-scope-item" }, ...kids);
+      u.scopeItems.set(opt.value, item);
+      return item;
     });
     u.scopeGroup = el("div", { className: "upload-scope", role: "radiogroup", "aria-labelledby": "upload-scope-title" }, ...items);
     u.consentBody = el("div", { className: "consent-body" });
@@ -756,7 +762,7 @@ export function createMyUpload(o) {
     // 送り始めの失敗（送り直しても通らない断り）は、選び直せるよう、入力の形に戻す（段 2 のまま断りの文を出す）
     // 関数が前の版（not_found）・送り直しが続いた（too_many_abandoned）は入力に戻さない（［閉じる］だけ）
     const form = phase.kind === "idle" || (phase.kind === "failed" && phase.workId === null && phase.retryFrom === null && !deadEnd(phase));
-    const bridge = !!chosen && (chosen.kind === "bridge" || chosen.survey_required === true);
+    const bridge = !!chosen && isBridge(chosen);
     const consentRaw = s.targets?.consent;
     const consent = consentRaw && typeof consentRaw.id === "string" && typeof consentRaw.body === "string" ? consentRaw : null;
     const loginKind = s.targets?.login_kind === "google" ? "google" : s.targets?.login_kind === "link" ? "link" : "other";
@@ -891,8 +897,12 @@ export function createMyUpload(o) {
 
     // 段 2
     u.stageLine.textContent = d.view.stageLine;
+    // 固定した提出先で選べない範囲は、項目（丸と下の説明の 1 行）ごと隠し、チェックも外す（ワークショップは講義内・公開の 2 つ。D-1106-120x）
+    const allowed = allowedScopes(d.chosen);
     for (const [value, r] of u.radios) {
-      r.checked = s.st.scope === value;
+      const shown = allowed.includes(value);
+      u.scopeItems.get(value).hidden = !shown;
+      r.checked = shown && s.st.scope === value;
       r.disabled = !d.form || (value === "public" && !!d.view.publicBlocked);
     }
     if (u.publicNote) {
