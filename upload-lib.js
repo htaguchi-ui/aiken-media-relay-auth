@@ -2,14 +2,26 @@
 // 画面（ダイアログ・<video> での確かめ）は mypage-upload.js。試験は scripts/upload_lib_test.mjs。
 //   - ファイルの確かめ（段 1〜4。設計 2.4）：checkFileName・checkSize・checkHead・judgeProbe
 //   - 送る値：metaFields・labelOf・buildUploadBody
-//   - 段 2「公開の範囲を選んでください」：scopeStepReducer・scopeStepView（Canvas の submit/scopeStep.ts と同じ規則）
-//   - 提出先：stageOptions・acceptText・stillAccepting（Canvas の submit/messages.ts と同じ規則。upcoming は「まだ始まっていません」）
-//   - 断りの文と動き：uploadErrorText・errorAction・failedFrom
-//   - 流れ（begin → TUS → complete・［やめる］・［もう一度送る］）：createUploadFlow（Canvas の submit/flow.ts の決まりを写した物）
+//   - 段 2「公開範囲を選んでください」：scopeStepReducer・scopeStepView（Canvas の submit/scopeStep.ts と同じ規則）
+//   - 提出先：stageOptions・acceptText・stillAccepting（Canvas の submit/messages.ts と同じ規則。upcoming は「受付前」）
+//   - 同じ動画の確かめ（dup-confirm-20261105/DESIGN.md・D-1105-183x・191x）：sameFileWorkNos・dupConfirmBody（題は TEXT.dupTitle）
+//   - 断りの文と動き：uploadErrorText・uploadErrorCode・uploadTip・errorAction・failedFrom
+//   - 流れ（begin → TUS → complete・［キャンセル］・［再送信］）：createUploadFlow（Canvas の submit/flow.ts の決まりを写した物）
 // Canvas の tus.ts・flow.ts・scopeStep.ts・messages.ts を直すときは、この写しも同じ commit で直す（設計 2.8）。
 // 締切・上限・権限はサーバーが決める。画面は、サーバーが返した受け付けの状態と、断りの名前（code）を文にするだけ。
 import { TusError, tusDelete, tusUpload } from "./tus-lib.js";
-import { FORBIDDEN_FOR_STUDENTS, formatBytes, formatShortDateTime } from "./submissions-lib.js";
+import {
+  FORBIDDEN_FOR_STUDENTS,
+  formatBytes,
+  formatShortDateTime,
+  MSG_MEMBER_DISABLED,
+  MSG_NETWORK_PRESS_AGAIN,
+  PUBLIC_BLOCKED_LEGAL,
+  PUBLIC_BLOCKED_LINK,
+  PUBLIC_BLOCKED_TIPS,
+  SCOPE_CHOICE_LABELS,
+  SCOPE_CHOICE_NOTES,
+} from "./submissions-lib.js";
 
 /** 出せる大きさの上限（バイト。関数の印 upload.max_bytes が無いときの値。230 の file_bytes と同じ） */
 export const UPLOAD_MAX_BYTES = 300_000_000;
@@ -19,76 +31,156 @@ export const UPLOAD_ACCEPT = ".mp4,.mov,video/mp4,video/quicktime";
 export const PROBE_META_TIMEOUT_MS = 20_000;
 export const PROBE_FRAME_TIMEOUT_MS = 10_000;
 
-/** 画面の文（設計 2.4・2.7・4.2。Canvas の submit/messages.ts と同じ言葉にそろえる） */
+/**
+ * 画面の文（設計 2.4・2.7・4.2。Canvas の submit/messages.ts と同じ言葉にそろえる。組 13 の文言の表）。
+ * 「\n」の後ろは 2 行目（次の手）。出す所は white-space: pre-line。エラーコードは文に入れず UPLOAD_ERROR_CODES で持つ
+ */
 export const TEXT = {
   open: "動画を提出する",
   title: "動画を提出",
-  bridgeIntro1: "ブリッジワークは、各自が自主的に取り組む制作です。",
-  bridgeIntro2: "出すかどうかも自由です。",
+  bridgeIntro: "ブリッジワークは自主的な制作です。提出は任意です。",
   file: "ファイル",
   stage: "提出先",
   fieldTitle: "タイトル",
   fieldPurpose: "何のため、誰に向けた動画ですか",
-  scopeStepTitle: "公開の範囲を選んでください",
-  scopeLecture: "講義内に限り公開（この回の受講者と講師だけ）",
-  scopePrivate: "完全非公開（講師は見ます。講義では映しません）",
-  scopePublic: "公開（A.I.KEN が社外で使ってよい）",
-  scopePublicNote: "事例紹介・Web サイト・SNS・営業資料に使います。",
+  scopeStepTitle: "公開範囲を選んでください",
+  // 3 つの丸の名前と説明は、マイページの一覧の ？ の中と同じ（submissions-lib.js の SCOPE_CHOICE_LABELS・SCOPE_CHOICE_NOTES。組 13 の U-13・D-1105-121x）。
+  // 説明は、それぞれの丸の下に常に 1 行ずつ出す（D-1104-130x-c）
+  scopeLecture: SCOPE_CHOICE_LABELS.lecture,
+  scopePrivate: SCOPE_CHOICE_LABELS.private,
+  scopePublic: SCOPE_CHOICE_LABELS.public,
+  scopeLectureNote: SCOPE_CHOICE_NOTES.lecture,
+  scopePrivateNote: SCOPE_CHOICE_NOTES.private,
+  scopePublicNote: SCOPE_CHOICE_NOTES.public,
   consentCheck: "同意します",
   next: "次へ",
   back: "戻る",
-  cancel: "やめる",
+  cancel: "キャンセル",
+  // 送信の中止の確認の赤いボタン（確認の題と同じ動作の名前。cancel とは別の値）
+  cancelSend: "送信をキャンセル",
   submitWorkshop: "提出する",
-  submitBridge: "出す",
-  retry: "もう一度送る",
-  again: "もう一度出す",
+  submitBridge: "提出する",
+  retry: "再送信",
+  again: "再提出",
   close: "閉じる",
+  // 送信の中止の確認で、送信を続けるボタン（［キャンセル］にすると、止めたい人が押して送信が続く）
   keepGoing: "続ける",
-  confirmStop: "送信をやめますか？",
-  needFile: "動画のファイルを選んでください。",
-  checking: "動画を確かめています…",
+  // 入力内容の破棄の確認で、破棄しないボタン
+  discardKeep: "キャンセル",
+  confirmStop: "送信をキャンセルしますか？",
+  // 入れた内容があるときに Esc で閉じようとしたら、同じ窓の中で聞く（組 13 の U-11）
+  confirmDiscard: "入力内容を破棄しますか？",
+  discardClose: "破棄する",
+  needFile: "ファイルを選んでください。",
+  checking: "確認中…",
   notVideoFile: "MP4 か MOV の動画を選んでください。",
-  fileTooLarge: "ファイルが大きすぎます（300 MB まで）。",
-  unreadable: "動画として読めないファイルです。MP4 で書き出し直してから出してください。",
-  cannotPlay: "このブラウザで再生できない動画です。MP4（H.264）で書き出し直してから出してください。",
-  noVideoTrack: "映像の入っていないファイルです。動画のファイルを選んでください。",
-  unconfirmed: "このブラウザでは再生を確かめられませんでした。このまま出せます。",
-  sameSize: "同じ大きさの動画を、この提出先にもう出しています。",
-  scopeMissing: "公開の範囲を選んでください。",
-  stageEnded: "この提出先の受け付けが終わりました。［戻る］で選び直してください。",
-  consentMissing: "「公開」を選ぶときは、同意の文を読んで「同意します」にチェックを入れてください。",
-  surveyMissing: "タイトルと、何のため誰に向けた動画かを入れてください。",
+  fileTooLarge: "ファイルは 300 MB までです。",
+  unreadable: "ファイルエラー：動画を読み込めません。\nMP4 で書き出してから、再度選んでください。",
+  cannotPlay: "ファイルエラー：再生できない形式です。\nMP4（H.264）で書き出してください。",
+  noVideoTrack: "ファイルエラー：映像がありません。\n動画のファイルを選んでください。",
+  unconfirmed: "再生を確認できませんでした。\nこのまま提出できます。",
+  // 同じ提出先に同じ動画を再度提出するときの確かめの題（本文は dupConfirmBody。ボタンは cancel と submitWorkshop・submitBridge。Canvas と同じ文）
+  dupTitle: "再度提出しますか？",
+  scopeMissing: "公開範囲を選んでください。",
+  stageEnded: "この提出先の受付は終了しました。\n［戻る］で別の提出先を選んでください。",
+  // 送信をキャンセルしたあと（［戻る］が出ない）に出す形（mypage-upload.js）
+  stageEndedNoBack: "この提出先の受付は終了しました。",
+  consentMissing: "「同意します」にチェックを入れてください。",
+  surveyMissing: "未入力の欄があります。",
   titleTooLong: "タイトルは 60 字までです。",
   purposeTooLong: "「何のため、誰に向けた動画か」は 400 字までです。",
-  publicLegal: "公開は準備中です。準備ができたら、アカウントが有効な間にマイページで選べます。",
-  publicLink: "公開は、アカウントが有効な間に、Google でログインしたマイページで選べます。",
-  upcoming: "まだ始まっていません",
-  notMp4: "MP4 か MOV の動画だけ出せます。",
-  unavailable: "いまマイページからは提出できません。",
-  stageNotFound: "提出先が見つかりません。読み込み直してください。",
-  uploading: "送っています",
-  completing: "提出を確かめています",
-  starting: "準備しています",
-  cancelling: "やめています",
-  stopped: "送信が止まりました。",
-  submissionsPaused: "いま提出の受け付けを止めています。講師の案内を待ってください。",
-  submissionsReadPaused: "いま作品の再生と保存を止めています。講師の案内を待ってください。",
-  cancelled: "送信をやめました。すぐに出し直せます。",
-  cancelNotSent: "送信をやめました。サーバーへの連絡が届かなかったため、「送っている途中の動画」の［やめる］を、もう一度押してください。",
-  replaced: "この送信は、ほかの操作で取り消されました。もう一度押してください。",
-  busy: "混み合っています。少し待ってから、もう一度押してください。",
-  network: "通信できませんでした。通信状態を確かめてください。",
-  forbidden: "この操作の権限がありません。",
-  unknown: "エラーが起きました。少し待ってから、もう一度押してください。",
-  loading: "読み込んでいます",
-  loadFailed: "提出先を読み込めませんでした。",
-  reload: "もう一度読み込む",
-  noStage: "今、提出できる段階はありません。",
+  // 「公開」を選べない理由（マイページの一覧と同じ文。続きはホバー）
+  publicLegal: PUBLIC_BLOCKED_LEGAL,
+  publicLink: PUBLIC_BLOCKED_LINK,
+  publicLegalTip: PUBLIC_BLOCKED_TIPS[PUBLIC_BLOCKED_LEGAL],
+  publicLinkTip: PUBLIC_BLOCKED_TIPS[PUBLIC_BLOCKED_LINK],
+  upcoming: "受付前",
+  notMp4: "MP4 か MOV の動画を選んでください。",
+  unavailable: "現在、マイページからは提出できません。",
+  stageNotFound: "提出エラー：提出先が見つかりません。\nページを再読み込みしてください。",
+  // 状態の札。後ろに数が続くので「…」は付けない（mypage-upload.js で「送信中 45%（…）」）
+  uploading: "送信中",
+  completing: "確認中…",
+  starting: "準備中…",
+  cancelling: "キャンセル中…",
+  stopped: "送信エラー：中断されました。\n［再送信］を押してください。",
+  submissionsPaused: "提出の受付を停止中です。\n講師の案内をお待ちください。",
+  submissionsReadPaused: "再生と保存を停止中です。\n講師の案内をお待ちください。",
+  cancelled: "送信をキャンセルしました。",
+  cancelNotSent: "キャンセルが完了していません。\n「送信中の動画」で再度キャンセルしてください。",
+  cancelNotSentTip: "送信は停止済みです。",
+  replaced: "送信エラー：この送信は無効になりました。\n再度お試しください。",
+  busy: "混雑しています。\nしばらくしてから再度お試しください。",
+  // 押した操作（［提出する］・［再送信］など）の失敗だけで出す（組 13 の U-10 の T-05）
+  network: MSG_NETWORK_PRESS_AGAIN,
+  forbidden: "権限エラー：この操作はできません。\n講師・スタッフにお知らせください。",
+  unknown: "提出エラーが発生しました。\nしばらくしてから再度お試しください。",
+  loading: "読み込み中…",
+  loadFailed: "読み込みエラー：提出先を取得できません。",
+  reload: "再読み込み",
+  // 1 行だけの空の状態なので句点を付けない
+  noStage: "現在、提出先はありません",
+  // サーバーの断りの名前ごとの文（uploadErrorText）
+  stateChanged: "提出エラー：回の設定が変わりました。\n再度お試しください。",
+  workLimit: "提出上限に達しました。\n不要な動画を取り下げてから、再度提出してください。",
+  workLimitTip: "送信中の動画も本数に入ります。",
+  storageLimit: "保存容量の上限（2 GB）を超えます。\n不要な動画を取り下げてから、再度提出してください。",
+  storageLimitTip: "提出のたびに 300 MB の空きが必要です。",
+  tooManyAbandoned: "送信エラー：送信の回数が上限です。\n2 時間ほどしてから再度お試しください。",
+  tooManyUploads: "送信エラー：ほかの動画を送信中です。\n完了を待つか、「送信中の動画」でキャンセルしてください。",
+  tooManyAttempts: "送信エラー：送信の回数が上限です。\nしばらくしてから再度お試しください。",
+  bridgeClosed: "ブリッジワークの受付は終了しました。",
+  workshopClosed: "このワークショップの受付は終了しました。",
+  sizeMismatch: "送信エラー：動画が正しく届きませんでした。\n再度ファイルを選んで、提出してください。",
+  uploadNotFound: "送信エラー：動画が正しく届きませんでした。\n［再送信］を押してください。",
+  notStageStudent: "提出エラー：受講者として未登録です。\n講師・スタッフにお知らせください。",
+  memberDisabled: MSG_MEMBER_DISABLED,
+  consentOutdated: "同意の文が更新されました。\nこのダイアログを閉じて、再度開いてください。",
+  // 関数 submissions の認証の断り（組 13 の文言の表 MP-046・MP-047 の申し送り。サーバーの submissions/errors.ts の同じ理由の文と同じ）
+  notRegistered: "利用登録が確認できません。\n講師・スタッフにお知らせください。",
+  serverMisconfigured: "サーバーエラーが発生しました。\n講師・スタッフにお知らせください。",
+  loginRequired: "ログインが必要です。",
+  loginInvalid: "ログインが無効です。\n再度ログインしてください。",
+  loginLinkEnded: "リンクでのログインが終了しました。\nGoogle で再度ログインしてください。",
 };
 
 /** 受講者に見える文の全部（試験で禁止語を確かめる） */
 export function uploadTexts() {
   return Object.values(TEXT);
+}
+
+/**
+ * 断りの文に付けるエラーコード（D-1104-130x-b・決まり 3.2：文の定数に入れず、別の値で持つ。error-codes.md と同じ）。
+ * 文 → コード。出す所（mypage-upload.js）が最後の文の後ろに小さく薄く「（E-SUB-04）」と出す
+ */
+const UPLOAD_ERROR_CODES = new Map([
+  [TEXT.tooManyAbandoned, "E-SUB-04"],
+  [TEXT.tooManyAttempts, "E-SUB-05"],
+  [TEXT.sizeMismatch, "E-SUB-06"],
+  [TEXT.uploadNotFound, "E-SUB-07"],
+  [TEXT.notStageStudent, "E-SUB-50"],
+  [TEXT.serverMisconfigured, "E-SUB-52"],
+  [TEXT.memberDisabled, "E-LOG-50"],
+  [TEXT.notRegistered, "E-LOG-51"],
+  [TEXT.forbidden, "E-LOG-52"],
+  [TEXT.unknown, "E-SUB-99"],
+]);
+/** 文に付けるエラーコード（無ければ null） */
+export function uploadErrorCode(message) {
+  return UPLOAD_ERROR_CODES.get(message) ?? null;
+}
+
+/** ホバー（title）に置く補足（文 → 補足。文言の表の tooltip）。次の手は本文にあるので、補足が見えなくても進める */
+const UPLOAD_TIPS = new Map([
+  [TEXT.workLimit, TEXT.workLimitTip],
+  [TEXT.storageLimit, TEXT.storageLimitTip],
+  [TEXT.cancelNotSent, TEXT.cancelNotSentTip],
+  [TEXT.publicLegal, TEXT.publicLegalTip],
+  [TEXT.publicLink, TEXT.publicLinkTip],
+]);
+/** 文のホバーの補足（無ければ null） */
+export function uploadTip(message) {
+  return UPLOAD_TIPS.get(message) ?? null;
 }
 export const FORBIDDEN_WORDS = FORBIDDEN_FOR_STUDENTS;
 
@@ -260,14 +352,14 @@ export function acceptText(stage, nowMs) {
   const state = acceptStateOf(stage);
   const until = stage.accept?.until ?? null;
   const untilMs = until ? Date.parse(until) : NaN;
-  if (state === "upcoming") return `${kindName}は、まだ始まっていません。`;
-  if (state === "closed") return `${kindName}の受け付けは終わりました。`;
-  if (state === "current") return "受け付けは、このワークショップの間です。";
-  if (!Number.isFinite(untilMs) || untilMs <= nowMs) return `${kindName}の受け付けは終わりました。`;
-  if (state === "grace") return `このワークショップは、あと ${Math.max(1, Math.ceil((untilMs - nowMs) / 60000))} 分出せます。`;
+  if (state === "upcoming") return `${kindName}は受付前です。`;
+  if (state === "closed") return `${kindName}の受付は終了しました。`;
+  if (state === "current") return "受付はこのワークショップの間です。";
+  if (!Number.isFinite(untilMs) || untilMs <= nowMs) return `${kindName}の受付は終了しました。`;
+  if (state === "grace") return `受付はあと ${Math.max(1, Math.ceil((untilMs - nowMs) / 60000))} 分です。`;
   // until は「この時刻を含まない終わり」。画面には最後の分（display_until。無ければ 1 分前）を出す
   const shown = stage.accept?.display_until ?? new Date(untilMs - 60000).toISOString();
-  return `受け付けは ${formatShortDateTime(shown)} までです。`;
+  return `受付は ${formatShortDateTime(shown)} までです。`;
 }
 
 /** 受け付けの状態が、今の時刻でも「受け付け中」か（upcoming・closed は受け付けない） */
@@ -285,7 +377,7 @@ export function stageOptionLabel(s) {
 }
 
 /**
- * 提出先の選択肢。受け付け中の段階は選べる。まだ始まっていない段階は「まだ始まっていません」を付けて選べない。終わった段階は出さない。
+ * 提出先の選択肢。受け付け中の段階は選べる。まだ始まっていない段階は「受付前」を付けて選べない。終わった段階は出さない。
  * 返り値：[{ stage, value, label, disabled }]
  */
 export function stageOptions(targets, nowMs) {
@@ -304,13 +396,13 @@ export function defaultStageId(options) {
   return (open.find((o) => o.stage.is_current) ?? open[0])?.value ?? null;
 }
 
-/** 「あと 3 本 · 保存の残り 1.2 GB」 */
+/** 「あと 3 本 · 空き容量 1.2 GB」 */
 export function stageRoomText(stage, storage) {
   const parts = [];
   if (Number.isFinite(stage?.remaining_works)) parts.push(`あと ${Math.max(0, stage.remaining_works)} 本`);
   const used = Number(storage?.used_bytes);
   const limit = Number(storage?.limit_bytes);
-  if (Number.isFinite(used) && Number.isFinite(limit) && limit > 0) parts.push(`保存の残り ${formatBytes(Math.max(0, limit - used))}`);
+  if (Number.isFinite(used) && Number.isFinite(limit) && limit > 0) parts.push(`空き容量 ${formatBytes(Math.max(0, limit - used))}`);
   return parts.join(" · ");
 }
 
@@ -322,16 +414,34 @@ export function uploadCaps(targets) {
   return { maxBytes: max, types: Array.isArray(u.types) ? u.types.filter((t) => typeof t === "string") : ["mp4", "mov"] };
 }
 
+// ---- 同じ動画の確かめ（dup-confirm 2・3 章。止めない：確かめの［提出する］で今と同じ提出になる。D21・D24 の数え方は変えない） ----
+
 /**
- * 同じ大きさの作品をこの提出先にもう出しているときの一言（止めはしない。設計 2.5）。
- * myWorks は submissions-lib.js の normalizeMyWorks の形（works: [{ stageId, bytes }]）
+ * 同じ提出先に、同じファイル（同じ bytes）の動画をもう提出しているときの、その動画の番号（dup-confirm 2.1・2.2）。
+ * 比べるのは同じ提出先の、出している作品だけ（GET /my/works は ready の作品だけを返す）。出どころ（Canvas・マイページ・AI）は問わない。
+ * myWorks は submissions-lib.js の normalizeMyWorks の形（works: [{ stageId, workNo, bytes }]）。読めなかった（null）ときは []。
+ * 返り値：当たった作品ごとに 1 つ（番号の順。番号の無い作品も数え、null として後ろに置く。本文には出さない）。当たらなければ []
  */
-export function sameSizeWarning(myWorks, stageId, bytes) {
+export function sameFileWorkNos(myWorks, stageId, bytes) {
+  if (typeof stageId !== "string" || !stageId || !Number.isSafeInteger(bytes) || bytes < 1) return [];
   const works = Array.isArray(myWorks?.works) ? myWorks.works : [];
-  return works.some((w) => w.stageId === stageId && w.bytes === bytes) ? TEXT.sameSize : null;
+  return works
+    .filter((w) => w && w.stageId === stageId && w.bytes === bytes)
+    .map((w) => (Number.isInteger(w.workNo) && w.workNo >= 1 ? w.workNo : null))
+    .sort((a, b) => (a === null ? (b === null ? 0 : 1) : b === null ? -1 : a - b));
 }
 
-// ---- 段 2「公開の範囲を選んでください」（Canvas の submit/scopeStep.ts と同じ規則） ----
+/**
+ * 確かめの本文（dup-confirm 3.2。Canvas の submit/messages.ts と同じ文）：「この動画は提出済みです（ワークショップ 1・動画 3）。」。
+ * 2 本以上は「動画 3、4」。提出先の名前が空なら「（動画 3）」、番号が無ければ「（ワークショップ 1）」、どちらも無ければ括弧ごと出さない
+ */
+export function dupConfirmBody(label, workNos) {
+  const nos = [...new Set((Array.isArray(workNos) ? workNos : []).filter((n) => Number.isInteger(n) && n >= 1))].sort((a, b) => a - b);
+  const parts = [typeof label === "string" ? label.trim() : "", nos.length ? `動画 ${nos.join("、")}` : ""].filter(Boolean);
+  return parts.length ? `この動画は提出済みです（${parts.join("・")}）。` : "この動画は提出済みです。";
+}
+
+// ---- 段 2「公開範囲を選んでください」（Canvas の submit/scopeStep.ts と同じ規則） ----
 
 /** 「公開」を選べない理由（1 行）。選べるなら null */
 export function publicBlockedReason({ loginKind, legalReviewed }) {
@@ -340,11 +450,11 @@ export function publicBlockedReason({ loginKind, legalReviewed }) {
   return null;
 }
 
-/** 段 2 の丸の並び（講義内 → 完全非公開 → 公開） */
+/** 段 2 の丸の並び（講義内 → 完全非公開 → 公開）。note は丸の下に常に出す 1 行（D-1104-130x-c） */
 export const SCOPE_ORDER = [
-  { value: "lecture", label: TEXT.scopeLecture },
-  { value: "private", label: TEXT.scopePrivate },
-  { value: "public", label: TEXT.scopePublic },
+  { value: "lecture", label: TEXT.scopeLecture, note: TEXT.scopeLectureNote },
+  { value: "private", label: TEXT.scopePrivate, note: TEXT.scopePrivateNote },
+  { value: "public", label: TEXT.scopePublic, note: TEXT.scopePublicNote },
 ];
 
 export function initialScopeStep() {
@@ -387,11 +497,11 @@ export function scopeStepView(s, c) {
 
 // ---- 断りの文と動き ----
 
-/** 済みの文（Canvas の doneText と同じ） */
+/** 済みの文（Canvas の doneText と同じ。受講者の文は「動画」） */
 export function doneText(workNo, remaining) {
   if (workNo === null) return "提出しました。";
-  if (remaining === null) return `提出しました（作品 ${workNo}）。`;
-  return remaining > 0 ? `提出しました（作品 ${workNo}）。あと ${remaining} 本出せます。` : `提出しました（作品 ${workNo}）。この段階には、これ以上出せません。`;
+  if (remaining === null) return `提出しました（動画 ${workNo}）。`;
+  return remaining > 0 ? `提出しました（動画 ${workNo}）。\nあと ${remaining} 本提出できます。` : `提出しました（動画 ${workNo}）。\n提出上限に達しました。`;
 }
 
 /** サーバーの断りの名前 → 受講者に見せる文（Canvas の errorText を、マイページの言葉に合わせた物） */
@@ -406,20 +516,20 @@ export function uploadErrorText(code, status, stageKind = "workshop") {
     case "submissions_read_paused":
       return TEXT.submissionsReadPaused;
     case "submission_busy":
-      return "回の情報が変わりました。もう一度押してください。";
+      return TEXT.stateChanged;
     case "work_limit_reached":
-      return "この段階には、もう 5 本出しています。要らない作品を取り下げてから出してください。";
+      return TEXT.workLimit;
     case "storage_limit_reached":
-      return "保存できる合計（2 GB）を超えます。受け付け中の要らない作品を取り下げると、すぐに空きが戻ります。";
+      return TEXT.storageLimit;
     case "too_many_abandoned":
-      return "送り直しが続いたため、しばらく新しい送信を始められません。2 時間ほどで戻ります。";
+      return TEXT.tooManyAbandoned;
     case "too_many_uploads":
-      return "ほかの動画を送っています。終わるか、「送っている途中の動画」の［やめる］を押してから、もう一度押してください。";
+      return TEXT.tooManyUploads;
     case "too_many_attempts":
-      return "短い時間に送り始めた回数が多すぎます。しばらく待ってから、もう一度押してください。";
+      return TEXT.tooManyAttempts;
     case "submission_closed":
     case "late":
-      return stageKind === "bridge" ? "ブリッジワークの受け付けは終わりました。" : "このワークショップの受け付けは終わりました。";
+      return stageKind === "bridge" ? TEXT.bridgeClosed : TEXT.workshopClosed;
     case "file_too_large":
       return TEXT.fileTooLarge;
     case "not_mp4":
@@ -428,21 +538,32 @@ export function uploadErrorText(code, status, stageKind = "workshop") {
     case "upload_replaced":
       return TEXT.replaced;
     case "size_mismatch":
-      return "送ったファイルの大きさが合いませんでした。もう一度出してください。";
+      return TEXT.sizeMismatch;
     case "upload_not_found":
-      return "動画がまだ届いていません。もう一度送ってください。";
+      return TEXT.uploadNotFound;
     case "not_stage_student":
-      return "この回の受講者として登録されていないため、提出できません。";
+      return TEXT.notStageStudent;
     case "member_disabled":
-      return "アカウントが止められているため、提出できません。";
+      return TEXT.memberDisabled;
     case "public_unavailable":
       return TEXT.publicLegal;
     case "public_needs_google":
       return TEXT.publicLink;
     case "consent_outdated":
-      return "同意の文が新しくなりました。閉じて開き直し、もう一度読んでから選んでください。";
+      return TEXT.consentOutdated;
     case "survey_required":
       return TEXT.surveyMissing;
+    // 認証の断り（submissions/auth.ts・index.ts）。前は 403 → 権限の文、401・500 → 原因が分からない文になっていた
+    case "not_registered":
+      return TEXT.notRegistered;
+    case "server_misconfigured":
+      return TEXT.serverMisconfigured;
+    case "unauthorized":
+      return TEXT.loginRequired;
+    case "invalid_token":
+      return TEXT.loginInvalid;
+    case "login_link_session_revoked":
+      return TEXT.loginLinkEnded;
     default:
       break;
   }
@@ -494,7 +615,7 @@ export function errorAction({ code, status, step = "begin", retryable = false, s
   const c = code || errorCodeOf(status, null);
   if (step === "begin" && c === "not_found") return { message: TEXT.unavailable, hideButton: true, retryFrom: null };
   const message = uploadErrorText(c, status, stageKind);
-  // 送り直しが続いた（too_many_abandoned）ときは［もう一度送る］を出さない（送り直すほど予約が増える。設計 2.5）
+  // 送り直しが続いた（too_many_abandoned）ときは［再送信］を出さない（送り直すほど予約が増える。設計 2.5）
   if (c === "too_many_abandoned") return { message, hideButton: false, retryFrom: null };
   // complete の受付停止は送信済みの同じ作品を確定し直す。begin や他の理由へは広げない
   const pausedComplete = step === "complete" && c === "submissions_paused";
@@ -639,7 +760,7 @@ export function createUploadFlow(deps, onChange) {
     }
     if (my !== run) return;
     if (cancelRequested) {
-      // 送り始めの応答が、［やめる］のあとに届いた：送らずに捨てる
+      // 送り始めの応答が、［キャンセル］のあとに届いた：送らずに捨てる
       const r = await cancelOnServer(begun.work_id);
       if (my === run) settleAfterCancel(begun.work_id, r);
       return;

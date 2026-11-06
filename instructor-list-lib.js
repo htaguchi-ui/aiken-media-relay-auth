@@ -109,3 +109,35 @@ export function extraTargets(groups) {
     stageIds: current.slice(0, EXTRA_STAGE_LIMIT).map((c) => c.id),
   };
 }
+
+// ---- 提出作品のページへ回を渡す（組 13 の U-03） ----
+
+/** 提出作品のページの道（site-nav.js の「提出作品」と同じ） */
+export const SUBMISSIONS_PATH = "/submissions";
+
+/** 講師ページから提出作品へ移るリンクの先：今の回を ?c= で渡す（回が無い・形が違うときは渡さない） */
+export function submissionsPath(cohortId) {
+  return typeof cohortId === "string" && COHORT_ID_RE.test(cohortId) ? `${SUBMISSIONS_PATH}?c=${encodeURIComponent(cohortId)}` : SUBMISSIONS_PATH;
+}
+
+/** 提出作品のページの URL（location.search）から、渡された回の ID を読む。無い・形が違うときは null */
+export function requestedCohortId(search) {
+  let id = null;
+  try {
+    id = new URLSearchParams(typeof search === "string" ? search : "").get("c");
+  } catch {
+    id = null;
+  }
+  return id !== null && COHORT_ID_RE.test(id) ? id : null;
+}
+
+/**
+ * 提出作品のページを開いたときに選ぶ回：渡された回が担当の一覧にあればその回、無ければ講師ページの一覧と同じ並び（実施中が先）の先頭。
+ * 一覧が空なら null
+ */
+export function initialSubmissionsCohortId(cohorts, requested) {
+  const list = Array.isArray(cohorts) ? cohorts : [];
+  if (requested && list.some((c) => c.id === requested)) return requested;
+  const { current, ended } = groupCohorts(list);
+  return current[0]?.id ?? ended[0]?.id ?? list[0]?.id ?? null;
+}

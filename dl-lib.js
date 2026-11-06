@@ -13,7 +13,7 @@
 // 欠けている項目は「分からない」として扱い、断定する文を出さない。
 
 import { formatBytes, formatShortDateTime, submissionsPauseText } from "./submissions-lib.js";
-import { DL_KEY_STORE, minutesLeft, SHARE_KEY_RE, saveGuide, zipPhase, zipPrepMinutes } from "./share-lib.js";
+import { DL_KEY_STORE, minutesLeft, SHARE_KEY_RE, SHARE_PERIOD_OVER, saveGuide, zipPhase, zipPrepMinutes } from "./share-lib.js";
 
 // 鍵の置き場の名前は share-lib.js（マイページが消すときにも使う）にある。dl.js はここから読む
 export { DL_KEY_STORE };
@@ -27,24 +27,34 @@ export const DL_PATHS = { open: "/dl/open", url: "/dl/url" };
 export const DL_POLL_MS = 10_000;
 export const DL_POLL_MAX = 90;
 
-export const DL_TITLE = "作品を保存する";
-export const DL_RETRY_LABEL = "もう一度読み込む";
-export const MSG_DL_RESCAN = "同じ QR をもう一度読み取っても開けます。開けないときは、マイページで QR を出し直してください。";
-export const MSG_DL_EXPIRED = "このリンクの使える時間が終わりました。マイページで、もう一度 QR を出してください。";
-export const DL_UNAVAILABLE = "このリンクは使えません。マイページで、もう一度 QR を出してください。";
-export const DL_PREPARING_WAIT = "このページを開いたまま待つか、あとでもう一度開いてください。";
+// 文は組 13 の文言の表（DL-*）。断りは「1 行目＋改行＋次の手」（画面は white-space: pre-line。dl.css）
+export const DL_TITLE = "動画を保存する";
+export const DL_RETRY_LABEL = "再読み込み";
+export const MSG_DL_RESCAN = "同じ QR を再度読み取っても開けます。";
+export const MSG_DL_EXPIRED = "リンクの有効期限が切れました。\nマイページで QR を再発行してください。";
+/** リンクの期限が保存期間の終わりで切れた（expires_at が window_ends_at と同じ）。期間のあとは再発行できないので次の手は書かない（DL-06-2。マイページの SH-36 と同じ文） */
+export const MSG_DL_PERIOD_OVER = SHARE_PERIOD_OVER;
+export const DL_UNAVAILABLE = "このリンクは使えません。\nマイページで QR を再発行してください。";
+export const DL_PREPARING_WAIT = "このページを開いたままお待ちください。";
 export const DL_READY = "準備ができました。";
 export const DL_SAVE_ZIP = "ZIP を保存";
 export const DL_SAVE_ONE = "保存";
-export const DL_FILES_HEADING = "作品ごとに保存";
-export const MSG_DL_NETWORK = "通信できませんでした。通信状態を確かめて、もう一度押してください。";
-export const MSG_DL_BUSY = "保存の準備が混み合っています。少し待ってから、もう一度押してください。";
-export const MSG_DL_LIMIT = "保存の URL を出せる回数の上限に達しました。しばらくしてからマイページで QR を出し直してください。";
-export const MSG_DL_NOT_READY = "まだ準備ができていません。準備ができたら、もう一度押してください。";
-export const MSG_DL_FAILED = "保存の準備ができませんでした。もう一度押してください。";
-export const MSG_DL_STARTED = "保存を始めました。ダウンロードが始まらないときは、もう一度押してください。";
-export const MSG_DL_PREPARING_LONG = "準備に時間がかかっています。しばらくしてから、このページを開き直してください。";
-export const MSG_DL_LOAD_FAILED = "保存の状態を読み込めませんでした。通信状態を確かめて、このページを開き直してください。";
+export const DL_FILES_HEADING = "動画ごとに保存";
+export const MSG_DL_NETWORK = "通信エラー：接続できませんでした。\nインターネット接続を確認してください。";
+export const MSG_DL_BUSY = "混雑しています。\nしばらくしてから再度お試しください。";
+export const MSG_DL_LIMIT = "保存の回数の上限に達しました。\nマイページで QR を再発行してください。";
+export const MSG_DL_NOT_READY = "まだ準備中です。しばらくお待ちください。";
+export const MSG_DL_FAILED = "保存エラーが発生しました。\nしばらくしてから再度お試しください。";
+export const MSG_DL_STARTED = "保存を開始しました。\nダウンロードが始まらないときは、再度お試しください。";
+export const MSG_DL_PREPARING_LONG = "準備に時間がかかっています。\nしばらくしてから再読み込みしてください。";
+export const MSG_DL_LOAD_FAILED = "読み込みエラー：保存の状態を取得できません。";
+
+/** コードを付ける断り（error-codes.md：E-WRK-99）。コードは文の定数に入れず、文 → コードの表で持つ（決まり 3.2） */
+const DL_ERROR_CODES = new Map([[MSG_DL_FAILED, "E-WRK-99"]]);
+/** 保存のページの断りの文に付けるコード（無ければ null） */
+export function dlErrorCode(text) {
+  return DL_ERROR_CODES.get(text) ?? null;
+}
 
 /** URL の断片（"#k=asl1_…"）から鍵を取り出す。形が違えば null（鍵は ^asl1_[A-Za-z0-9_-]{43}$） */
 export function keyFromHash(hash) {
@@ -55,11 +65,11 @@ export function keyFromHash(hash) {
 
 /**
  * 保存の案内（設計 4.9：端末の種類で出し分けず、全部を出す）。マイページの短い案内（Wi-Fi・空き容量）と同じ文＋開き方。
- * 最後の 1 行だけ、このページの「下の作品ごとの［保存］」の言い方にする。
+ * 最後の 1 行だけ、このページの「下の動画ごとの［保存］」の言い方にする。
  */
 export function dlGuide(zipBytes) {
   const g = saveGuide(zipBytes);
-  return [...g.short, g.open[0], g.open[1], "開けないときは、下の作品ごとの［保存］を使ってください。"];
+  return [...g.short, g.open[0], g.open[1], "開けないときは、下の動画ごとの［保存］を押してください。"];
 }
 
 /** POST /dl/open の応答 → 画面の値（形が違えば null） */
@@ -81,6 +91,7 @@ export function normalizeDlOpen(raw) {
     files,
     firstOpenedAt: strOr(raw.first_opened_at),
     expiresAt: strOr(raw.expires_at),
+    windowEndsAt: strOr(raw.window_ends_at),
     serverNow: strOr(raw.server_now),
     missing: missing !== null && missing > 0 ? Math.floor(missing) : 0,
   };
@@ -97,10 +108,10 @@ export function downloadUrlOf(raw) {
   }
 }
 
-/** 準備中の文：「準備しています（約 2 分）。」（大きさが分からなければ約 ○ 分を付けない） */
+/** 準備中の文：「準備中（約 2 分）」（大きさが分からなければ「準備中…」。マイページの zipStateLine と同じ） */
 export function dlPreparingLine(zipBytes) {
   const m = zipPrepMinutes(zipBytes);
-  return m === null ? "準備しています。" : `準備しています（約 ${m} 分）。`;
+  return m === null ? "準備中…" : `準備中（約 ${m} 分）`;
 }
 
 /** ZIP の大きさの 1 行（「ZIP の大きさ：1.2 GB・3 本」。分からない項目は出さない） */
@@ -122,16 +133,26 @@ export function serverOffsetMs(open, clientNowMs) {
 }
 
 /**
- * 使える残りの文：「このリンクは、あと 42 分（11/27 17:30）まで使えます。」。0 分になったら終わりの文。expires_at が無ければ null。
- * nowMs はサーバーの今。**nowMs が null（サーバーの時計が分からない）のときは、「あと ○ 分」を言わず、絶対の期限だけ**：「このリンクは、11/27 17:30 まで使えます。」
+ * 期限が切れたときの文。リンクの期限が保存期間の終わり（window_ends_at）と同じなら「保存期間は終了しました。」（再発行できない）、
+ * それ以外は「リンクの有効期限が切れました。」と再発行の案内。window_ends_at が無い・読めないときは後者
+ */
+export function dlExpiredText(open) {
+  const end = open?.expiresAt ? new Date(open.expiresAt).getTime() : NaN;
+  const windowEnd = open?.windowEndsAt ? new Date(open.windowEndsAt).getTime() : NaN;
+  return !Number.isNaN(end) && end === windowEnd ? MSG_DL_PERIOD_OVER : MSG_DL_EXPIRED;
+}
+
+/**
+ * 使える残りの文：「有効期限：11/27 17:30（あと 42 分）」。0 分になったら終わりの文（dlExpiredText）。expires_at が無ければ null。
+ * nowMs はサーバーの今。**nowMs が null（サーバーの時計が分からない）のときは、「あと ○ 分」を言わず、絶対の期限だけ**：「有効期限：11/27 17:30」
  */
 export function dlRemainingLine(open, nowMs = Date.now()) {
   if (!open.expiresAt || Number.isNaN(new Date(open.expiresAt).getTime())) return null;
-  if (nowMs === null) return `このリンクは、${formatShortDateTime(open.expiresAt)} まで使えます。`;
+  if (nowMs === null) return `有効期限：${formatShortDateTime(open.expiresAt)}`;
   const left = minutesLeft(open.expiresAt, nowMs);
   if (left === null) return null;
-  if (left === 0) return MSG_DL_EXPIRED;
-  return `このリンクは、あと ${left} 分（${formatShortDateTime(open.expiresAt)}）まで使えます。`;
+  if (left === 0) return dlExpiredText(open);
+  return `有効期限：${formatShortDateTime(open.expiresAt)}（あと ${left} 分）`;
 }
 
 /** 作品ごとの行の 1 行（「WS02-佐藤.mp4（24 MB）」） */
@@ -139,9 +160,9 @@ export function dlFileLabel(file) {
   return file.bytes !== null && file.bytes > 0 ? `${file.name}（${formatBytes(file.bytes)}）` : file.name;
 }
 
-/** ZIP に入れられなかった作品の文（黙って抜かない） */
+/** ZIP に入れられなかった動画の文（黙って抜かない。一覧にも出ず 1 本ずつの保存もできないので、次の手は書かない。マイページの missingLine と同じ形） */
 export function dlMissingLine(open) {
-  return open.missing > 0 ? `${open.missing} 本の作品は ZIP に入れられませんでした。` : null;
+  return open.missing > 0 ? `${open.missing} 本の動画が ZIP に入っていません。` : null;
 }
 
 /** ページの状態：unavailable（使えない）／preparing（準備中）／ready（保存できる）／failed（ZIP が作れなかった・消えた＝使えない扱い） */
@@ -170,7 +191,7 @@ export function dlLoadErrorText(code) {
 export function dlFacingTexts() {
   const open = { zipBytes: 1_200_000_000, files: [{ workId: "w", name: "WS02-佐藤.mp4", bytes: 24_000_000 }], expiresAt: "2026-11-27T09:00:00Z", missing: 2 };
   return [
-    DL_TITLE, DL_RETRY_LABEL, MSG_DL_RESCAN, MSG_DL_EXPIRED, DL_UNAVAILABLE, DL_PREPARING_WAIT, DL_READY, DL_SAVE_ZIP, DL_SAVE_ONE, DL_FILES_HEADING, MSG_DL_NETWORK, MSG_DL_BUSY, MSG_DL_LIMIT, MSG_DL_FAILED,
+    DL_TITLE, DL_RETRY_LABEL, MSG_DL_RESCAN, MSG_DL_EXPIRED, MSG_DL_PERIOD_OVER, DL_UNAVAILABLE, DL_PREPARING_WAIT, DL_READY, DL_SAVE_ZIP, DL_SAVE_ONE, DL_FILES_HEADING, MSG_DL_NETWORK, MSG_DL_BUSY, MSG_DL_LIMIT, MSG_DL_FAILED,
     MSG_DL_STARTED, MSG_DL_NOT_READY, MSG_DL_PREPARING_LONG, MSG_DL_LOAD_FAILED, ...dlGuide(1_200_000_000), dlPreparingLine(1_200_000_000), dlPreparingLine(null),
     dlSizeLine(open), dlRemainingLine(open, Date.parse("2026-11-27T08:00:00Z")), dlFileLabel(open.files[0]), dlMissingLine(open),
     dlUrlErrorText(0), dlUrlErrorText(429, "url_limit"), dlUrlErrorText(429), dlUrlErrorText(409, "zip_not_ready"), dlUrlErrorText(503), dlUrlErrorText(500),

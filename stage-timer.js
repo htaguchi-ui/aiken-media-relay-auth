@@ -6,19 +6,25 @@
 // 一時的な失敗（通信など）で読めなくても札は消さず、前に読んだ表示を残す。続けて読めないときだけ「つながりません」と［最新にする］を出す。
 // 読み直しで段階が変わったと分かったら、講師ページ全体を読み直す（reload。「今」の行と札を同じ段階にそろえる）。
 // 組 11 の (6)：WS のカードの右上に残りを分：秒で出す（clock。1 秒ごとに書き換える）。始める分の既定は回の WS の分（5〜180 に切り詰め）。
+// 組 13：回の WS の分があるときは主ボタン［▶ 45 分で始める］を 1 つにし、プリセットと分の欄は「分を指定」に畳む（U-07）。
+// 段階の名前の行は「今」の行と重なるので出さない（U-07）。［取り消す…］は「タイマーを消す…」（U-10 の T-08）。
+// 残りの横の［大きく表示］で、全画面に段階の名前・大きな残り・終わる時刻を出す（U-09。#timer-screen。1 秒ごとの書き換えに乗る）。
 import {
   defaultMinutesNote,
   defaultTimerMinutes,
   extendDoneText,
+  formatClock,
   extendLabel,
   isTransientTimerError,
   normalizeTimerStatus,
   parseTimerMinutes,
   startDoneText,
   TIMER_PRESETS,
+  timerErrorCode,
   timerErrorText,
   timerView,
 } from "./stage-timer-lib.js";
+import { stageName } from "./stage-lib.js";
 
 const TICK_MS = 1000;
 const POLL_TICKS = 30;
@@ -29,7 +35,7 @@ const clockClass = (state) => `wk-clock tabular${state === "ended" ? " ended" : 
 
 /**
  * deps：{ rpc(name, args), el(tag, props, ...children), getCohortId(), getClient(), isClosed(), isBusy(), withBusy(fn),
- *         confirm({ title, lines, okText }), notify(message, kind), render(), reload(), byId(id), setInterval, clearInterval, now(),
+ *         confirm({ title, lines, okText }), notify(message, kind, code), render(), reload(), byId(id), setInterval, clearInterval, now(),
  *         getStageMinutes(stageId) }
  * reload：講師ページの［最新にする］と同じ読み直し（段階・クローズ・札を並べて読み、描き直す）
  * getStageMinutes：その段階の回の WS の分（cohort_stage_minutes。未設定・読めないときは null）。始める分の既定に使う
@@ -49,6 +55,7 @@ export function createStageTimer(deps) {
   let tick = null;
   let lastState = "";
   let failures = 0; // 続けて読めなかった回数（一時的な失敗だけ数える）
+  let moreOpen = false; // 「分を指定」を開いているか（描き直しても保つ。始めた・段階が変わった・reset で閉じる）
 
   const warn = (where, error) => {
     try {
@@ -72,7 +79,9 @@ export function createStageTimer(deps) {
     seenStageId = null;
     lastState = "";
     failures = 0;
+    moreOpen = false;
     stopTick();
+    closeScreen();
   }
 
   /**
@@ -111,6 +120,7 @@ export function createStageTimer(deps) {
           // 段階が変わった：講師が打った値を捨て、新しい段階の既定の分に戻す
           touched = false;
           minutesText = "";
+          moreOpen = false;
         }
         seenStageId = stageId;
       }
@@ -155,7 +165,9 @@ export function createStageTimer(deps) {
       try {
         const box = deps.byId("timer-box");
         if (!box || box.isConnected === false) {
+          // 札が画面から消えた（クローズ・段階の移動・ログアウトなど）：大きな表示も閉じる
           stopTick();
+          closeScreen();
           return;
         }
         n++;
@@ -169,15 +181,19 @@ export function createStageTimer(deps) {
             return;
           }
           if (shape(status) !== before) {
+            const nv = view();
+            if (!nv.visible || nv.state === "idle") closeScreen(); // ほかの講師が消した：大きな表示を閉じる
             deps.render();
             return;
           }
         }
         const v = view();
         if (!v.visible || buttonsOf(v.state) !== buttonsOf(lastState)) {
+          if (!v.visible || v.state === "idle") closeScreen(); // 消した・始まっていない：大きな表示を閉じる
           deps.render();
           return;
         }
+        updateScreen(v);
         // aria-live の行は文が変わったときだけ書く（毎秒書くと読み上げが繰り返される）
         const line = deps.byId("timer-line");
         if (line) {
@@ -212,20 +228,24 @@ export function createStageTimer(deps) {
   async function send(name, args, done) {
     const cohortId = deps.getCohortId();
     if (!cohortId) return;
+    // 延長の範囲の断り（workshop_input_invalid）は開始と同じ名前なので、押した操作を渡して文を分ける。
+    // 開始・延長・取り消しはどれも更新の RPC（通信の失敗は「結果が不明」。g-close-net-op）
+    const op = name === "stage_timer_extend" ? "extend" : name === "stage_timer_start" ? "start" : "cancel";
     await deps.withBusy(async () => {
       try {
         const { data, error } = await deps.rpc(name, { p_cohort_id: cohortId, ...args });
         if (error) {
-          deps.notify(timerErrorText(error), "error");
+          deps.notify(timerErrorText(error, op, "update"), "error", timerErrorCode(error));
         } else {
           deps.notify(typeof done === "function" ? done(data) : done);
           if (name === "stage_timer_start") {
             minutesText = "";
             touched = false;
+            moreOpen = false;
           }
         }
       } catch (error) {
-        deps.notify(timerErrorText(error), "error");
+        deps.notify(timerErrorText(error, op, "update"), "error", timerErrorCode(error));
       }
       await load();
     });
@@ -235,14 +255,143 @@ export function createStageTimer(deps) {
   // 終わったあとは「今から」延ばす（DB が greatest(ends_at, now()) ＋ 分にする）。知らせの終わりの時刻は応答の ends_at から作る
   const extend = (minutes) => send("stage_timer_extend", { p_minutes: minutes }, (data) => extendDoneText(minutes, data));
 
+  // タイマーを消す（U-10 の T-08。段階の取り消しと同じ「取り消す」の語を使わない）
   async function cancel() {
     const ok = await deps.confirm({
-      title: "制作時間を取り消しますか？",
-      lines: ["受講者の AI は、段階の時間の目安（無ければ残り時間を言わない）に戻ります。段階はそのままです。"],
-      okText: "取り消す",
+      title: "タイマーを消しますか？",
+      lines: ["タイマーがないときは、受講者の AI は予定の時間で残りを伝えます。"],
+      okText: "消す",
     });
     if (!ok) return;
-    await send("stage_timer_cancel", {}, "制作時間を取り消しました。");
+    await send("stage_timer_cancel", {}, "タイマーを消しました。");
+  }
+
+  // ---- 残りを大きく表示（U-09）。#timer-screen（instructor.html の dialog）。中身は timerView と札の答えを読むだけ ----
+
+  /** 大きな表示の中身：{ stage: 段階の名前, clock: 分：秒, until: 「14:30 まで」, ended } */
+  function screenView(v) {
+    const t = status?.timer ?? null;
+    return {
+      stage: status?.stage ? stageName(status.stage) : "",
+      clock: v.clock,
+      until: t ? `${formatClock(t.endsAt)} まで` : "",
+      ended: v.state === "ended",
+    };
+  }
+
+  // Esc 1 回で閉じる：全画面のときの最初の Esc はブラウザが全画面を解くのに使う。全画面が解けたら大きな表示も閉じる
+  let screenWatched = null;
+  let screenWasFull = false;
+  function onScreenClose() {
+    try {
+      const dialog = deps.byId?.("timer-screen");
+      const doc = dialog?.ownerDocument;
+      screenWasFull = false;
+      // Esc の既定動作など、［閉じる］以外から dialog が閉じた場合も全画面を残さない。
+      if (dialog?.contains?.(doc?.fullscreenElement)) doc.exitFullscreen?.()?.catch?.(() => {});
+    } catch (error) {
+      warn("大きな表示の全画面を解く", error);
+    }
+  }
+  function onScreenFullscreen() {
+    try {
+      const dialog = deps.byId?.("timer-screen");
+      if (!dialog?.open) return;
+      if (dialog.ownerDocument?.fullscreenElement === deps.byId("timer-screen-body")) {
+        screenWasFull = true;
+        const note = deps.byId("timer-screen-note");
+        const retry = deps.byId("timer-screen-retry");
+        if (note) note.hidden = true;
+        if (retry) retry.hidden = true;
+        return;
+      }
+      if (screenWasFull && !dialog.ownerDocument?.fullscreenElement) {
+        screenWasFull = false;
+        dialog.close?.();
+      }
+    } catch (error) {
+      warn("大きな表示の全画面", error);
+    }
+  }
+
+  function enterScreenFullscreen(dialog, body, note, retry) {
+    const failed = () => {
+      if (!dialog.open || deps.byId("timer-screen-body") !== body) return;
+      note.textContent = "全画面にできませんでした。\n［全画面にする］で再度お試しください。";
+      note.hidden = false;
+      retry.hidden = false;
+    };
+    try {
+      if (!body.requestFullscreen) { failed(); return; }
+      body.requestFullscreen({ navigationUI: "hide" })?.catch?.(failed);
+    } catch {
+      failed();
+    }
+  }
+
+  /** 大きな表示を開く（全画面にしてみる。断られたら画面いっぱいのダイアログのまま）。動いている・終わったときだけ */
+  function openScreen() {
+    try {
+      const dialog = deps.byId("timer-screen");
+      const v = view();
+      if (!dialog || !v.visible || v.state === "idle") return;
+      const { el } = deps;
+      const sv = screenView(v);
+      const note = el("p", { id: "timer-screen-note", className: "timer-screen-note", role: "status", hidden: true });
+      const retry = el("button", { type: "button", className: "btn", id: "timer-screen-retry", text: "全画面にする", onclick: () => enterScreenFullscreen(dialog, body, note, retry) });
+      const body = el(
+        "div",
+        { className: `timer-screen-body${sv.ended ? " ended" : ""}`, id: "timer-screen-body" },
+        el("p", { className: "timer-screen-stage", id: "timer-screen-stage", text: sv.stage }),
+        el("p", { className: "timer-screen-time tabular", id: "timer-screen-time", text: sv.clock }),
+        el("p", { className: "timer-screen-until tabular", id: "timer-screen-until", text: sv.ended ? "終了" : sv.until }),
+        note,
+        el("div", { className: "row-actions" }, retry, el("button", { type: "button", className: "btn", id: "timer-screen-close", text: "閉じる", onclick: () => closeScreen() })),
+      );
+      dialog.replaceChildren(
+        body,
+      );
+      if (!dialog.open) {
+        screenWasFull = false;
+        dialog.showModal?.();
+      }
+      if (screenWatched !== dialog) {
+        // fullscreenchange は全画面に入った・解けた要素に届く（document へも上る）。窓は 1 つなので見張りは 1 回だけ付ける
+        dialog.addEventListener?.("fullscreenchange", onScreenFullscreen);
+        dialog.addEventListener?.("close", onScreenClose);
+        screenWatched = dialog;
+      }
+      enterScreenFullscreen(dialog, body, note, retry);
+    } catch (error) {
+      warn("大きな表示", error);
+    }
+  }
+
+  /** 1 秒ごと：開いていれば文字と終わりの色だけ書き換える */
+  function updateScreen(v) {
+    const dialog = deps.byId("timer-screen");
+    if (!dialog?.open) return;
+    const sv = screenView(v);
+    const body = deps.byId("timer-screen-body");
+    if (body) body.className = `timer-screen-body${sv.ended ? " ended" : ""}`;
+    const time = deps.byId("timer-screen-time");
+    if (time && time.textContent !== sv.clock) time.textContent = sv.clock;
+    const until = deps.byId("timer-screen-until");
+    const untilText = sv.ended ? "終了" : sv.until;
+    if (until && until.textContent !== untilText) until.textContent = untilText;
+    const stage = deps.byId("timer-screen-stage");
+    if (stage && stage.textContent !== sv.stage) stage.textContent = sv.stage;
+  }
+
+  /** 大きな表示を閉じる（全画面も解く）。開いていなければ何もしない */
+  function closeScreen() {
+    try {
+      const dialog = deps.byId?.("timer-screen");
+      if (!dialog?.open) return;
+      dialog.close?.();
+    } catch (error) {
+      warn("大きな表示を閉じる", error);
+    }
   }
 
   /** 札（ワークショップの札の中、［前へ戻す］［次へ進める］の下）。出さないときは null */
@@ -250,6 +399,7 @@ export function createStageTimer(deps) {
     try {
       const v = view();
       lastState = v.visible ? v.state : "";
+      if (!v.visible || v.state === "idle") closeScreen(); // 消した・札を出さない：大きな表示を残さない
       if (!v.visible) {
         stopTick();
         return null;
@@ -258,7 +408,6 @@ export function createStageTimer(deps) {
       const busy = deps.isBusy();
       const parts = [
         el("h3", { id: "timer-h", text: "制作時間" }),
-        el("p", { id: "timer-stage", className: "hint timer-stage", text: v.stageLine }),
         el("p", { id: "timer-line", className: `timer-line ${v.state}`, "aria-live": "polite", text: v.line }),
       ];
       if (unreachable()) {
@@ -266,7 +415,7 @@ export function createStageTimer(deps) {
           el(
             "div",
             { className: "timer-row" },
-            el("p", { id: "timer-warn", className: "error-text timer-warn", text: "制作時間の状態を読み込めません（つながりません）。表示は前に読んだときのものです。" }),
+            el("p", { id: "timer-warn", className: "error-text timer-warn", text: "通信エラー：タイマーを更新できません。\n表示は最後に読み込んだ時点のものです。" }),
             el("button", { type: "button", className: "btn", id: "timer-refresh", text: "最新にする", disabled: busy, onclick: () => refresh() }),
           ),
         );
@@ -282,7 +431,7 @@ export function createStageTimer(deps) {
           className: "input tabular",
           type: "text",
           inputmode: "numeric",
-          "aria-label": "制作時間（分。5〜180）",
+          "aria-label": "タイマー（分。5〜180）",
           placeholder: "分",
           value: shownText,
           disabled: busy,
@@ -295,32 +444,54 @@ export function createStageTimer(deps) {
           const noteEl = deps.byId("timer-default-note");
           if (noteEl) noteEl.hidden = true;
         });
-        parts.push(
-          el(
-            "div",
-            { className: "timer-row", role: "group", "aria-label": "制作時間を始める" },
-            ...TIMER_PRESETS.map((m) =>
-              el("button", { type: "button", className: "btn", text: `${m} 分`, disabled: busy, onclick: () => start(m) })
-            ),
+        const presetRow = el(
+          "div",
+          { className: "timer-row", role: "group", "aria-label": "タイマーを始める" },
+          ...TIMER_PRESETS.map((m) =>
+            el("button", { type: "button", className: "btn", text: `${m} 分`, disabled: busy, onclick: () => start(m) })
           ),
-          el(
-            "div",
-            { className: "timer-row" },
-            input,
-            el("button", {
-              type: "button",
-              className: "btn primary",
-              id: "timer-start",
-              text: "始める",
-              disabled: busy || parseTimerMinutes(currentText()) === null,
-              onclick: () => {
-                const m = parseTimerMinutes(currentText());
-                if (m !== null) start(m);
-              },
-            }),
-          ),
-          note ? el("p", { className: "hint", id: "timer-default-note", text: note }) : null,
         );
+        const quick = preset.value !== null;
+        const inputRow = el(
+          "div",
+          { className: "timer-row" },
+          input,
+          el("button", {
+            type: "button",
+            className: quick ? "btn" : "btn primary",
+            id: "timer-start",
+            text: "始める",
+            disabled: busy || parseTimerMinutes(currentText()) === null,
+            onclick: () => {
+              const m = parseTimerMinutes(currentText());
+              if (m !== null) start(m);
+            },
+          }),
+        );
+        const noteEl = note ? el("p", { className: "hint", id: "timer-default-note", text: note }) : null;
+        if (quick) {
+          // 回の WS の分があるとき（U-07）：主ボタンは 1 つ。プリセットと分の欄は「分を指定」に畳む（打ったら開いたまま）
+          const more = el(
+            "details",
+            { className: "plain-fold minor timer-more", id: "timer-more", open: moreOpen || touched },
+            el("summary", { text: "分を指定" }),
+            el("div", { className: "fold-in" }, presetRow, inputRow),
+          );
+          more.addEventListener("toggle", () => {
+            if (more.isConnected !== false) moreOpen = !!more.open;
+          });
+          parts.push(
+            el(
+              "div",
+              { className: "timer-row" },
+              el("button", { type: "button", className: "btn primary big", id: "timer-quick", text: `▶ ${preset.value} 分で始める`, disabled: busy, onclick: () => start(preset.value) }),
+            ),
+            noteEl,
+            more,
+          );
+        } else {
+          parts.push(presetRow, inputRow, noteEl);
+        }
       } else {
         parts.push(
           el(
@@ -329,7 +500,7 @@ export function createStageTimer(deps) {
             ...v.extendable.map((m) =>
               el("button", { type: "button", className: "btn", id: `timer-extend-${m}`, text: extendLabel(m, v.state), disabled: busy, onclick: () => extend(m) })
             ),
-            el("button", { type: "button", className: "btn", id: "timer-cancel", text: "取り消す…", disabled: busy, onclick: () => cancel() }),
+            el("button", { type: "button", className: "btn", id: "timer-cancel", text: "タイマーを消す…", disabled: busy, onclick: () => cancel() }),
           ),
         );
       }
@@ -345,8 +516,8 @@ export function createStageTimer(deps) {
   }
 
   /**
-   * WS のカードの右上の残り（分：秒）。動いている・終わったときだけ出す（始まっていない・札を出さないときは null）。
-   * 読み上げは札の中の timer-line に任せる（aria-hidden。毎秒は読ませない）。書き換えは card() が始める 1 秒ごとの tick
+   * 回の見出しの「今」の行の右の残り（分：秒）と［大きく表示］（組 13 の U-07・U-09）。動いている・終わったときだけ出す（始まっていない・札を出さないときは null）。
+   * 残りの数字の読み上げは札の中の timer-line に任せる（aria-hidden。毎秒は読ませない）。書き換えは card() が始める 1 秒ごとの tick
    */
   function clock() {
     try {
@@ -355,9 +526,14 @@ export function createStageTimer(deps) {
       const { el } = deps;
       return el(
         "span",
-        { id: "wk-clock", className: clockClass(v.state), "aria-hidden": "true" },
-        el("span", { id: "wk-clock-time", text: v.clock }),
-        el("small", { id: "wk-clock-end", className: "wk-clock-end", text: "終了", hidden: v.state !== "ended" }),
+        { id: "wk-clock-wrap", className: "wk-clock-wrap" },
+        el(
+          "span",
+          { id: "wk-clock", className: clockClass(v.state), "aria-hidden": "true" },
+          el("span", { id: "wk-clock-time", text: v.clock }),
+          el("small", { id: "wk-clock-end", className: "wk-clock-end", text: "終了", hidden: v.state !== "ended" }),
+        ),
+        el("button", { type: "button", className: "btn compact", id: "timer-big", text: "大きく表示", onclick: () => openScreen() }),
       );
     } catch (error) {
       warn("右上の残り", error);
@@ -370,6 +546,8 @@ export function createStageTimer(deps) {
     reset,
     card,
     clock,
+    openScreen,
+    closeScreen,
     /** 試験用：今の状態 */
     get status() {
       return status;

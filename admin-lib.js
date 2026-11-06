@@ -221,7 +221,7 @@ export function isMissingFunctionError(error, name) {
 
 /**
  * 016 の DB が当たっているか（画面が知っている判定を、admin.js・instructor.js が入れる）。
- * false の間（016 の前の DB）は、今までの画面の文をそのまま出し、DB の hint に置き換えない
+ * 組 13 から、表の文がある理由（grant_outside_window・016 の拒否）は DB の hint に置き換えない（hint は console だけ。決まり 3.7）
  */
 let stageDbReady = false;
 export function setStageDbReady(value) {
@@ -232,8 +232,8 @@ export function setStageDbReady(value) {
 export const MSG_STAGE_NOT_READY = "DB の更新（セミナーの段階：016）がまだ適用されていないため、この操作はまだ使えません。";
 
 /**
- * 016 の DB が返す拒否の名前（message が名前だけのとき）と、日本語の hint が無いときに出す文。
- * hint があれば DB の文をそのまま出す（explainError）。名前は message と「完全に同じ」ときだけ拾う
+ * 016 の DB が返す拒否の名前（message が名前だけのとき）と、画面に出す文。
+ * DB の日本語の hint より先にこの文を選ぶ（hint は console だけ。11-04g）。名前は message と「完全に同じ」ときだけ拾う
  * （部分一致で拾うと、ほかの誤りの文や将来の名前を取り違える）
  */
 export const STAGE_REJECTIONS = {
@@ -250,19 +250,27 @@ export const STAGE_REJECTIONS = {
   stage_grant_not_deletable:
     "段階の回の一時追加は記録として残すため、削除できません。追加を無効にするときは新しい管理コンソールの「取り消す」を、受講者を外すときは名簿の「停止」を使ってください。",
   grant_target_not_in_cohort: "追加できるのは、担当する回の有効な受講者だけです。",
-  grant_instructor_limit_exceeded: "講師が追加できる上限を超えています。",
+  grant_instructor_limit_exceeded: "講師の追加の上限を超えます。",
   job_transition_not_allowed: "ジョブの状態を、この向きには変えられません。",
-  stage_input_invalid: "入力の内容を受け付けられませんでした。値を確かめてください。",
+  stage_input_invalid: "値が正しくありません。",
 };
 
-/** 講師の追加の上限を超えたときの、どの上限かの呼び名（detail の scope。DB の値の名前が違っても、文は崩れない） */
+/**
+ * 講師の追加の上限を超えたときの文（detail の scope ごと。量の上限なので前置きを付けず単独で出す：決まり 3.7）。
+ * 押す前の確かめ（stage-lib.js）と同じ文。scope が分からないときは STAGE_REJECTIONS の 1 行だけ
+ */
 const INSTRUCTOR_LIMIT_SCOPES = {
-  per_grant: "1 回の追加",
-  grant: "1 回の追加",
-  per_student_stage: "1 人・1 段階への追加の合計",
-  student_stage: "1 人・1 段階への追加の合計",
-  per_cohort_day: "この回の 1 日の追加の合計",
-  cohort_day: "この回の 1 日の追加の合計",
+  per_grant: "grant",
+  grant: "grant",
+  per_student_stage: "student_stage",
+  student_stage: "student_stage",
+  per_cohort_day: "cohort_day",
+  cohort_day: "cohort_day",
+};
+const INSTRUCTOR_LIMIT_FIRST_LINES = {
+  grant: "1 回の追加の上限を超えます。",
+  student_stage: "この人のこの段階の追加上限を超えます。",
+  cohort_day: "この回の 1 日の追加上限を超えます。",
 };
 
 /** 拒否の名前（message が小文字・数字・下線だけの名前そのもののとき）。そうでなければ "" */
@@ -291,12 +299,13 @@ export function stageRejectionText(error) {
   if (name === "grant_instructor_limit_exceeded") {
     const d = parseErrorDetail(error);
     const known = (v) => v !== null && v !== undefined && Number.isFinite(Number(v));
-    if (known(d.limit)) {
+    const kind = INSTRUCTOR_LIMIT_SCOPES[d.scope];
+    if (kind && known(d.limit)) {
+      // 1 回の追加は今回の分だけ。合計の上限（1 人・1 段階、回の 1 日）は取り消した分を含む追加済みも出す
       const parts = [];
-      if (known(d.current)) parts.push(`これまで ${formatCredits(d.current)}`);
+      if (kind !== "grant" && known(d.current)) parts.push(`取り消した分を含む追加済み ${formatCredits(d.current)}`);
       if (known(d.request)) parts.push(`今回 ${formatCredits(d.request)}`);
-      const scope = INSTRUCTOR_LIMIT_SCOPES[d.scope] ?? "講師の追加";
-      return `${scope}の上限は ${formatCredits(d.limit)} クレジットです${parts.length ? `（${parts.join("、")}）` : ""}。`;
+      return `${INSTRUCTOR_LIMIT_FIRST_LINES[kind]}\n${formatCredits(d.limit)} クレジットまでです${parts.length ? `（${parts.join("・")}）` : ""}。`;
     }
   }
   return STAGE_REJECTIONS[name];
@@ -313,28 +322,53 @@ export function isNetworkFailure(error) {
   return /fetch|network|load failed|timed? ?out|timeout|aborted/i.test(String(error.message ?? ""));
 }
 
-/** Supabase（PostgREST）のエラーを日本語の説明にする */
-export function explainError(error) {
-  if (!error) return "";
+/** DB の日本語の hint は画面に出さず console だけに出す（決まり 3.7・11-04g。表の文を先に選ぶ） */
+function logHint(error) {
+  const hint = String(error?.hint ?? "");
+  if (/[^\x00-\x7F]/.test(hint)) console.info(`DB の hint：${hint}`);
+}
+
+/**
+ * 前置き「〇〇エラー：」を付けずに単独で出す理由（決まり 3.7）：通信の失敗・ログインの期限切れ・量の上限（「〇〇の上限を超えます」）。
+ * admin_only は errorText が E-LOG-54 の完成した文にする
+ */
+const STANDALONE_REASONS = new Set(["network", "jwt_expired", "grant_instructor_limit_exceeded", "grant_total_exceeded"]);
+
+/** 通信の失敗の文（前置きを付けずに単独で出す。決まり 3.7） */
+export const MSG_NETWORK_FAILURE = "通信エラー：接続できませんでした。\nインターネット接続を確認してください。";
+/** ログインの期限切れの文（前置きを付けずに単独で出す。決まり 3.7） */
+export const MSG_LOGIN_EXPIRED = "ログインの有効期限が切れました。\nページを再読み込みしてください。";
+/** admin_only（42501 を含む）の完成した文（E-LOG-54。管理コンソールの explainApiError と同じ。決まり 3.7） */
+export const MSG_ADMIN_ONLY = "権限エラー：管理者の権限がありません。\n再度ログインしてください。";
+
+/** 理由の名前 → エラーコード（決まり 3.2。コードは文と別の値で持つ）。原因が分からない unknown は操作の領域の 99（errorCode の area） */
+const REASON_CODES = { admin_only: "E-LOG-54", permission_denied: "E-LOG-54" };
+
+/**
+ * Supabase（PostgREST）のエラーの、前置きの無い原因の文と理由の名前（{ text, reason }）。
+ * reason：DB の拒否の名前（admin_only・grant_outside_window など）・network・jwt_expired・unknown（どれにも当たらない）など。
+ * DB の日本語の hint は、表の文がある理由（STAGE_REJECTIONS・grant_instructor_limit_exceeded・grant_outside_window）では出さず console だけ（11-04g）
+ */
+export function explainErrorInfo(error, { quiet = false } = {}) {
+  if (!error) return { text: "", reason: "" };
   const message = String(error.message ?? "");
   const code = String(error.code ?? "");
+  const r = (text, reason) => ({ text, reason });
   if (message.includes("last_admin_protected")) {
-    return "最後の有効な管理者は、停止・役割の変更・削除ができません。先に別の管理者を追加してください。";
+    return r("最後の有効な管理者は、停止・役割の変更・削除ができません。先に別の管理者を追加してください。", "last_admin_protected");
   }
-  if (message.includes("admin_only")) return "管理者の権限がありません。";
+  if (message.includes("admin_only")) return r("管理者の権限がありません。", "admin_only");
   if (message.includes("grant_outside_window")) {
-    // 016 の DB（画面が 016 を当たっていると知っている、または detail の credit_mode が stage）で、DB が日本語の hint を付けたときは、
-    // DB の説明を出す。016 の前の DB では、今までの文のまま（本番の表示を変えない）
-    const hint = String(error.hint ?? "");
-    const stageMode = parseErrorDetail(error).credit_mode === "stage";
-    if ((stageDbReady || stageMode) && /[^\x00-\x7F]/.test(hint)) return hint;
-    if (stageMode) {
-      return "今の段階が無いため、クレジットを追加できません（段階の回は、Day1〜Day2 の期間内で、その日の段階があるときだけ追加できます）。";
-    }
-    return "今の枠が無いため、クレジットを追加できません（受講者は Day1〜Day2 の期間内でクレジットが設定されているとき、AIKENメンバーは月額が設定されているときだけ追加できます）。";
+    // 段階の回（detail の credit_mode が stage）は表の文。DB の hint は console だけ（11-04g）
+    if (!quiet) logHint(error);
+    if (parseErrorDetail(error).credit_mode === "stage") return r("今の段階がありません。", "grant_outside_window");
+    return r(
+      "今の枠が無いため、クレジットを追加できません（受講者は Day1〜Day2 の期間内でクレジットが設定されているとき、AIKENメンバーは月額が設定されているときだけ追加できます）。",
+      "grant_outside_window",
+    );
   }
-  if (message.includes("grant_immutable")) return "追加したクレジットは変更できません。削除して追加し直してください。";
-  // 014：1 人・同じ枠への追加の合計の天井（detail は {granted, request, limit}）
+  if (message.includes("grant_immutable")) return r("追加したクレジットは変更できません。削除して追加し直してください。", "grant_immutable");
+  // 014：1 人・同じ枠への追加の合計の天井（detail は {granted, request, limit}）。量の上限なので前置きを付けず単独で出す
   if (message.includes("grant_total_exceeded")) {
     let d = {};
     try {
@@ -343,74 +377,130 @@ export function explainError(error) {
       d = {};
     }
     const limit = Number.isFinite(Number(d.limit)) && d.limit !== null ? Number(d.limit) : MAX_GRANT_TOTAL;
-    const parts = [];
-    if (Number.isFinite(Number(d.granted)) && d.granted !== null) parts.push(`追加済み ${formatCredits(d.granted)}`);
-    if (Number.isFinite(Number(d.request)) && d.request !== null) parts.push(`今回 ${formatCredits(d.request)}`);
+    const granted = Number.isFinite(Number(d.granted)) && d.granted !== null;
+    const request = Number.isFinite(Number(d.request)) && d.request !== null;
     // 段階の回（scope が cohort）：上限は「今の枠」ではなく「この回での合計」。取り消した追加も数える。
     // detail に email があれば（まとめての追加で誰が超えたかが分かる）、その人の名前の代わりに入れる
     if (d.scope === "cohort") {
-      const who = typeof d.email === "string" && d.email ? `${d.email} ` : "この人";
-      const detail = parts.length ? `${parts.join("、")}（取り消した追加も数えます）。` : "取り消した追加も数えます。";
-      return `${who}への追加は、この回の合計で ${formatCredits(limit)} クレジットまでです。${detail}`;
+      const who = typeof d.email === "string" && d.email ? d.email : "この人";
+      const parts = [];
+      if (granted) parts.push(`取り消した分を含む追加済み ${formatCredits(d.granted)}`);
+      if (request) parts.push(`今回 ${formatCredits(d.request)}`);
+      return r(
+        `${who}：回の追加上限を超えます。\n合計 ${formatCredits(limit)} クレジットまでです${parts.length ? `（${parts.join("・")}）` : ""}。`,
+        "grant_total_exceeded",
+      );
     }
-    return `この人の今の枠への追加は、合計で ${formatCredits(limit)} までです${parts.length ? `（${parts.join("、")}）` : ""}。`;
+    const parts = [];
+    if (granted) parts.push(`追加済み ${formatCredits(d.granted)}`);
+    if (request) parts.push(`今回 ${formatCredits(d.request)}`);
+    return r(
+      `この人への追加上限を超えます。\n${formatCredits(limit)} クレジットまでです${parts.length ? `（${parts.join("・")}）` : ""}。`,
+      "grant_total_exceeded",
+    );
   }
   if (message.includes("cohort_id_mismatch")) {
-    return "回の ID が会場番号と Day1 の日付に合いません。読み込み直してからやり直してください。";
+    return r("回の ID が会場番号と Day1 の日付に合いません。読み込み直してからやり直してください。", "cohort_id_mismatch");
+  }
+  // 016 の拒否（名前だけの message）：表の文を DB の日本語の hint より先に選ぶ（hint は console だけ。11-04g）
+  const stageText = stageRejectionText(error);
+  if (stageText) {
+    if (!quiet) logHint(error);
+    return r(stageText, rejectionName(error));
   }
   // 設定の誤り（014 の admin_update_settings。message は日本語で、範囲・項目名を含む）
-  if (code === "22023" && /[^\x00-\x7F]/.test(message)) return message;
+  if (code === "22023" && /[^\x00-\x7F]/.test(message)) return r(message, "settings_invalid");
   // DB が日本語の説明を返したとき（天井を超える追加など）は、そのまま出す
   const japanese = [message, error.hint].find((t) => /[^\x00-\x7F]/.test(String(t ?? "")));
-  if (japanese && code !== "42501") return String(japanese);
-  // 42501 の instructor_only は、DB が日本語の hint を付けていれば、それを出す（admin_only は上で今のまま）
-  if (rejectionName(error) === "instructor_only" && /[^\x00-\x7F]/.test(String(error.hint ?? ""))) return String(error.hint);
-  // 016 の拒否（名前だけの message。42501 の instructor_only は hint が日本語でも上で出さないので、ここで文にする）
-  const stageText = stageRejectionText(error);
-  if (stageText) return stageText;
+  if (japanese && code !== "42501") return r(String(japanese), "db_text");
   // DB の更新がまだ適用されていない：関数・テーブル・列が見つからない（段階は 016、設定は 014、回と会場は 013）
-  if (isStageSchemaMissing(error)) return MSG_STAGE_NOT_READY;
+  if (isStageSchemaMissing(error)) return r(MSG_STAGE_NOT_READY, "stage_schema_missing");
   if (isMissingSchemaError(error)) {
     if (/admin_get_settings|admin_update_settings|admin_settings_history|app_settings/.test(message)) {
-      return "DB の更新（設定：014）がまだ適用されていないため、この操作はできません。";
+      return r("DB の更新（設定：014）がまだ適用されていないため、この操作はできません。", "schema_missing");
     }
-    return "DB の更新（回と会場：013）がまだ適用されていないため、この操作はできません。";
+    return r("DB の更新（回と会場：013）がまだ適用されていないため、この操作はできません。", "schema_missing");
   }
   if (code === "42501" || /row-level security|permission denied/i.test(message)) {
-    return "この操作をする権限がありません（管理者だけが操作できます）。";
+    return r("この操作をする権限がありません（管理者だけが操作できます）。", "permission_denied");
   }
   if (code === "23503") {
     const deleting = /update or delete/i.test(message);
     if (/members_cohort_id_fkey/.test(message)) {
-      return deleting
-        ? "所属している受講者がいるため、この回は削除できません。先に別の回へ移すか、名簿から外してください。"
-        : "選んだ回が見つかりません（削除された可能性があります）。読み込み直してください。";
+      return r(
+        deleting
+          ? "所属している受講者がいるため、この回は削除できません。先に別の回へ移すか、名簿から外してください。"
+          : "選んだ回が見つかりません（削除された可能性があります）。読み込み直してください。",
+        "fk_cohort",
+      );
     }
     if (/cohorts_venue_no_fkey/.test(message)) {
-      return deleting ? "この会場には回があるため削除できません。" : "選んだ会場が見つかりません。読み込み直してください。";
+      return r(deleting ? "この会場には回があるため削除できません。" : "選んだ会場が見つかりません。読み込み直してください。", "fk_venue");
     }
-    return "ほかのデータから参照されているため、この操作はできません。";
+    return r("ほかのデータから参照されているため、この操作はできません。", "fk_other");
   }
-  if (code === "23514" && /dates_order/.test(message)) return "Day2 は Day1 より後の日付にしてください。";
-  if (code === "23514" && /cohorts_day1_range/.test(message)) return "Day1 は 2000〜2099 年の日付にしてください。";
-  if (code === "23514" && /venues_no_check/.test(message)) return "会場番号は 2 桁の数字にしてください（例：06）。";
-  if (code === "23514" && /venues_name_check/.test(message)) return "会場名を入力してください。";
+  if (code === "23514" && /dates_order/.test(message)) return r("Day2 は Day1 より後の日付にしてください。", "check_dates_order");
+  if (code === "23514" && /cohorts_day1_range/.test(message)) return r("Day1 は 2000〜2099 年の日付にしてください。", "check_day1_range");
+  if (code === "23514" && /venues_no_check/.test(message)) return r("会場番号は 2 桁の数字にしてください（例：06）。", "check_venue_no");
+  if (code === "23514" && /venues_name_check/.test(message)) return r("会場名を入力してください。", "check_venue_name");
   // クレジットの範囲（014 の天井）。制約は NOT VALID なので、天井を超える古い行は、ほかの列を変えるだけでも拒否される
   if (code === "23514" && /credits/.test(message)) {
-    return `クレジットの値が上限 ${formatCredits(MAX_CREDITS)} を超えています（0〜${formatCredits(MAX_CREDITS)}、追加は 1〜${formatCredits(MAX_CREDITS)}）。` +
-      `入力した値か、保存済みの古い値が ${formatCredits(MAX_CREDITS)} を超えている場合は、まずその値を ${formatCredits(MAX_CREDITS)} 以下に直してください。`;
+    return r(
+      `クレジットの値が上限 ${formatCredits(MAX_CREDITS)} を超えています（0〜${formatCredits(MAX_CREDITS)}、追加は 1〜${formatCredits(MAX_CREDITS)}）。` +
+        `入力した値か、保存済みの古い値が ${formatCredits(MAX_CREDITS)} を超えている場合は、まずその値を ${formatCredits(MAX_CREDITS)} 以下に直してください。`,
+      "check_credits",
+    );
   }
   if (code === "23514") {
-    return `メールアドレスの形式・ドメイン、または区分・状態の値が正しくありません（${
-      ALLOWED_DOMAINS.map((d) => "@" + d).join(" / ")
-    } の小文字のアドレスのみ）。`;
+    return r(
+      `メールアドレスの形式・ドメイン、または区分・状態の値が正しくありません（${
+        ALLOWED_DOMAINS.map((d) => "@" + d).join(" / ")
+      } の小文字のアドレスのみ）。`,
+      "check_other",
+    );
   }
-  if (code === "23505" && /cohorts_pkey/.test(message)) return "同じ会場・同じ Day1 の回が既にあります（回の ID が重なります）。";
-  if (code === "23505" && /venues_pkey/.test(message)) return "その会場番号は既に使われています。";
-  if (code === "23505") return "このメールアドレスは既に登録されています。";
-  if (/JWT|session|token/i.test(message)) return "ログインの有効期限が切れました。ページを開き直してください。";
-  if (/fetch|network/i.test(message)) return "サーバーに接続できませんでした。通信状態を確認してください。";
-  return `エラーが発生しました（${message || code || "不明"}）。`;
+  if (code === "23505" && /cohorts_pkey/.test(message)) return r("同じ会場・同じ Day1 の回が既にあります（回の ID が重なります）。", "dup_cohort");
+  if (code === "23505" && /venues_pkey/.test(message)) return r("その会場番号は既に使われています。", "dup_venue");
+  if (code === "23505") return r("このメールアドレスは既に登録されています。", "dup_member");
+  if (/JWT|session|token/i.test(message)) return r(MSG_LOGIN_EXPIRED, "jwt_expired");
+  if (/fetch|network/i.test(message)) return r(MSG_NETWORK_FAILURE, "network");
+  // どれにも当たらない：サーバーの英語の message・code は画面に出さず console だけ（決まり 3.7）。前置きは errorText が付ける
+  if (!quiet) console.info(`エラー：${message || code || "不明"}`);
+  return r("エラーが発生しました。", "unknown");
+}
+
+/** Supabase（PostgREST）のエラーを日本語の説明にする（前置きの無い原因の文。通信の失敗・ログインの期限切れ・量の上限は単独で出せる文） */
+export function explainError(error) {
+  return explainErrorInfo(error).text;
+}
+
+/**
+ * 画面に出す完成した文とエラーコード（決まり 3.7・3.2）。op は操作の名前（「読み込み」「移動」「追加」など）。返り値：{ text, code }。
+ * 通信の失敗・ログインの期限切れ・量の上限は前置きを付けず単独、admin_only（42501 を含む）は E-LOG-54 の完成した文、
+ * 原因が分からない物は「{op}エラーが発生しました。」（op が無いときは「エラーが発生しました。」。コードは操作の領域の 99：
+ * area の既定は管理コンソール＝ADM、講師ページ＝INS、提出作品＝WRK）、ほかは「{op}エラー：原因」。code は文に入れず、小さく別に出す
+ */
+export function errorInfo(op, error, { area = "ADM" } = {}) {
+  if (!error) return { text: "", code: null };
+  const { text, reason } = explainErrorInfo(error);
+  const code = reason === "unknown" ? `E-${area}-99` : REASON_CODES[reason] ?? null;
+  if (reason === "admin_only" || reason === "permission_denied") return { text: MSG_ADMIN_ONLY, code };
+  if (reason === "unknown") return { text: op ? `${op}エラーが発生しました。` : "エラーが発生しました。", code };
+  if (STANDALONE_REASONS.has(reason) || !op) return { text, code };
+  return { text: `${op}エラー：${text}`, code };
+}
+
+/** errorInfo の文だけ */
+export function errorText(op, error, opts = {}) {
+  return errorInfo(op, error, opts).text;
+}
+
+/** errorInfo のコードだけ（無ければ null。console に 2 回出さないよう、文は作らずに理由だけ見る） */
+export function errorCode(op, error, { area = "ADM" } = {}) {
+  if (!error) return null;
+  const { reason } = explainErrorInfo(error, { quiet: true });
+  if (reason === "unknown") return `E-${area}-99`;
+  return REASON_CODES[reason] ?? null;
 }
 
 // ---- クレジットの枠（DB：20261015000007_credit_periods.sql と同じ境界・換算） ----
@@ -1849,7 +1939,7 @@ export function saveConfirmLines(plan, labelOf = (id) => id) {
     if (e.key === "all" && Array.isArray(e.payload)) lines.push(`・全体で使えるモデルを、オンにした ${e.payload.length} 件にします。`);
     if (e.key !== "all" && e.payload === null) {
       lines.push(
-        `・${e.label}は制限なし（全体と同じ。これから足すモデルも使える）として保存します。${(plan.optIn ?? []).length ? "口パクなど明示が要るモデルは使えなくなります。" : ""}`,
+        `・${e.label}は制限なし（全体と同じ。これから足すモデルも使える）として保存します。${(plan.optIn ?? []).length ? "口パクなど、個別にオンにするモデルは使えなくなります。" : ""}`,
       );
     }
   }

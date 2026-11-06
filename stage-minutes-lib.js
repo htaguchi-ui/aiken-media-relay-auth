@@ -8,6 +8,8 @@
 //   instructor_stage_minutes・instructor_set_stage_minutes
 //     { cohort_id, server_now, period, editable_day, stages, totals,
 //       current: { stage_id, counted_from, ends_at, by_times, reason } | null, timer_running }
+import { isNetworkFailure, MSG_NETWORK_FAILURE } from "./admin-lib.js";
+import { MSG_UPDATE_RESULT_UNKNOWN } from "./stage-lib.js";
 
 /** 1 段階の分の範囲（DB の check と同じ） */
 export const STAGE_MINUTES_MIN = 1;
@@ -19,19 +21,20 @@ export const DAY_MINUTES_WARN = 360;
 /** 分を持つ日の種類 */
 export const MINUTE_DAY_KINDS = Object.freeze(["day1", "day2"]);
 
-export const MSG_MINUTES_INVALID = `分は ${STAGE_MINUTES_MIN}〜${STAGE_MINUTES_MAX} の整数で入れてください`;
+export const MSG_MINUTES_INVALID = `分は ${STAGE_MINUTES_MIN}〜${STAGE_MINUTES_MAX} の整数です。`;
 export const MSG_DAY_MINUTES_WARN = "6 時間を超えています";
 export const MSG_MINUTES_SAVED = "時間を保存しました。";
-export const MSG_MINUTES_SAVE_FAILED = "時間を保存できませんでした。";
-export const MSG_MINUTES_LOAD_FAILED = "時間を読み込めません。";
-export const MSG_MINUTES_TIMER_RUNNING = "制作時間が動いている間は、AI は制作時間を使います。";
-export const MSG_BY_TIMES = "時刻で決めています";
-export const MSG_BY_TIMES_TITLE = "分を変えても AI の目安は変わりません";
+/** 保存・読み込みの失敗（原因が分からない物。エラーコードは文と別の値：minutesErrorCode） */
+export const MSG_MINUTES_SAVE_FAILED = "保存エラーが発生しました。";
+export const MSG_MINUTES_LOAD_FAILED = "読み込みエラーが発生しました。";
+export const MSG_MINUTES_TIMER_RUNNING = "タイマーの作動中は、AI はタイマーの残りで案内します。";
+export const MSG_BY_TIMES = "時刻で指定済み";
+export const MSG_BY_TIMES_TITLE = "分を変えても AI の目安は変わりません。";
 export const MSG_NO_TARGET = "目安なし";
 /** 「目安なし」のホバー（current.reason ごと） */
 export const NO_TARGET_TITLES = Object.freeze({
-  first_stage: "今日の最初の段階には目安がありません。制作時間を使ってください",
-  guide_off: "案内が公開されていないため、AI は目安を使いません",
+  first_stage: "最初の段階には目安がありません。タイマーを使ってください。",
+  guide_off: "案内が未公開です。AI は目安の時間を使いません。",
 });
 
 const text = (v) => (typeof v === "string" && v.trim() ? v : null);
@@ -127,7 +130,7 @@ export function formatTargetClock(endMs, fromMs = endMs) {
 /**
  * 講師ページの窓の、今の段階の行の右の文。current は normalizeInstructorStageMinutes の current（null なら出さない）。
  * minutes は今入っている分（数か null）。返り値：{ text, title }（出さないときは text が ""）。
- * by_times →「時刻で決めています」／counted_from がある →「目安 HH:MM まで」（分が空なら出さない）／どちらも無い →「目安なし」
+ * by_times →「時刻で指定済み」／counted_from がある →「目安 HH:MM まで」（分が空なら出さない）／どちらも無い →「目安なし」
  */
 export function targetView(current, minutes) {
   if (!current) return { text: "", title: "" };
@@ -209,7 +212,22 @@ export function stagesOfDay(normalized, dayKind) {
   return normalized.stages.filter((s) => s.dayKind === dayKind).sort((a, b) => (a.seq ?? 0) - (b.seq ?? 0));
 }
 
-/** 保存・読み込みの失敗の文：DB の日本語の hint があればそれ、無ければ fallback */
+/**
+ * 保存・読み込みの失敗の文：DB の日本語の hint があればそれ、無ければ fallback。
+ * 通信の失敗は、読み込み（fallback が MSG_MINUTES_LOAD_FAILED）なら接続の文、保存（送ったあと）なら結果が不明の文（前置きなし。決まり 3.7）
+ */
 export function minutesErrorText(error, fallback = MSG_MINUTES_SAVE_FAILED) {
-  return text(error?.hint) ?? fallback;
+  const hint = text(error?.hint);
+  if (hint) return hint;
+  if (isNetworkFailure(error)) return fallback === MSG_MINUTES_LOAD_FAILED ? MSG_NETWORK_FAILURE : MSG_UPDATE_RESULT_UNKNOWN;
+  return fallback;
+}
+
+/**
+ * minutesErrorText の文に付けるエラーコード（決まり 3.2）。DB の hint を出すときと通信の失敗（決まり 3.1・11-04g）は null、
+ * 予備の文（原因が分からない）は E-INS-99
+ */
+export function minutesErrorCode(error) {
+  if (text(error?.hint) || isNetworkFailure(error)) return null;
+  return "E-INS-99";
 }

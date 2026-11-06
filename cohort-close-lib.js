@@ -1,5 +1,6 @@
 // 回のクローズの表示と確認。対象者・権限・期限・冪等性の最終判定は DB の RPC が行う。
-import { formatShortDateTime } from "./admin-lib.js";
+import { formatShortDateTime, isNetworkFailure, MSG_NETWORK_FAILURE } from "./admin-lib.js";
+import { MSG_UPDATE_RESULT_UNKNOWN } from "./stage-lib.js";
 
 const UUID = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
 const text = (v) => typeof v === "string" && v.trim() ? v : null;
@@ -70,16 +71,36 @@ export function normalizeCohortCloseSummaries(raw) {
 }
 
 const REASONS = {
-  not_stage_cohort: "段階ごとの枠の回だけクローズできます。",
-  day2_not_reached: "Day2 の最後のワークショップが終わってからクローズしてください。",
-  final_stage_not_reached: "Day2 の最後の段階に進み、最後のワークショップを終えてからクローズしてください。",
+  not_stage_cohort: "段階のない回はクローズできません。",
+  day2_not_reached: "Day2 の最後の段階に入ってからクローズしてください。",
+  final_stage_not_reached: "最後の段階に進めてからクローズしてください。",
   already_closed: "この回はクローズ済みです。",
-  reopen_expired: "開き直せる期限を過ぎました。削除した内容は戻りません。",
-  content_deleted: "内容の削除が始まったため、この回は開き直せません。",
-  retention_unavailable: "内容の保存と削除の設定を確認できません。管理者に確認してください。",
+  reopen_expired: "再開の期限を過ぎました。削除した内容は戻せません。",
+  content_deleted: "削除が始まった回は再開できません。",
+  retention_unavailable: "保存設定を取得できません。",
 };
-export function cohortCloseReason(reason) {
-  return REASONS[reason] ?? "現在はこの操作をできません。最新の状態を確認してください。";
+/**
+ * 最後の段階に進めないまま Day2 が終わった回（final_stage_not_reached で、期間が Day2 のあと）。Day2 のあとは段階を動かせないので、
+ * 講師には直せない（E-INS-55）。2 行目は講師の画面だけ（管理コンソールでは出さない：管理者に「管理者に」と言わない）
+ */
+const MSG_FINAL_AFTER = "最後の段階に進む前に Day2 が終了しました。";
+const MSG_FINAL_AFTER_NEXT = "管理者にお知らせください。";
+/** 札の理由のエラーコード（決まり 3.2。文と別の値） */
+const REASON_CODES = { retention_unavailable: "E-INS-52" };
+
+/**
+ * 札の理由（押せない理由。前置きは付けない）。period：回の期間（講師ページは state.status.period、管理コンソールは回の行の current_period）。
+ * admin：管理コンソールで出すとき true（講師に向けた 2 行目を出さない）
+ */
+export function cohortCloseReason(reason, { period = null, admin = false } = {}) {
+  if (reason === "final_stage_not_reached" && period === "after") return admin ? MSG_FINAL_AFTER : `${MSG_FINAL_AFTER}\n${MSG_FINAL_AFTER_NEXT}`;
+  return REASONS[reason] ?? "今は操作できません。\n［最新にする］を押してください。";
+}
+
+/** 札の理由のエラーコード（無ければ null） */
+export function cohortCloseReasonCode(reason, { period = null } = {}) {
+  if (reason === "final_stage_not_reached" && period === "after") return "E-INS-55";
+  return REASON_CODES[reason] ?? null;
 }
 
 /**
@@ -105,75 +126,163 @@ export function cohortCloseCanAct(status, kind, now = Date.now()) {
   return Number.isFinite(now) && now + status.clockOffset < Date.parse(status.reopenUntil);
 }
 
-export function cohortCloseLines(status, now = Date.now()) {
-  if (!status) return ["クローズの状態をまだ確認できていません。"];
+/**
+ * 札の行（{ text, tip, code }）。tip はその行のホバーの文（無ければ null）、code はエラーコード（無ければ null。決まり 3.2）。
+ * opts：cohortCloseReason と同じ（period・admin）
+ */
+export function cohortCloseLineItems(status, now = Date.now(), opts = {}) {
+  const item = (text, tip = null, code = null) => ({ text, tip, code });
+  if (!status) return [item("読み込み中…")];
   if (status.state === "closed") {
+    const reason = status.reason ?? "reopen_expired";
     return [
-      `クローズ：${formatShortDateTime(status.closedAt)}${status.closedBy ? `（${status.closedBy}）` : ""}`,
-      `有効に戻せる候補：${status.targetCount} 人。戻さなかった人（あとで個別に設定を変えた人など）：${status.reopenExcludedCount} 人。`,
-      status.purgeAt ? `最も早い削除：${formatShortDateTime(status.purgeAt)} 以降（利用の停止から ${status.retentionDays} 日後）` : "有効に戻せる候補については、削除予定の内容はありません。戻さない人の保存期限は変更されません。",
+      item(`クローズ：${formatShortDateTime(status.closedAt)}${status.closedBy ? `（${status.closedBy}）` : ""}`),
+      item(
+        `再開で戻せる受講者：${status.targetCount} 人（対象外 ${status.reopenExcludedCount} 人）`,
+        "クローズのあとに個別に設定を変えた人などは、再開しても戻しません。",
+      ),
+      status.purgeAt
+        ? item(`削除予定：${formatShortDateTime(status.purgeAt)} 以降（停止から ${status.retentionDays} 日後）`)
+        : item("再開で戻せる受講者の削除予定はありません。", "対象外の人の保存期限は変わりません。"),
       cohortCloseCanAct(status, "reopen", now)
-        ? `${formatShortDateTime(status.reopenUntil)}まで、削除が始まる前に開き直せます。`
-        : cohortCloseReason(status.reason ?? "reopen_expired"),
+        ? item(`${formatShortDateTime(status.reopenUntil)} まで再開できます。`, "削除が始まると、期限の前でも再開できません。")
+        : item(cohortCloseReason(reason, opts), null, cohortCloseReasonCode(reason, opts)),
     ];
   }
-  if (!status.canClose) return [cohortCloseReason(status.reason)];
-  return [`クローズすると、この回の受講者 ${status.targetCount} 人の利用を停止します。`];
+  if (!status.canClose) return [item(cohortCloseReason(status.reason, opts), null, cohortCloseReasonCode(status.reason, opts))];
+  return [item(`クローズすると受講者 ${status.targetCount} 人の利用を停止します。`)];
 }
 
+/** 札の行の文だけ（管理コンソールの札・試験が使う） */
+export function cohortCloseLines(status, now = Date.now(), opts = {}) {
+  return cohortCloseLineItems(status, now, opts).map((i) => i.text);
+}
+
+/** 確認の窓の文：{ title, okText, lines（本文は結果だけ）, help（窓の ？ の中の文。無ければ省く）, danger } */
 export function cohortCloseConfirmation(status, kind) {
   if (kind === "reopen") return {
-    title: "回を開き直しますか？",
-    okText: "開き直す",
-    lines: [
-      `${status.cohortId} を開き直します。このクローズで停止し、その後に個別変更されていない受講者 ${status.targetCount} 人が有効に戻せる候補です。戻さない人は ${status.reopenExcludedCount} 人です。`,
-      "以前から停止中だった人や、別の回へ移った人など、変更されていた人は戻しません。有効に戻した人の、未確定の削除予定だけを取り消します。",
-      "すでに削除が始まった場合や期限を過ぎた場合は、開き直せません。",
-    ],
+    title: `${status.cohortId} を再開しますか？`,
+    okText: "再開する",
+    lines: [`受講者 ${status.targetCount} 人を有効に戻します（対象外 ${status.reopenExcludedCount} 人）。`],
+    help: "以前から停止中だった人や、別の回へ移った人などは戻しません。有効に戻した人の、未確定の削除予定だけを取り消します。",
   };
   return {
-    title: "最後のワークショップを終えて、回をクローズしますか？",
-    okText: "終了を確認してクローズ",
+    title: `${status.cohortId} をクローズしますか？`,
+    okText: "クローズする",
     danger: true, // 受講者全員の利用を止める重い操作。確定のボタンを危険の色にする（U3-9。講師の画面の confirmDialog が使う）
     lines: [
-      `${status.cohortId} の受講者 ${status.targetCount} 人の利用を停止します。`,
-      "押すと、受講者は Canvas と生成を使えなくなります。提出した作品は、7 日間はマイページから保存できます。",
-      status.purgeAt
-        ? `Canvas と生成物は、利用の停止から ${status.retentionDays} 日後以降に削除します（最も早い削除：${formatShortDateTime(status.purgeAt)}）。`
-        : "この操作による削除予定はありません。",
-      `以前から停止中の ${status.alreadyDisabledCount} 人は変更しません。講師・管理者・別の回の受講者も対象外です。`,
-      "最後の段階に進めただけでは、終わったことになりません。最後のワークショップが終わったのを確かめてから押してください。",
-      "開き直せるのはクローズから最長 14 日以内、かつ削除が始まる前です。以前の利用の停止や保存期間の設定によって期限が短くなる場合があります。",
+      `受講者 ${status.targetCount} 人が Canvas と生成を使えなくなります。`,
+      "最後のワークショップの終了後に押してください。",
     ],
+    help:
+      `提出した作品は 7 日間マイページから保存できます。${
+        status.purgeAt ? `Canvas と生成物は ${formatShortDateTime(status.purgeAt)} 以降に削除します。` : "削除予定はありません。"
+      }以前から停止中の ${status.alreadyDisabledCount} 人は対象外です。再開はクローズから最長 14 日、削除が始まるまでです。`,
   };
 }
 
+/**
+ * 操作の断りの文。関数（op を受け取る）は「${op}エラー：」を前に付ける（決まり 2.2.1 の「1 つの関数を通る複数の操作」。op が無いときは付けない）。
+ * 50 番台のコードの 2 行目「管理者にお知らせください。」は文に入れず、講師ページの側で足す（管理者に「管理者に」と言わない）
+ */
+const pre = (op) => (op ? `${op}エラー：` : "");
+const failed = (op) => (op ? `${op}エラーが発生しました。` : "エラーが発生しました。");
 const ERRORS = {
-  cohort_close_changed: "対象者や回の状態が変わりました。最新の人数と状態を確認して、もう一度操作してください。",
-  cohort_close_busy: "ほかの操作と重なりました。少し待って、最新の状態を確認してからもう一度お試しください。",
+  cohort_close_changed: (op) => `${pre(op)}回の状態が変わりました。\n内容を確認して、再度お試しください。`,
+  cohort_close_busy: (op) => `${pre(op)}ほかの操作と重なりました。\nしばらくしてから再度お試しください。`,
   cohort_finish_unconfirmed: "最後のワークショップが終わったことを確認してください。",
   cohort_reopen_expired: REASONS.reopen_expired,
   cohort_content_deleted: REASONS.content_deleted,
-  cohort_closed: "この回はクローズ済みです。最新の状態を確認してください。",
-  cohort_closed_identity_locked: "クローズ済みの回の会場・Day1・ID は変えられません。先に回を開き直してください。",
-  cohort_close_not_ready: "まだクローズできません。Day2 の最後の段階と、最後のワークショップの終了を確認してください。",
-  retention_settings_missing: REASONS.retention_unavailable,
-  cohort_retention_unavailable: REASONS.retention_unavailable,
-  cohort_close_state_invalid: "クローズの記録を確認できませんでした。管理者に確認してください。",
-  instructor_only: "この回の講師または管理者だけが操作できます。",
-  admin_only: "管理者だけが操作できます。",
-  cohort_close_invalid_response: "クローズの状態を確認できませんでした。人数や期限が不明なため操作しません。",
+  cohort_closed: "この回はクローズ済みです。",
+  cohort_closed_identity_locked: "クローズ済みの回の会場番号・Day1 は変更できません。\n再開できるときは、先に回を再開してください。",
+  cohort_close_not_ready: (op) => `${pre(op)}まだ最後の段階に入っていません。\n最後の段階に進めてから、再度お試しください。`,
+  retention_settings_missing: (op) => `${pre(op)}${REASONS.retention_unavailable}`,
+  cohort_retention_unavailable: (op) => `${pre(op)}${REASONS.retention_unavailable}`,
+  cohort_close_state_invalid: (op) => `${pre(op)}記録を確認できません。`,
+  instructor_only: "権限エラー：この回の担当ではありません。",
+  admin_only: "権限エラー：管理者の権限がありません。\n再度ログインしてください。",
+  cohort_close_invalid_response: (op) => `${failed(op)}\n［最新にする］を押してください。`,
 };
-export function cohortCloseError(error) {
-  if (["PGRST202", "42883", "42703"].includes(String(error?.code))) return "回のクローズ機能は、まだ使えません。管理者に確認してください。";
-  return ERRORS[error?.message] ?? ERRORS[error?.code] ?? "クローズの操作を完了できませんでした。最新の状態を読み直して確認してください。";
+/** cohort_close_not_ready の detail.reason ごとの文（221_cohort_close.sql:307-308 の detail。表に無い理由は ERRORS の文） */
+const NOT_READY = {
+  not_stage_cohort: (op) => `${pre(op)}段階のない回は対象外です。`,
+  day2_not_reached: (op) => `${pre(op)}Day2 の前です。\nDay2 の最後の段階に入ってから、再度お試しください。`,
+  retention_unavailable: (op) => `${pre(op)}${REASONS.retention_unavailable}`,
+};
+/** 断りのエラーコード（決まり 3.2。文と別の値。無ければ null） */
+const ERROR_CODES = {
+  retention_settings_missing: "E-INS-52",
+  cohort_retention_unavailable: "E-INS-52",
+  cohort_close_state_invalid: "E-INS-53",
+  instructor_only: "E-LOG-53",
+  admin_only: "E-LOG-54",
+  cohort_close_invalid_response: "E-INS-01",
+};
+const isRpcMissing = (error) => ["PGRST202", "42883", "42703"].includes(String(error?.code));
+function errorDetail(error) {
+  try {
+    const d = typeof error?.details === "string" ? JSON.parse(error.details) : error?.details ?? error?.detail ?? null;
+    return d && typeof d === "object" ? d : {};
+  } catch {
+    return {};
+  }
+}
+/** 断りの理由の名前（ERRORS の鍵）。表に無ければ null */
+function errorKey(error) {
+  if (Object.hasOwn(ERRORS, String(error?.message ?? ""))) return String(error.message);
+  if (Object.hasOwn(ERRORS, String(error?.code ?? ""))) return String(error.code);
+  return null;
+}
+
+/**
+ * 断りの文。op：「クローズ」「再開」「読み込み」（run が kind から、状態の読み込みは「読み込み」を渡す）。
+ * period：回の期間（final_stage_not_reached で Day2 のあとなら E-INS-55 の文。講師ページは state.status.period）。
+ * phase：通信の失敗のとき、更新の RPC（cohort_close・cohort_reopen）を送ったあと（"update"）か、その前の読み込み（"load"。既定）か。
+ * 通信の失敗は前置きを付けず単独（決まり 3.7）：読み込みは接続の文、更新は結果が不明の文
+ */
+export function cohortCloseError(error, op = "", { period = null, admin = false, phase = "load" } = {}) {
+  if (isRpcMissing(error)) return `${pre(op)}この機能は、まだ使えません。`;
+  if (isNetworkFailure(error)) return phase === "update" ? MSG_UPDATE_RESULT_UNKNOWN : MSG_NETWORK_FAILURE;
+  const key = errorKey(error);
+  if (key === "cohort_close_not_ready") {
+    const reason = errorDetail(error).reason;
+    if (reason === "final_stage_not_reached" && period === "after") return cohortCloseReason(reason, { period, admin });
+    if (Object.hasOwn(NOT_READY, reason)) return NOT_READY[reason](op);
+  }
+  if (key) return typeof ERRORS[key] === "function" ? ERRORS[key](op) : ERRORS[key];
+  return `${failed(op)}\n［最新にする］を押してください。`;
+}
+
+/** cohortCloseError の文に付けるエラーコード（無ければ null。通信の失敗には付けない〔決まり 3.1・11-04g〕。表に無い理由は E-INS-99） */
+export function cohortCloseErrorCode(error, { period = null } = {}) {
+  if (isRpcMissing(error)) return "E-INS-54";
+  const key = errorKey(error);
+  if (key === "cohort_close_not_ready") {
+    const reason = errorDetail(error).reason;
+    if (reason === "final_stage_not_reached" && period === "after") return "E-INS-55";
+    if (reason === "retention_unavailable") return "E-INS-52";
+  }
+  if (key) return ERROR_CODES[key] ?? null;
+  return isNetworkFailure(error) ? null : "E-INS-99";
 }
 
 /**
  * 一度の操作は一つの回・本人・プレビューに固定する。確認の前に必ず再取得し、
  * 確認中の回/本人の変更は isCurrent で失効。対象が変わったDB拒否を自動再送しない。
  */
-export function createCohortCloseAction({ rpc, confirm, onStatus, onSuccess, onError, onBusy, canStart = () => true }) {
+/**
+ * 確認の前に読み直した状態で、操作できないときの断りの名前（11-04g）。再開で、もう再開済み（closed でない）は cohort_close_changed、
+ * 削除が始まった回は cohort_content_deleted、保存設定を確かめられないときは cohort_retention_unavailable、それ以外の再開は期限切れ
+ */
+function cannotActReason(status, kind) {
+  if (status.reason === "content_deleted") return "cohort_content_deleted";
+  if (kind !== "reopen" || status.state !== "closed") return "cohort_close_changed";
+  if (status.reason === "retention_unavailable") return "cohort_retention_unavailable";
+  return "cohort_reopen_expired";
+}
+
+/** errorOpts：cohortCloseError に渡す { period, admin }（講師ページは回の期間。省くと {}） */
+export function createCohortCloseAction({ rpc, confirm, onStatus, onSuccess, onError, onBusy, canStart = () => true, errorOpts = () => ({}) }) {
   let busy = false;
   return {
     get busy() { return busy; },
@@ -181,6 +290,8 @@ export function createCohortCloseAction({ rpc, confirm, onStatus, onSuccess, onE
       if (busy || !["close", "reopen"].includes(kind) || !isCurrent() || !canStart()) return false;
       busy = true;
       onBusy(true);
+      // 通信の失敗の文を分ける：確認の前の読み込み（cohort_close_status）は load、更新の RPC を送る直前から update
+      let phase = "load";
       try {
         const preview = await rpc("cohort_close_status", { p_cohort_id: cohortId });
         if (!isCurrent()) return false;
@@ -188,10 +299,11 @@ export function createCohortCloseAction({ rpc, confirm, onStatus, onSuccess, onE
         const status = normalizeCohortCloseStatus(preview?.data, cohortId);
         if (!status) throw { message: "cohort_close_invalid_response" };
         onStatus(status);
-        if (!cohortCloseCanAct(status, kind)) throw { message: status.reason === "content_deleted" ? "cohort_content_deleted" : kind === "reopen" ? "cohort_reopen_expired" : "cohort_close_changed" };
+        if (!cohortCloseCanAct(status, kind)) throw { message: cannotActReason(status, kind) };
         const approved = await confirm(cohortCloseConfirmation(status, kind));
         if (!approved || !isCurrent()) return false;
         if (!cohortCloseCanAct(status, kind)) throw { message: "cohort_reopen_expired" };
+        phase = "update";
         const result = await rpc(kind === "close" ? "cohort_close" : "cohort_reopen", kind === "close"
           ? { p_cohort_id: cohortId, p_expected_token: status.previewToken, p_confirm_finished: true }
           : { p_cohort_id: cohortId, p_cycle_id: status.cycleId });
@@ -204,7 +316,7 @@ export function createCohortCloseAction({ rpc, confirm, onStatus, onSuccess, onE
         await onSuccess(next, result.data, kind, isCurrent);
         return true;
       } catch (error) {
-        if (isCurrent()) await onError(cohortCloseError(error), error);
+        if (isCurrent()) await onError(cohortCloseError(error, kind === "close" ? "クローズ" : "再開", { ...errorOpts(), phase }), error);
         return false;
       } finally {
         busy = false;

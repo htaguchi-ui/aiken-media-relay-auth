@@ -2,7 +2,8 @@
 // RPC の返り値の形は .orchestration/wt/g/kt-timer-rpc-contract.md（G・2026-10-26）。開始・延長・取り消しの可否と回の段階は DB が決める。
 // 残りの時間は ends_at と、読んだときの server_now と端末の時計の差で数える（端末の時計がずれていても、サーバーの時刻で数える）。
 // 終わったあとの延長は「今から」延ばす（main の決定。DB の stage_timer_extend は greatest(ends_at, now()) ＋ 分）。
-import { stageName } from "./stage-lib.js";
+import { isNetworkFailure, MSG_NETWORK_FAILURE } from "./admin-lib.js";
+import { MSG_UPDATE_RESULT_UNKNOWN, stageName } from "./stage-lib.js";
 
 /** ［20 分］［30 分］［40 分］［60 分］ */
 export const TIMER_PRESETS = Object.freeze([20, 30, 40, 60]);
@@ -78,13 +79,13 @@ export function extendLabel(minutes, state) {
  */
 export function extendDoneText(minutes, data) {
   const endsAt = ms(data?.timer?.ends_at);
-  return endsAt === null ? `制作時間を ${minutes} 分延ばしました。` : `制作時間を ${minutes} 分延ばしました（${formatClock(endsAt)} まで）。`;
+  return endsAt === null ? `${minutes} 分延長しました。` : `${minutes} 分延長しました（${formatClock(endsAt)} まで）。`;
 }
 
 /** 始めたあとの知らせ。replaced（置き換えた動いているタイマーの数）が 1 以上ならそう添える */
 export function startDoneText(minutes, replaced) {
-  const base = `制作時間を ${minutes} 分で始めました。`;
-  return Number.isSafeInteger(replaced) && replaced > 0 ? `${base}動いていた制作時間を置き換えました。` : base;
+  const base = `タイマーを ${minutes} 分で開始しました。`;
+  return Number.isSafeInteger(replaced) && replaced > 0 ? `${base}前のタイマーを置き換えました。` : base;
 }
 
 /** 札に出す段階の名前（講師ページの「今」の行と同じ書き方） */
@@ -115,8 +116,8 @@ export function defaultTimerMinutes(m) {
 export function defaultMinutesNote(d) {
   if (!d || d.clamped === null || d.value === null) return "";
   return d.clamped > TIMER_MAX
-    ? `予定は ${d.clamped} 分です。タイマーは ${TIMER_MAX} 分までです。`
-    : `予定は ${d.clamped} 分です。タイマーは ${TIMER_MIN} 分からです。`;
+    ? `予定 ${d.clamped} 分（タイマーは最大 ${TIMER_MAX} 分）`
+    : `予定 ${d.clamped} 分（タイマーは最短 ${TIMER_MIN} 分）`;
 }
 
 /**
@@ -130,19 +131,19 @@ export function timerView(status, now, { closed = false } = {}) {
   if (!status || !status.canStart || !status.stage || closed) return hidden;
   const stageLine = timerStageLine(status);
   const t = status.timer;
-  if (!t) return { ...hidden, visible: true, line: "制作時間は始まっていません。", stageLine };
+  if (!t) return { ...hidden, visible: true, line: "まだ始まっていません", stageLine };
   const serverNow = now + (Number.isFinite(status.clockOffset) ? status.clockOffset : 0);
   const remainingSec = Math.max(0, Math.ceil((t.endsAt - serverNow) / 1000));
   const extendable = TIMER_EXTENDS.filter((m) => t.minutesTotal + m <= TIMER_TOTAL_MAX);
   if (remainingSec <= 0) {
-    return { visible: true, state: "ended", remainingSec: 0, line: `制作時間が終わりました（${formatClock(t.endsAt)}）`, stageLine, extendable, canCancel: true, clock: formatRemaining(0) };
+    return { visible: true, state: "ended", remainingSec: 0, line: `終了しました（${formatClock(t.endsAt)}）`, stageLine, extendable, canCancel: true, clock: formatRemaining(0) };
   }
   const minutes = Math.ceil(remainingSec / 60);
   return {
     visible: true,
     state: "running",
     remainingSec,
-    line: `制作時間：残り ${minutes} 分（${formatClock(t.endsAt)} まで）`,
+    line: `残り ${minutes} 分（${formatClock(t.endsAt)} まで）`,
     stageLine,
     extendable,
     canCancel: true,
@@ -159,16 +160,21 @@ export function parseTimerMinutes(value) {
 }
 
 const ERRORS = {
-  cohort_closed: "この回はクローズ済みです。制作時間は使えません。",
-  stage_mode_off: "この回は段階の回ではないため、制作時間は使えません。",
-  stage_outside_course: "この回の期間（Day1〜Day2）の外なので、制作時間を操作できません。",
-  timer_bridge: "ブリッジワークの期間には制作時間のタイマーを使いません。",
-  timer_no_stage: "今の段階がありません。段階を確かめてください。",
-  timer_not_running: "今の段階の制作時間は始まっていません。",
-  timer_limit: `制作時間は合計 ${TIMER_TOTAL_MAX} 分までです。`,
-  workshop_input_invalid: `制作時間は ${TIMER_MIN}〜${TIMER_MAX} 分で指定してください。`,
-  instructor_only: "この回の講師または管理者だけが操作できます。",
+  cohort_closed: "タイマーエラー：クローズ済みの回です。",
+  stage_mode_off: "タイマーエラー：この回には段階がありません。",
+  stage_outside_course: "タイマーエラー：回の期間外です。",
+  timer_bridge: "タイマーエラー：ブリッジワークの期間は使えません。",
+  timer_no_stage: "タイマーエラー：今の段階がありません。",
+  timer_not_running: "タイマーエラー：今の段階には設定されていません。",
+  // 量の上限（今の合計＋延ばす分＞240）なので前置きを付けず単独（決まり 3.7）
+  timer_limit: `タイマーの上限（合計 ${TIMER_TOTAL_MAX} 分）を超えます。`,
+  workshop_input_invalid: `タイマーは ${TIMER_MIN}〜${TIMER_MAX} 分です。`,
+  instructor_only: "権限エラー：この回の担当ではありません。",
 };
+/** 延長（1〜60 分。workshop_guide.sql:974）の workshop_input_invalid（開始と同じ名前なので、操作で分ける） */
+const MSG_EXTEND_INVALID = "タイマーエラー：延長は 1〜60 分です。";
+/** 断りのエラーコード（決まり 3.2。文と別の値）。50 番台の 2 行目「管理者にお知らせください。」は講師ページの側で足す */
+const ERROR_CODES = { instructor_only: "E-LOG-53" };
 
 /**
  * 読み込みの失敗が一時的か。関数が無い（PGRST202）・権限が無い（42501）・DB が断った（P0001）は一時的でない（札を隠す）。
@@ -179,9 +185,30 @@ export function isTransientTimerError(error) {
   return !["PGRST202", "42501", "P0001"].includes(code);
 }
 
-/** 失敗の文：DB の日本語の hint があればそれを、無ければ印から決めた文を出す */
-export function timerErrorText(error) {
+/** 断りの理由の名前（ERRORS の鍵）。表に無ければ null */
+function timerErrorKey(error) {
+  if (Object.hasOwn(ERRORS, String(error?.message ?? ""))) return String(error.message);
+  if (Object.hasOwn(ERRORS, String(error?.code ?? ""))) return String(error.code);
+  return null;
+}
+
+/**
+ * 失敗の文：理由の名前から表の文を選ぶ（DB の日本語の hint は console だけ。11-04g）。
+ * op：押した操作（"start"・"extend"・"cancel"）。延長の workshop_input_invalid だけ延長の範囲の文にする。
+ * phase：呼んだ RPC が読み込み（"read"）か更新（"update"）か。通信の失敗は、読み込みなら接続の文、更新なら結果が不明の文（前置きなし。決まり 3.7）
+ */
+export function timerErrorText(error, op = "", phase = "update") {
   const hint = text(error?.hint);
-  if (hint) return hint;
-  return ERRORS[error?.message] ?? ERRORS[error?.code] ?? "制作時間の操作を完了できませんでした。最新にしてから、もう一度お試しください。";
+  if (hint) console.info(`DB の hint：${hint}`);
+  if (isNetworkFailure(error)) return phase === "read" ? MSG_NETWORK_FAILURE : MSG_UPDATE_RESULT_UNKNOWN;
+  const key = timerErrorKey(error);
+  if (key === "workshop_input_invalid" && op === "extend") return MSG_EXTEND_INVALID;
+  return key ? ERRORS[key] : "タイマーエラーが発生しました。\n［最新にする］を押して再度お試しください。";
+}
+
+/** timerErrorText の文に付けるエラーコード（無ければ null。通信の失敗には付けない〔決まり 3.1・11-04g〕。表に無い理由は E-INS-99） */
+export function timerErrorCode(error) {
+  const key = timerErrorKey(error);
+  if (key) return ERROR_CODES[key] ?? null;
+  return isNetworkFailure(error) ? null : "E-INS-99";
 }

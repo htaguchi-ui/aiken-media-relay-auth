@@ -17,7 +17,7 @@
 //   POST /share-links/stop（本文なし）→ 200 { stopped: true | false }（false は有効な QR が無かった。何度呼んでもよい）。
 // 欠けている項目は「分からない」として扱い、断定する文を出さない。
 
-import { formatBytes, formatShortDateTime, qrShortNote, submissionsPauseText } from "./submissions-lib.js";
+import { formatBytes, formatShortDateTime, MSG_NETWORK_PRESS_AGAIN, qrShortNote, submissionsPauseText } from "./submissions-lib.js";
 
 const strOr = (v) => (typeof v === "string" && v ? v : null);
 const numOr = (v) => (v === null || v === undefined || v === "" || !Number.isFinite(Number(v)) ? null : Number(v));
@@ -41,31 +41,38 @@ export const SHARE_PATHS = { issue: "/share-links", status: "/share/status", sto
 export const SHARE_KEY_RE = /^asl1_[A-Za-z0-9_-]{43}$/;
 
 export const SHARE_OPEN_LABEL = "スマホに保存する";
-export const SHARE_ISSUE_TITLE = "スマホに保存する QR を出します";
-export const SHARE_ISSUE_CONFIRM = "QR を出します。前に出した QR は使えなくなります。";
-export const SHARE_STOP_TITLE = "この QR を止めます";
-export const SHARE_STOP_CONFIRM = "この QR を止めます。スマホに保存したいときは、もう一度 QR を出してください。";
-export const SHARE_NO_WORKS = "提出した作品がありません。保存できるのは、提出した作品だけです。";
-/** 1 時間の時計の始まり（設計 D29） */
-export const SHARE_CLOCK_NOTE = "準備ができてから開くと、1 時間の時計が始まります。準備中に開いても時計は始まりません。";
+// 確認の窓：題は「〇〇しますか？」、本文は結果だけ（組 13 の文言の表・決まり 1）
+export const SHARE_ISSUE_TITLE = "QR を発行しますか？";
+export const SHARE_ISSUE_CONFIRM = "前の QR は使えなくなります。";
+export const SHARE_STOP_TITLE = "QR を停止しますか？";
+export const SHARE_STOP_CONFIRM = "この QR では保存できなくなります。";
+/** 提出した動画が無いときの 1 行（空の状態。回の終了の画面にも出るので「まだ」を付けない・句点なし。文言の決まり 2.2.1） */
+export const SHARE_NO_WORKS = "提出した動画はありません";
+/** no_works の断り（トースト）：空の状態の 1 行とは分け、同じ関数のほかの断りと前置き・句点をそろえる */
+export const MSG_SHARE_NO_WORKS_ERROR = "保存エラー：提出した動画はありません。";
+/** 1 時間の時計の始まり（設計 D29）。続きはホバー（SHARE_CLOCK_TIP） */
+export const SHARE_CLOCK_NOTE = "準備ができてから開くと、1 時間保存できます。";
+export const SHARE_CLOCK_TIP = "準備中に開いても、1 時間は数え始めません。";
 export const SHARE_THIS_DEVICE = "この端末で開く";
 export const SHARE_HERE_LABEL = "この端末で保存する";
-export const SHARE_HERE_TITLE = "保存のページを開きます";
-export const SHARE_HERE_CONFIRM = "この端末で保存のページを開きます。前に出した QR は使えなくなります。";
-export const SHARE_STOP_LABEL = "この QR を止める";
+export const SHARE_HERE_TITLE = "保存のページを開きますか？";
+export const SHARE_HERE_CONFIRM = "前の QR は使えなくなります。";
+export const SHARE_STOP_LABEL = "QR を停止";
 export const SHARE_CLOSE_LABEL = "閉じる";
 export const SHARE_QR_ALT = "スマホで読むための QR コード";
-export const SHARE_READY_LINE = "準備ができました。QR を読んでください。";
+export const SHARE_READY_LINE = "準備ができました。QR を読み取ってください。";
 /** QR が画面に出ていないとき（開き直したあと・［閉じる］のあと・終了の画面）：読む QR が無いので、読み取りの指示は出さない（Codex F244-03） */
-export const SHARE_READY_NO_QR_LINE = "保存の準備ができています。QR が必要なときは、［スマホに保存する］を押してください。";
-export const SHARE_FAILED_LINE = "ZIP を作れませんでした。もう一度 QR を出してください。";
-export const SHARE_GONE_LINE = "この QR は使えなくなりました。もう一度 QR を出してください。";
-export const MSG_SHARE_STOPPED = "QR を止めました。";
-export const MSG_SHARE_NOTHING_TO_STOP = "止める QR はありませんでした（すでに止まっているか、期限が切れています）。";
-export const MSG_SHARE_FAILED_LOAD = "保存の状態を読み込めませんでした。";
-export const MSG_SHARE_NETWORK = "通信できませんでした。通信状態を確かめてください。";
-export const MSG_SHARE_BAD_REPLY = "QR を出せませんでした（サーバーの応答の形が違います）。少し待ってから、もう一度押してください。";
-export const MSG_SHARE_PREPARING_LONG = "準備に時間がかかっています。しばらくしてから、この画面を開き直してください。";
+export const SHARE_READY_NO_QR_LINE = "保存の準備ができています。\nQR は［スマホに保存する］で再発行できます。";
+export const SHARE_FAILED_LINE = "保存エラー：ZIP を作成できません。\nQR を再発行してください。";
+export const SHARE_GONE_LINE = "この QR は使えません。\nQR を再発行してください。";
+export const MSG_SHARE_STOPPED = "QR を停止しました。";
+export const MSG_SHARE_NOTHING_TO_STOP = "停止する QR はありません。";
+export const MSG_SHARE_FAILED_LOAD = "読み込みエラー：保存の状態を取得できません。";
+/** 通信の失敗（［発行する］・［停止する］など押した操作だけで出す。組 13 の U-10 の T-05） */
+export const MSG_SHARE_NETWORK = MSG_NETWORK_PRESS_AGAIN;
+/** 発行のあとで QR を作れなかった（応答の形が違う）。原因が分からない形（E-WRK-99） */
+export const MSG_SHARE_BAD_REPLY = "保存エラーが発生しました。\nしばらくしてから再度お試しください。";
+export const MSG_SHARE_PREPARING_LONG = "準備に時間がかかっています。\nしばらくしてから再読み込みしてください。";
 export const SHARE_DETAILS_SUMMARY = "保存したあとの開き方";
 
 /**
@@ -76,9 +83,9 @@ export function saveGuide(zipBytes) {
   return {
     short: qrShortNote(zipBytes),
     open: [
-      "iPhone：保存した ZIP は『ファイル』アプリの『ダウンロード』にあります。タップすると開けます。",
-      "Android：保存した ZIP は『Files by Google』などのファイルのアプリで開き、［展開］を押してください。",
-      "開けないときは、保存するページの作品ごとの［保存］を使ってください。",
+      "iPhone：「ファイル」アプリの「ダウンロード」にある ZIP をタップします。",
+      "Android：「Files by Google」などで ZIP を開き、［展開］を押します。",
+      "開けないときは、保存のページで動画ごとの［保存］を押してください。",
     ],
   };
 }
@@ -102,13 +109,14 @@ export function zipPrepMinutes(zipBytes) {
   return Math.min(5, Math.max(1, Math.ceil(n / 9_000_000 / 60)));
 }
 
-/** ZIP の状態の 1 行（準備中：「準備しています（約 2 分）。」／準備できた：QR が出ていれば「準備ができました。QR を読んでください。」、出ていなければ読み取りを求めない文） */
+/** ZIP の状態の 1 行（準備中：「準備中（約 2 分）」・大きさが分からなければ「準備中…」／準備できた：QR が出ていれば「準備ができました。QR を読み取ってください。」、出ていなければ読み取りを求めない文） */
 export function zipStateLine(state, zipBytes, hasQr = true) {
   const phase = zipPhase(state);
   if (phase === "ready") return hasQr ? SHARE_READY_LINE : SHARE_READY_NO_QR_LINE;
   if (phase === "failed") return SHARE_FAILED_LINE;
   const m = zipPrepMinutes(zipBytes);
-  return m === null ? "準備しています。" : `準備しています（約 ${m} 分）。`;
+  // 状態の札：後ろに数が続くときは「…」を付けない（文言の決まり 2.2.1）
+  return m === null ? "準備中…" : `準備中（約 ${m} 分）`;
 }
 
 /** 入れられなかった作品の数（整数。無い・負・数でないときは 0） */
@@ -181,17 +189,17 @@ export function linkStateLines(link, nowMs = Date.now()) {
     lines.push(`${formatShortDateTime(link.firstOpenedAt)} に開かれました。`);
     if (end) lines.push(`${formatShortDateTime(end)} まで保存できます${left === null ? "" : `（あと ${left} 分）`}。`);
   } else if (end) {
-    lines.push(`まだ開かれていません。${formatShortDateTime(end)} までに開いてください${left === null ? "" : `（あと ${left} 分）`}。`);
+    lines.push(`${formatShortDateTime(end)} までに開いてください${left === null ? "" : `（あと ${left} 分）`}。`);
   }
   // 全体の保存期限が、今の使える終わりより先にあるときだけ書く（同じ時刻なら重ねない）
-  if (link.windowEndsAt && end && formatShortDateTime(link.windowEndsAt) !== formatShortDateTime(end)) lines.push(`どの QR も、${formatShortDateTime(link.windowEndsAt)} を過ぎると使えません。`);
+  if (link.windowEndsAt && end && formatShortDateTime(link.windowEndsAt) !== formatShortDateTime(end)) lines.push(`${formatShortDateTime(link.windowEndsAt)} 以降は保存できません。`);
   return lines;
 }
 
 /** ZIP に入れられなかった作品があるときの文（黙って抜かない。設計 4.9） */
 export function missingLine(link) {
   if (!link || link.missing <= 0) return null;
-  return `${link.missing} 本の作品は ZIP に入れられませんでした。保存するページの、作品ごとの［保存］を使ってください。`;
+  return `${link.missing} 本の動画が ZIP に入っていません。`;
 }
 
 /** 作品の数と大きさの 1 行（「3 本・1.2 GB」。分からない項目は出さない） */
@@ -202,8 +210,8 @@ export function linkSizeLine(link) {
   return parts.length ? parts.join("・") : null;
 }
 
-export const SHARE_PERIOD_NOT_YET = "保存できるのは、最後のワークショップが始まってからです。";
-export const SHARE_PERIOD_OVER = "保存できる期間は終わりました。";
+export const SHARE_PERIOD_NOT_YET = "最後のワークショップの開始後に保存できます。";
+export const SHARE_PERIOD_OVER = "保存期間は終了しました。";
 
 /** 保存できる最後の日の「12/4」（issue_until は今の cold_due_at＝その日の次の 0:00。日本時間で 1 ミリ秒前の日付。分からなければ null） */
 export function closedUntilLabel(issueUntil) {
@@ -213,10 +221,10 @@ export function closedUntilLabel(issueUntil) {
   return `${parts.month}/${parts.day}`;
 }
 
-/** 回が終わったあとのマイページの文（設計 4.10）：「この回は終了しました。提出した作品を、12/4 まで保存できます。」 */
+/** 回が終わったあとのマイページの文（設計 4.10）：「この回は終了しました。／提出した動画は 12/4 まで保存できます。」 */
 export function closedNote(issueUntil) {
   const day = closedUntilLabel(issueUntil);
-  return day ? `この回は終了しました。提出した作品を、${day} まで保存できます。` : "この回は終了しました。提出した作品を保存できます。";
+  return day ? `この回は終了しました。\n提出した動画は ${day} まで保存できます。` : "この回は終了しました。\n提出した動画を保存できます。";
 }
 
 /** 押せない期間の文（can_issue が false のとき。issue_until を過ぎていれば「終わりました」、まだなら「始まってから」） */
@@ -225,21 +233,41 @@ export function sharePeriodLine(issueUntil, nowMs = Date.now()) {
   return !Number.isNaN(t) && t <= nowMs ? SHARE_PERIOD_OVER : SHARE_PERIOD_NOT_YET;
 }
 
+/** コードを付ける断り（error-codes.md：E-LOG-51・E-SUB-50・E-LOG-52・E-WRK-99） */
+export const MSG_SHARE_NOT_REGISTERED = "利用登録が確認できません。\n講師・スタッフにお知らせください。";
+export const MSG_SHARE_NOT_STAGE_STUDENT = "保存エラー：受講者として未登録です。\n講師・スタッフにお知らせください。";
+export const MSG_SHARE_FORBIDDEN = "権限エラー：この操作はできません。\n講師・スタッフにお知らせください。";
+export const MSG_SHARE_FAILED = "保存エラーが発生しました。\nしばらくしてから再度お試しください。";
+/** スマホに保存の断りのコード（文 → コード。コードは文と別の値で持つ。決まり 3.2） */
+const SHARE_ERROR_CODES = new Map([
+  [MSG_SHARE_NOT_REGISTERED, "E-LOG-51"],
+  [MSG_SHARE_NOT_STAGE_STUDENT, "E-SUB-50"],
+  [MSG_SHARE_FORBIDDEN, "E-LOG-52"],
+  [MSG_SHARE_FAILED, "E-WRK-99"],
+  [MSG_SHARE_BAD_REPLY, "E-WRK-99"],
+]);
+/** shareErrorText・MSG_SHARE_BAD_REPLY の文に付けるコード（無ければ null） */
+export function shareErrorCode(text) {
+  return SHARE_ERROR_CODES.get(text) ?? null;
+}
+
 /** 失敗の文（サーバーの拒否の名前 → 文。A の約束 10 章）。設計 4.9 の回数の上限（1 時間 5 回・1 日 20 回）・作品が 0 件のとき */
 export function shareErrorText(code, status) {
   const paused = submissionsPauseText(code);
   if (paused) return paused;
   const c = typeof code === "string" ? code : "";
-  if (c === "no_works") return SHARE_NO_WORKS;
-  if (c === "rate_limited" || status === 429) return "短い間に QR を出しすぎました。しばらく待ってから、もう一度押してください。";
-  if (c === "submission_busy") return "回の情報が変わりました。もう一度押してください。";
-  if (c === "not_registered" || c === "not_stage_student") return "この回の受講者として登録されていないため、この操作はできません。";
-  if (c === "share_period_closed") return "今は保存できる期間ではありません。最後のワークショップが始まってから、期限が来る前に押してください。";
+  if (c === "no_works") return MSG_SHARE_NO_WORKS_ERROR;
+  if (c === "rate_limited" || status === 429) return "QR の発行の上限に達しました。\nしばらくしてから再度お試しください。";
+  if (c === "submission_busy") return "保存エラー：回の設定が変わりました。\n再度お試しください。";
+  // 名簿に無い（停止中の人も同じ名前で来る）と、その回の受講者でないは原因が違うので分ける（コードも別）
+  if (c === "not_registered") return MSG_SHARE_NOT_REGISTERED;
+  if (c === "not_stage_student") return MSG_SHARE_NOT_STAGE_STUDENT;
+  if (c === "share_period_closed") return "保存エラー：保存期間外です。";
   if (status === 0) return MSG_SHARE_NETWORK;
-  if (status === 401) return "ログインの有効期限が切れました。もう一度ログインしてください。";
-  if (status === 403) return "この操作はできません。この回の受講者として登録されているか、確かめてください。";
-  if (status === 503) return "混み合っています。少し待ってから、もう一度押してください。";
-  return "エラーが起きました。少し待ってから、もう一度押してください。";
+  if (status === 401) return "ログインの有効期限が切れました。\n再度ログインしてください。";
+  if (status === 403) return MSG_SHARE_FORBIDDEN;
+  if (status === 503) return "混雑しています。\nしばらくしてから再度お試しください。";
+  return MSG_SHARE_FAILED;
 }
 
 /** 受講者に見える文の一覧（試験で D12 の言葉を使っていないことを確かめる） */
@@ -247,7 +275,7 @@ export function shareFacingTexts() {
   const g = saveGuide(1_200_000_000);
   const now = Date.parse("2026-11-27T08:00:00Z");
   return [
-    SHARE_OPEN_LABEL, SHARE_ISSUE_TITLE, SHARE_ISSUE_CONFIRM, SHARE_STOP_TITLE, SHARE_STOP_CONFIRM, SHARE_NO_WORKS, SHARE_CLOCK_NOTE, SHARE_THIS_DEVICE, SHARE_STOP_LABEL,
+    SHARE_OPEN_LABEL, SHARE_ISSUE_TITLE, SHARE_ISSUE_CONFIRM, SHARE_STOP_TITLE, SHARE_STOP_CONFIRM, SHARE_NO_WORKS, SHARE_CLOCK_NOTE, SHARE_CLOCK_TIP, SHARE_THIS_DEVICE, SHARE_STOP_LABEL,
     SHARE_HERE_LABEL, SHARE_HERE_TITLE, SHARE_HERE_CONFIRM, closedNote("2026-12-05T15:00:00Z"), closedNote(null),
     SHARE_CLOSE_LABEL, SHARE_QR_ALT, SHARE_READY_LINE, SHARE_READY_NO_QR_LINE, SHARE_FAILED_LINE, SHARE_GONE_LINE, MSG_SHARE_STOPPED, MSG_SHARE_NOTHING_TO_STOP, MSG_SHARE_FAILED_LOAD, MSG_SHARE_NETWORK, MSG_SHARE_BAD_REPLY,
     MSG_SHARE_PREPARING_LONG, SHARE_DETAILS_SUMMARY, SHARE_PERIOD_NOT_YET, SHARE_PERIOD_OVER, ...g.short, ...g.open,

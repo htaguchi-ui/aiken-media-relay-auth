@@ -6,12 +6,16 @@
 import {
   DEADLINE_INPUT_HELP,
   DEADLINE_RESET_CONFIRM,
+  deadlineErrorCode,
   deadlineErrorText,
+  errorCodeLabel,
   deadlineEventLine,
   deadlineProblem,
   deadlineRuleLine,
   inputValueFromDeadline,
+  MSG_DEADLINE_BAD_RESPONSE,
   MSG_DEADLINE_RESET,
+  MSG_DEADLINE_RPC_MISSING,
   MSG_DEADLINE_SAVED,
   NO_DAY2_TEXT,
   normalizeDeadlines,
@@ -25,7 +29,7 @@ import {
  * @param {HTMLElement} o.container 画面を入れる所
  * @param {(name: string, args: object) => Promise<{ data: any, error: any }>} o.rpc 管理コンソールの部品での RPC
  * @param {(opts: { title: string, lines: string[], okText: string }) => Promise<boolean>} o.confirm 確認（続けるなら true）
- * @param {(message: string, kind?: "ok" | "error") => void} o.notify お知らせ
+ * @param {(message: string, kind?: "ok" | "error", code?: string | null) => void} o.notify お知らせ（code はエラーコード。文と別の値で渡す。決まり 3.2）
  * @param {(error: any) => string} [o.explain] RPC の失敗の文（admin-lib の explainError）。DB の hint を出すとき
  * @param {() => number} [o.now]
  */
@@ -53,11 +57,17 @@ export function createAdminDeadlines(o) {
     return node;
   };
 
+  /** 断りの文の後ろに付けるエラーコードの部品（小さく薄く。コードが無ければ null） */
+  function codeTail(text) {
+    const code = deadlineErrorCode(text);
+    return code ? el("span", { className: "err-code muted small", text: errorCodeLabel(code) }) : null;
+  }
+
   function failureText(error) {
     const code = error?.message && /deadline_after_cold_due|cohort_dates_missing|admin_only/.exec(String(error.message))?.[0];
     if (code) return deadlineErrorText(code, 400);
     if (error?.code === "42501") return deadlineErrorText("admin_only", 403);
-    if (String(error?.code) === "PGRST202" || String(error?.code) === "42883") return "提出の機能は、まだ使えません。";
+    if (String(error?.code) === "PGRST202" || String(error?.code) === "42883") return MSG_DEADLINE_RPC_MISSING;
     return o.explain ? o.explain(error) : deadlineErrorText(null, 500);
   }
 
@@ -76,13 +86,14 @@ export function createAdminDeadlines(o) {
     if (my !== epoch) return;
     if (error) {
       data = null;
-      o.container.replaceChildren(el("p", { className: "error-text", role: "alert", text: failureText(error) }), el("button", { type: "button", className: "btn compact", text: "もう一度読み込む", onclick: () => void load(cohortId) }));
+      const text = failureText(error);
+      o.container.replaceChildren(el("p", { className: "error-text", role: "alert", text }, codeTail(text)), el("button", { type: "button", className: "btn compact", text: "再読み込み", onclick: () => void load(cohortId) }));
       return;
     }
     const d = normalizeDeadlines(raw);
     if (!d || d.cohortId !== cohortId) {
       data = null;
-      o.container.replaceChildren(el("p", { className: "error-text", role: "alert", text: "受け付けの終わりを読み込めませんでした（応答の形が違います）。" }));
+      o.container.replaceChildren(el("p", { className: "error-text", role: "alert", text: MSG_DEADLINE_BAD_RESPONSE }, codeTail(MSG_DEADLINE_BAD_RESPONSE)));
       return;
     }
     data = d;
@@ -104,13 +115,13 @@ export function createAdminDeadlines(o) {
     const noDay2 = !data.day2Date;
     const parts = [];
     if (noDay2) parts.push(el("p", { className: "warn-box", role: "status", text: NO_DAY2_TEXT }));
-    else if (data.coldDueAt) parts.push(el("p", { className: "muted small", text: `どの段階も、回の終了から 7 日後（${formatShortDateTime(data.coldDueAt)}）より前しか選べません。` }));
+    else if (data.coldDueAt) parts.push(el("p", { className: "muted small", text: `回の終了から 7 日後（${formatShortDateTime(data.coldDueAt)}）より前を選んでください。` }));
     for (const s of data.stages) parts.push(stageBlock(s, noDay2));
     o.container.replaceChildren(...parts);
   }
 
   function stageBlock(s, noDay2) {
-    const input = el("input", { type: "datetime-local", className: "input", id: `deadline-${s.stageId}`, "aria-label": `${submissionStageName(s)} の受け付けの終わり`, step: "60" });
+    const input = el("input", { type: "datetime-local", className: "input", id: `deadline-${s.stageId}`, "aria-label": `${submissionStageName(s)} の受付終了`, step: "60" });
     input.value = drafts.get(s.stageId) ?? inputValueFromDeadline(s.manualUntil);
     input.addEventListener("input", () => drafts.set(s.stageId, input.value));
     if (noDay2 || busy) input.disabled = true;
@@ -130,9 +141,18 @@ export function createAdminDeadlines(o) {
     );
   }
 
-  function showError(msg, text) {
+  /** 入力の断り（tip はホバーの補足。無ければ title を外す） */
+  function showError(msg, text, tip = null) {
     msg.textContent = text;
+    if (tip) msg.setAttribute("title", tip);
+    else msg.removeAttribute?.("title");
     msg.hidden = !text;
+  }
+
+  /** 保存の失敗の知らせ（コードは文と別の値で渡す） */
+  function notifyFailure(error) {
+    const text = failureText(error);
+    o.notify(text, "error", deadlineErrorCode(text));
   }
 
   async function call(my, stageId, deadlineAt) {
@@ -154,7 +174,7 @@ export function createAdminDeadlines(o) {
     const my = epoch;
     const r = deadlineProblem(input.value, { coldDueAt: data.coldDueAt, nowMs: now() });
     if (r.error) {
-      showError(msg, r.error);
+      showError(msg, r.error, r.tip ?? null);
       return;
     }
     showError(msg, "");
@@ -166,7 +186,7 @@ export function createAdminDeadlines(o) {
       const res = await call(my, s.stageId, r.iso);
       if (res.stale) return;
       if (res.error) {
-        o.notify(failureText(res.error), "error");
+        notifyFailure(res.error);
         return;
       }
       drafts.delete(s.stageId);
@@ -190,7 +210,7 @@ export function createAdminDeadlines(o) {
       const res = await call(my, s.stageId, null);
       if (res.stale) return;
       if (res.error) {
-        o.notify(failureText(res.error), "error");
+        notifyFailure(res.error);
         return;
       }
       drafts.delete(s.stageId);

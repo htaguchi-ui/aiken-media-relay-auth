@@ -33,6 +33,21 @@ const str = (v) => (typeof v === "string" && v ? v : null);
 const num = (v) => (v === null || v === undefined || v === "" || !Number.isFinite(Number(v)) ? null : Number(v));
 const toMs = (t) => (t instanceof Date ? t.getTime() : typeof t === "number" ? t : Date.parse(t));
 
+// ---- エラーコードの 2 行目（決まり 3.2・3.4。講師ページ・提出作品の共用。コードの見え方は各画面の codeTag） ----
+
+/** 50〜98 のコード（講師に直せない）の、講師の画面だけで足す 2 行目（文の定数には入れない：管理コンソールと共用の部品があるため） */
+export const MSG_ASK_ADMIN = "管理者にお知らせください。";
+
+/** 講師が読む画面（講師ページ・提出作品）で、50〜98 のコードの 1 行の文に 2 行目「管理者にお知らせください。」を足す（round6 の P3） */
+export function withAdminLine(text, code) {
+  const n = Number(/^E-[A-Z]{3}-(\d{2})$/.exec(String(code ?? ""))?.[1]);
+  if (!text || !(n >= 50 && n <= 98) || String(text).includes("\n")) return text;
+  return `${text}\n${MSG_ASK_ADMIN}`;
+}
+
+/** サーバーの部品（DB の更新・関数）が無いとき、講師ページ・提出作品の読み込みの失敗の原因（E-ADM-50。決まり 2.2.1 の「サーバーの部品がない」） */
+export const MSG_PAGE_NOT_READY = "この画面は、まだ使えません。";
+
 // ---- 段階の名前 ----
 
 /** 「ワークショップ 2「台本と生成」」（題名が無ければ名前だけ） */
@@ -85,17 +100,20 @@ export function cohortDateRule(c, now = new Date()) {
     minDay1: guarded ? tomorrow : null,
     minDay2: null,
     note: "",
+    /** note のホバーに出す続きの文（無ければ null） */
+    noteTip: null,
   };
   if (guarded) {
     const day1 = isValidDate(c?.day1_date) ? c.day1_date : tomorrow;
     const afterDay1 = addDaysToDate(day1, 1);
     rule.minDay2 = afterDay1 > tomorrow ? afterDay1 : tomorrow;
     if (day2Started) {
-      rule.note = "Day2 まで始まったため、日付は変えられません。";
+      rule.note = "Day2 開始後は、日付を変えられません。";
     } else if (day1Started) {
-      rule.note = "Day1 が始まったため、Day1 と枠の種類は変えられません。Day2 は、明日以降の日付どうしで延期・前倒しができます。";
+      rule.note = "Day1 開始後は、Day1 と枠の種類を変えられません。";
+      rule.noteTip = "Day2 は、明日以降の日付に延期・前倒しできます。";
     } else {
-      rule.note = "テンプレートを当てた回は、Day1 と Day2 を、まだ始まっていない日付（明日以降）にだけ変えられます。";
+      rule.note = "テンプレートを適用した回の日付は、明日以降にだけ変更できます。";
     }
   }
   return rule;
@@ -113,13 +131,13 @@ export function cohortDateProblem(c, patch, now = new Date()) {
   const day1 = "day1_date" in patch ? patch.day1_date : c.day1_date;
   const day2 = "day2_date" in patch ? patch.day2_date : c.day2_date;
   if (day1 !== c.day1_date && !(future(c.day1_date) && future(day1))) {
-    return "Day1 は、テンプレートを当てた回では、まだ始まっていない日付（明日以降）どうしでしか変えられません。";
+    return "Day1 は、今の Day1 と新しい日付がどちらも明日以降のときだけ変えられます。";
   }
   if (day2 !== c.day2_date) {
     if (!(future(c.day2_date) && future(day2))) {
-      return "Day2 は、テンプレートを当てた回では、まだ始まっていない日付（明日以降）どうしでしか変えられません。";
+      return "Day2 は、今の Day2 と新しい日付がどちらも明日以降のときだけ変えられます。";
     }
-    if (!(day2 > day1)) return "Day2 は Day1 より後の日付にしてください。";
+    if (!(day2 > day1)) return "Day2 は Day1 より後の日付です。";
   }
   return null;
 }
@@ -135,26 +153,26 @@ export function parseStageRows(kind, rawRows) {
   const rows = [];
   const problems = [];
   const list = Array.isArray(rawRows) ? rawRows : [];
-  if (list.length > MAX_STAGES_PER_DAY) problems.push(`${where}の段階は ${MAX_STAGES_PER_DAY} 個までです`);
-  if (kind === "bridge" && list.length > 1) problems.push("ブリッジワークの段階は 1 つだけです");
+  if (list.length > MAX_STAGES_PER_DAY) problems.push(`${where}の段階は ${MAX_STAGES_PER_DAY} 個までです。`);
+  if (kind === "bridge" && list.length > 1) problems.push("ブリッジワークの段階は 1 つだけです。");
   let total = 0;
   list.forEach((raw, i) => {
     const n = i + 1;
     const label = String(raw?.label ?? "").trim();
     const title = String(raw?.title ?? "").trim();
-    if (!label) problems.push(`${where}の ${n} 番目：名前を入力してください`);
-    else if (label.length > 40) problems.push(`${where}の ${n} 番目：名前は 40 文字までです`);
-    if (title.length > 60) problems.push(`${where}の ${n} 番目：題名は 60 文字までです`);
+    if (!label) problems.push(`${where}の ${n} 番目：名前を入力してください。`);
+    else if (label.length > 40) problems.push(`${where}の ${n} 番目：名前は 40 字までです。`);
+    if (title.length > 60) problems.push(`${where}の ${n} 番目：題名は 60 字までです。`);
     const credits = parseCredits(raw?.credits);
     if (credits === null || credits === undefined) {
-      problems.push(`${where}の ${n} 番目：クレジットは 0〜${formatCredits(MAX_STAGE_CREDITS)} の整数で入力してください`);
+      problems.push(`${where}の ${n} 番目：クレジットは 0〜${formatCredits(MAX_STAGE_CREDITS)} の整数です。`);
     } else {
       total += credits;
     }
     rows.push({ label, title: title || null, credits: credits ?? null });
   });
   if (total > MAX_DAY_STAGE_TOTAL) {
-    problems.push(`${where}の段階のクレジットの合計は ${formatCredits(MAX_DAY_STAGE_TOTAL)} までです（今は ${formatCredits(total)}）`);
+    problems.push(`${where}の段階のクレジットの合計は ${formatCredits(MAX_DAY_STAGE_TOTAL)} までです（今は ${formatCredits(total)}）。`);
   }
   return { rows, problems };
 }
@@ -167,15 +185,15 @@ export function parseStageRows(kind, rawRows) {
 export function parseTemplateForm(raw) {
   const problems = [];
   const name = String(raw?.name ?? "").trim();
-  if (!name) problems.push("テンプレートの名前を入力してください");
-  else if (name.length > 60) problems.push("テンプレートの名前は 60 文字までです");
+  if (!name) problems.push("テンプレートの名前を入力してください。");
+  else if (name.length > 60) problems.push("テンプレートの名前は 60 字までです。");
   const items = [];
   for (const kind of DAY_KINDS) {
     const parsed = parseStageRows(kind, raw?.days?.[kind]);
     problems.push(...parsed.problems);
     parsed.rows.forEach((r, i) => items.push({ day_kind: kind, seq: i + 1, ...r }));
   }
-  if (!items.length) problems.push("段階を 1 つ以上入れてください");
+  if (!items.length) problems.push("段階を 1 つ以上追加してください。");
   return {
     value: { name, note: String(raw?.note ?? "").trim() || null, active: raw?.active !== false, items },
     problems,
@@ -188,7 +206,7 @@ export function templateApplyProblem(items, cohort) {
   if (!has("day1")) return "このテンプレートには Day1 の段階がありません。";
   if (!has("day2")) return "このテンプレートには Day2 の段階がありません。";
   if (dayKindStartDate(cohort, "bridge") && !has("bridge")) {
-    return "この回にはブリッジワーク期間があります。ブリッジワークの段階があるテンプレートを選んでください。";
+    return "ブリッジワーク期間のある回です。\nブリッジワークの段階があるテンプレートを選んでください。";
   }
   return null;
 }
@@ -432,14 +450,14 @@ export function stageMoveView(status) {
   const currentId = status?.current?.id ?? null;
   const idx = currentId ? list.findIndex((s) => s.id === currentId) : -1;
   let whyOff = "";
-  if (status?.creditMode !== "stage") whyOff = "この回は、段階ごとの枠になっていません。";
+  if (status?.creditMode !== "stage") whyOff = "この回には段階がありません。";
   else if (!IN_COURSE.includes(status?.period)) {
     whyOff = periodOffText(status?.period, {
-      before: "Day1 の前は、段階を動かせません。Day1 の 0:00 に、最初の段階に自動で入ります。",
-      after: "Day2 が終わったため、段階を動かせません。",
-      unknown: "回の日付が決まっていないため、段階を動かせません。",
+      before: "段階は Day1 の 0:00 に始まります。",
+      after: "Day2 は終了しました。",
+      unknown: "回の日付が未設定です。",
     });
-  } else if (idx < 0) whyOff = "今の段階が分かりません。上の［最新にする］を押してください。";
+  } else if (idx < 0) whyOff = "今の段階を取得できません。\n［最新にする］を押してください。";
   const enabled = !whyOff;
   const prev = idx > 0 ? list[idx - 1] : null;
   const next = idx >= 0 && idx < list.length - 1 ? list[idx + 1] : null;
@@ -456,12 +474,11 @@ export function stageMoveView(status) {
   };
 }
 
-/** 段階を移す前の確認の文（確認のダイアログの既定は「やめる」） */
+/** 段階を移す前の確認の文（確認のダイアログの既定は［キャンセル］）。題が向き（進める・戻す）を言うので、本文は名前と結果だけ */
 export function moveConfirmText(direction, from, to) {
-  const verb = direction === "back" ? "戻します" : "進めます";
   return [
-    `${stageName(from)}から ${stageName(to)}へ${verb}。`,
-    `この回の受講者全員の上限が、${stageName(to)}の上限に切り替わります。`,
+    `${stageName(from)} → ${stageName(to)}`,
+    "受講者全員の上限が切り替わります。",
   ];
 }
 
@@ -484,22 +501,75 @@ export function undoView(status, nowMs = Date.now(), windowMs = UNDO_WINDOW_MS) 
   return { available: true, remainingSec: Math.ceil((windowMs - elapsed) / 1000), toStage: from, jobsSince: lm.jobsSince };
 }
 
+/**
+ * 直前の移動の向き（組 13 の U-02）。取り消しの箱の文を「進めました」「戻しました」で分けるため。
+ * 今日の段階の中の位置で決める：取り消しの行き先（直前の移動の元）が今より前なら "forward"（進めた）、後なら "back"（戻した）。
+ * どちらかが今日の段階に無い・取り消せないときは null（向きの語を使わない文にする）
+ */
+export function undoDirection(status, undo) {
+  if (!undo?.available || !undo.toStage) return null;
+  const list = status?.stagesToday ?? [];
+  const at = list.findIndex((s) => s.id === status?.current?.id);
+  const from = list.findIndex((s) => s.id === undo.toStage.id);
+  if (at < 0 || from < 0 || at === from) return null;
+  return from < at ? "forward" : "back";
+}
+
+/**
+ * 取り消しの箱の 1 行（組 13 の U-02）。{ text: 「WS3 へ進めました」, button: ［移動を取り消す］, sec: 「あと 45 秒」 }。
+ * 向きは箱の文が言うので、ボタンは動作だけ（追加の取り消し［追加を取り消す］と見分ける）。向きが分からないときは「段階を移しました」
+ */
+export function undoLineView(status, undo) {
+  const dir = undoDirection(status, undo);
+  const here = stageShortName(status?.current);
+  const sec = `あと ${undo?.remainingSec ?? 0} 秒`;
+  if (dir === "forward") return { text: `${here} へ進めました`, button: "移動を取り消す", sec };
+  if (dir === "back") return { text: `${here} へ戻しました`, button: "移動を取り消す", sec };
+  return { text: "段階を移しました", button: "移動を取り消す", sec };
+}
+
+/** 取り消しが済んだあとの知らせ（向きの語を使わない。U-02）：「取り消しました。今は ワークショップ 3「編集」です。」 */
+export function undoDoneText(toStage) {
+  return `取り消しました。今は ${stageName(toStage)}です。`;
+}
+
+/** ボタンに入れる段階の短い名前の上限（文字数。超えたら「…」で切り、title に全部を出す） */
+const SHORT_NAME_MAX = 14;
+
+/**
+ * 段階の短い名前（組 13 の U-02・U-07）：「ワークショップ 3」「編集」→「WS3 編集」。ブリッジワークなどはそのまま。
+ * 長いときは SHORT_NAME_MAX 文字で切って「…」を付ける（全部の名前は title に出す）
+ */
+export function stageShortName(stage) {
+  if (!stage) return "—";
+  const label = String(stage.label ?? "").trim().replace(/^ワークショップ\s*(\d+)$/, "WS$1");
+  const title = String(stage.title ?? "").trim();
+  const full = [label, title].filter(Boolean).join(" ") || "（名前なし）";
+  return full.length > SHORT_NAME_MAX ? `${full.slice(0, SHORT_NAME_MAX - 1)}…` : full;
+}
+
+/** 段階を移すボタンの文字（組 13 の U-02）：［◀ 前の段階へ］［次へ：WS3 編集 ▶］。次が無いときは［次へ ▶］ */
+export function moveButtonText(direction, to) {
+  if (direction === "back") return "◀ 前の段階へ";
+  return to ? `次へ：${stageShortName(to)} ▶` : "次へ ▶";
+}
+
 // ---- 一時追加（講師の画面・管理コンソール） ----
 
 /** 追加できる状態か（今の段階があり、Day1〜Day2 の期間内）。できなければ理由（日本語） */
 export function grantAvailability(status) {
-  if (status?.creditMode !== "stage") return { ok: false, why: "この回は、段階ごとの枠になっていません。" };
+  if (status?.creditMode !== "stage") return { ok: false, why: "この回には段階がありません。" };
   if (!IN_COURSE.includes(status?.period)) {
     return {
       ok: false,
       why: periodOffText(status?.period, {
-        before: "Day1 の前は、クレジットを追加できません。",
-        after: "Day2 が終わったため、クレジットを追加できません。",
-        unknown: "回の日付が決まっていないため、クレジットを追加できません。",
+        before: "Day1 の開始前は追加できません。",
+        after: "Day2 の終了後は追加できません。",
+        unknown: "回の日付が未設定です。",
       }),
     };
   }
-  if (!status?.current) return { ok: false, why: "今の段階がありません（この日の段階がありません）。クレジットを追加できません。" };
+  if (!status?.current) return { ok: false, why: "今の段階がありません。" };
   return { ok: true, why: "" };
 }
 
@@ -534,29 +604,43 @@ export function parseStageGrantCredits(value, max = 50000) {
 // ---- 通信の失敗と、操作の待ち（U3-1・U3-5） ----
 
 /** 追加の応答が届かなかったとき（通信の失敗）の文。追加は済んでいるかもしれないので、押し直す前に一覧を見てもらう（U3-1） */
-export const MSG_GRANT_NETWORK_FAILURE =
-  "追加が届いたか確かめられませんでした。下の「あなたの追加」に出ていれば、追加は済んでいます。出ていないときだけ、もう一度押してください。";
+export const MSG_GRANT_NETWORK_FAILURE = "通信エラー：追加の結果が不明です。\n下の追加の一覧を確認してください。";
 /** 段階の移動の応答が届かなかったときの文（U3-1） */
-export const MSG_MOVE_NETWORK_FAILURE = "段階を移せたか確かめられませんでした。上の「今」の段階を確かめてください。";
+export const MSG_MOVE_NETWORK_FAILURE = "通信エラー：移動の結果が不明です。\n「今」の段階を確認してください。";
 /** 管理コンソールのまとめての追加の応答が届かなかったときの文（U3-1） */
-export const MSG_BULK_GRANT_NETWORK_FAILURE = "追加されたかを、読み直した名簿で確かめてください。";
+export const MSG_BULK_GRANT_NETWORK_FAILURE = "通信エラー：追加の結果が不明です。\n名簿で確認してください。";
+/**
+ * 講師の操作（回のクローズ・再開・タイマー・時間の保存）の更新を送ったあとに応答が届かなかったときの文（前置きを付けず単独。決まり 3.7）。
+ * 送る前の読み込みの通信の失敗は MSG_NETWORK_FAILURE（admin-lib.js）。更新を送ったかどうかで分ける（送っていない読み込みを結果不明と言わない）
+ */
+export const MSG_UPDATE_RESULT_UNKNOWN = "通信エラー：結果が不明です。\n［最新にする］を押してください。";
 
 /** 操作の通信中に、押したボタンに出す文字（U3-5）。キーは withBusy に渡す操作の種類 */
-export const BUSY_BUTTON_TEXT = { "move-next": "進めています…", grant: "追加しています…", revoke: "取り消しています…" };
+export const BUSY_BUTTON_TEXT = {
+  "move-next": "移動中…",
+  "move-back": "移動中…",
+  undo: "取り消し中…",
+  grant: "追加中…",
+  revoke: "取り消し中…",
+};
 /** この時間（ミリ秒）を超えても応答が無いとき、ボタンの下に案内を出す（U3-5） */
 export const BUSY_SLOW_MS = 10 * 1000;
-export const MSG_BUSY_SLOW =
-  "時間がかかっています。もう少し待ってください。30 秒たっても変わらないときは、ページを読み込み直して今の状態を確かめてください。";
+export const MSG_BUSY_SLOW = "時間がかかっています。\n30 秒たっても進まないときは再読み込みしてください。";
 
 /** 数が入っていないときの文（C-2） */
-export const MSG_GRANT_CREDITS_INVALID = "1 以上の数を入れてください。";
+export const MSG_GRANT_CREDITS_INVALID = "クレジットは 1 以上の整数です。";
 /** 入力の安全のための上限を超え、講師の 1 回の上限も分からないとき（管理者が講師の画面を使うときなど）の文（C-2。50,000 は出さない） */
-export const MSG_GRANT_CREDITS_TOO_LARGE = "数が大きすぎます。入れた数を確かめてください。";
+export const MSG_GRANT_CREDITS_TOO_LARGE = "数が大きすぎます。";
 
 /** 講師の 1 回の追加の上限（limits.perGrant）を超えるときの文。上限が分からなければ null（C-2・C-4 と同じ数） */
 export function perGrantExceededText(perGrant) {
   if (perGrant === null || perGrant === undefined) return null;
-  return perGrant === 0 ? "今は、講師の追加が 0 に設定されているため、追加できません。" : `1 回に追加できるのは ${formatCredits(perGrant)} クレジットまでです。`;
+  return perGrant === 0 ? "講師の追加は停止中です。" : `1 回の追加は ${formatCredits(perGrant)} クレジットまでです。`;
+}
+
+/** perGrantExceededText のエラーコード（決まり 3.2。文と別の値）。0（管理者の設定を変える必要がある）だけ E-INS-51、ほかは null */
+export function perGrantExceededCode(perGrant) {
+  return perGrant === 0 ? "E-INS-51" : null;
 }
 
 /**
@@ -580,8 +664,7 @@ export function stageGrantCreditsCheck(value, { isInstructor = true, limits = /*
 export function stageGrantTotalProblem({ granted, limit }, credits) {
   if (limit === null || limit === undefined || granted === null || granted === undefined) return null;
   if (Number(granted) + Number(credits) <= Number(limit)) return null;
-  const room = Math.max(0, Number(limit) - Number(granted));
-  return `この人への追加は、この回の合計で ${formatCredits(limit)} クレジットまでです（追加済み ${formatCredits(granted)}。取り消した追加も数えます。あと ${formatCredits(room)} まで）。`;
+  return `回の追加上限を超えます。\n合計 ${formatCredits(limit)} クレジットまでです（取り消した分を含む追加済み ${formatCredits(granted)}・今回 ${formatCredits(credits)}）。`;
 }
 
 /**
@@ -601,8 +684,8 @@ export function instructorGrantPlan({ emails, credits, students, limits, isInstr
     const s = (students ?? []).find((x) => x.email === email);
     return s?.name || email;
   };
-  if (!list.length) problems.push("追加する相手を選んでください。");
-  if (!(Number.isInteger(credits) && credits >= 1)) problems.push("追加するクレジットは 1 以上の整数で入力してください。");
+  if (!list.length) problems.push("受講者を選んでください。");
+  if (!(Number.isInteger(credits) && credits >= 1)) problems.push("クレジットは 1 以上の整数です。");
   if (problems.length) return { ok: false, problems };
   const lim = limits ?? {};
   if (isInstructor) {
@@ -615,9 +698,9 @@ export function instructorGrantPlan({ emails, credits, students, limits, isInstr
         if (s?.instructorStageTotal !== null && s?.instructorStageTotal !== undefined &&
           s.instructorStageTotal + credits > lim.perStudentStage) {
           problems.push(
-            `${nameOf(email)} は、この段階で追加できる上限（${formatCredits(lim.perStudentStage)}）を超えます（追加済み ${
+            `${nameOf(email)}：この段階の追加上限を超えます。\n${formatCredits(lim.perStudentStage)} クレジットまでです（取り消した分を含む追加済み ${
               formatCredits(s.instructorStageTotal)
-            }、今回 ${formatCredits(credits)}）。`,
+            }・今回 ${formatCredits(credits)}）。`,
           );
         }
       }
@@ -626,9 +709,9 @@ export function instructorGrantPlan({ emails, credits, students, limits, isInstr
       const request = credits * list.length;
       if (lim.cohortDayTotal + request > lim.perCohortDay) {
         problems.push(
-          `この回の 1 日の追加の合計の上限は ${formatCredits(lim.perCohortDay)} クレジットです（これまで ${formatCredits(lim.cohortDayTotal)}、今回 ${
-            formatCredits(request)
-          }）。`,
+          `この回の 1 日の追加上限を超えます。\n${formatCredits(lim.perCohortDay)} クレジットまでです（取り消した分を含む追加済み ${
+            formatCredits(lim.cohortDayTotal)
+          }・今回 ${formatCredits(request)}）。`,
         );
       }
     }
@@ -644,21 +727,15 @@ export function instructorGrantPlan({ emails, credits, students, limits, isInstr
 /** 追加の確認の文 */
 export function grantConfirmText(names, credits, stage) {
   const who = names.length <= 3 ? names.join("、") : `${names.slice(0, 3).join("、")} ほか ${names.length - 3} 人`;
-  return [
-    `${who}（${names.length} 人）に、1 人あたり ${formatCredits(credits)} クレジットを追加します。`,
-    `追加は${stageName(stage)}の段階に付きます。`,
-    "1 人でも上限を超える人がいると、誰にも追加しません。",
-  ];
+  return [`${who}（${names.length} 人）に +${formatCredits(credits)} ずつ追加します。`];
 }
 
 /**
- * 取り消しの確認の文（講師の画面と管理コンソールで共通。B-7・C-18）。1 行目は誰の何が減るか、2 行目は回の合計に数えたままであること
- * （上限の数は入れない）。講師の画面は 1 行ずつ段落にし、管理コンソールの confirm は REVOKE_CONFIRM_TEXT（改行でつなぐ）で出す
+ * 取り消しの確認の文（講師の画面と管理コンソールで共通。B-7・C-18）：回の合計に数えたままであること（上限の数は入れない）。
+ * 誰の何が減るか（「${name} のこの段階の上限が X 減ります。」）は、講師の画面の本文 1 行目に置く。
+ * 講師の画面は 1 行ずつ段落にし、管理コンソールの confirm は REVOKE_CONFIRM_TEXT（改行でつなぐ）で出す
  */
-export const REVOKE_CONFIRM_LINES = [
-  "取り消すと、この人のこの段階の上限が、その分だけ減ります。",
-  "1 人あたりのこの回の追加の合計には、取り消した分も数えたままです。",
-];
+export const REVOKE_CONFIRM_LINES = ["取り消した分も、回の追加の合計に含みます。"];
 export const REVOKE_CONFIRM_TEXT = REVOKE_CONFIRM_LINES.join("\n");
 
 /**
@@ -720,7 +797,7 @@ export function adminGrantGroups(rows, stages) {
       const o = order.get(g.stage_id);
       groups.set(g.stage_id, {
         stageId: g.stage_id,
-        heading: o ? `${DAY_KIND_LABELS[o.s.day_kind] ?? o.s.day_kind}：${stageName(o.s)}` : "（回に無い段階）",
+        heading: o ? `${DAY_KIND_LABELS[o.s.day_kind] ?? o.s.day_kind}：${stageName(o.s)}` : "（回にない段階）",
         index: o ? o.i : Number.MAX_SAFE_INTEGER,
         rows: [],
       });
@@ -749,18 +826,35 @@ export function grantTotalLine(total, limit) {
 
 // ---- 削除できない理由（DB は外部キーと、段階の回の追加の記録で断る。先に押せなくして理由を出す） ----
 
-/** 段階の記録・段階の回の追加がある回は削除できない。削除できなければ理由、できれば null */
-export function cohortDeleteBlock({ memberCount = 0, hasEntries = false, hasGrants = false } = {}) {
-  if (Number(memberCount) > 0) return "所属している受講者がいる回は削除できません。先に別の回へ移すか、名簿から外してください。";
+/**
+ * 回を削除できない理由と、そのホバーの続き（{ text, tip }）。削除できれば null。
+ * 受講者がいる回・段階の記録か段階の回の追加がある回は削除できない
+ */
+export function cohortDeleteBlockInfo({ memberCount = 0, hasEntries = false, hasGrants = false } = {}) {
+  if (Number(memberCount) > 0) {
+    return { text: "受講者がいる回は削除できません。\n先に受講者を別の回へ移すか、名簿から外してください。", tip: null };
+  }
   if (hasEntries || hasGrants) {
-    return "段階を動かした記録、または段階の回の追加がある回は、記録として残すため削除できません。名前で練習用と分かるようにしてください。";
+    return { text: "段階の記録・追加がある回は削除できません。", tip: "記録として残します。練習用なら、名前で分かるようにしてください。" };
   }
   return null;
 }
 
-/** 段階の回の追加がある受講者は名簿から削除できない。削除できなければ理由、できれば null */
-export function memberDeleteBlock({ hasStageGrants = false } = {}) {
-  return hasStageGrants
-    ? "段階の回の追加があるため、削除できません（追加は記録として残ります）。利用を止めるときは「利用を停止」を使ってください。"
-    : null;
+/** 回を削除できない理由の文だけ（ボタンの title・知らせ）。削除できれば null */
+export function cohortDeleteBlock(flags = {}) {
+  return cohortDeleteBlockInfo(flags)?.text ?? null;
+}
+
+/** 回を削除できない理由のホバーの続き（無ければ null） */
+export function cohortDeleteBlockTip(flags = {}) {
+  return cohortDeleteBlockInfo(flags)?.tip ?? null;
+}
+
+/**
+ * 段階の回の追加がある受講者は名簿から削除できない。削除できなければ理由、できれば null。
+ * active：利用中の人（ボタンが［利用を停止］のとき）だけ、2 行目に［利用を停止］の案内を足す（停止済みの人には押せないので出さない）
+ */
+export function memberDeleteBlock({ hasStageGrants = false, active = false } = {}) {
+  if (!hasStageGrants) return null;
+  return active ? "段階の回の追加がある人は削除できません。\n必要なら、［利用を停止］を使ってください。" : "段階の回の追加がある人は削除できません。";
 }

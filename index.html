@@ -17,21 +17,21 @@
 <!-- ログインの確かめ・RPC の接続先へ先につないでおく（supabase-js の fetch は資格情報なしなので crossorigin） -->
 <link rel="preconnect" href="https://tnzwhwitgnzoehbjrmoy.supabase.co" crossorigin>
 <link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=IBM+Plex+Sans+JP:wght@400;500;600;700&amp;display=swap">
-<link rel="stylesheet" href="/r/39015e7c0b2b/studio.css">
-<link rel="stylesheet" href="/r/39015e7c0b2b/gsi-button.css">
-<link rel="stylesheet" href="/r/39015e7c0b2b/site-nav.css">
-<link rel="modulepreload" href="/r/39015e7c0b2b/auth-storage.js">
-<link rel="modulepreload" href="/r/39015e7c0b2b/mypage-lib.js">
-<link rel="modulepreload" href="/r/39015e7c0b2b/mypage-share.js">
-<link rel="modulepreload" href="/r/39015e7c0b2b/mypage-submissions.js">
-<link rel="modulepreload" href="/r/39015e7c0b2b/mypage-upload.js">
-<link rel="modulepreload" href="/r/39015e7c0b2b/poll-lib.js">
-<link rel="modulepreload" href="/r/39015e7c0b2b/qr-code.js">
-<link rel="modulepreload" href="/r/39015e7c0b2b/share-lib.js">
-<link rel="modulepreload" href="/r/39015e7c0b2b/site-nav.js">
-<link rel="modulepreload" href="/r/39015e7c0b2b/submissions-lib.js">
-<link rel="modulepreload" href="/r/39015e7c0b2b/tus-lib.js">
-<link rel="modulepreload" href="/r/39015e7c0b2b/upload-lib.js">
+<link rel="stylesheet" href="/r/2751bb45fefd/studio.css">
+<link rel="stylesheet" href="/r/2751bb45fefd/gsi-button.css">
+<link rel="stylesheet" href="/r/2751bb45fefd/site-nav.css">
+<link rel="modulepreload" href="/r/2751bb45fefd/auth-storage.js">
+<link rel="modulepreload" href="/r/2751bb45fefd/mypage-lib.js">
+<link rel="modulepreload" href="/r/2751bb45fefd/mypage-share.js">
+<link rel="modulepreload" href="/r/2751bb45fefd/mypage-submissions.js">
+<link rel="modulepreload" href="/r/2751bb45fefd/mypage-upload.js">
+<link rel="modulepreload" href="/r/2751bb45fefd/poll-lib.js">
+<link rel="modulepreload" href="/r/2751bb45fefd/qr-code.js">
+<link rel="modulepreload" href="/r/2751bb45fefd/share-lib.js">
+<link rel="modulepreload" href="/r/2751bb45fefd/site-nav.js">
+<link rel="modulepreload" href="/r/2751bb45fefd/submissions-lib.js">
+<link rel="modulepreload" href="/r/2751bb45fefd/tus-lib.js">
+<link rel="modulepreload" href="/r/2751bb45fefd/upload-lib.js">
 <style>
   /* 固定したヘッダーの高さの初期値（--topbar-h）：ヘッダーを 1 段にした（帯を題名の右に並べた）あとの実測（2026-10-23）。
      studio.css の値は、帯の無い案内のページ（about.html）・管理コンソールと共通なので、このページの中だけで上書きする。
@@ -55,18 +55,70 @@
   .my-row:first-child { border-top: 0; }
   .my-main { min-width: 0; overflow-wrap: anywhere; }
   .my-title { font-weight: 700; }
-  .my-actions, .my-scope { display: flex; flex-wrap: wrap; gap: 8px; align-items: center; }
-  .my-actions { grid-column: 1 / -1; }
-  .my-scope { grid-column: 1 / -1; }
-  .my-scope-note { grid-column: 1 / -1; }
+  /* 提出した作品の 1 作品の行（組 13 の U-13・D-1105-121x）：3 段に詰める。
+     1 段目＝丸の再生のボタン・題（作品の番号と段階の名前）・札／2 段目＝長さ・大きさ・時刻／3 段目＝公開範囲を変える欄と［取り下げる］（右端。組 13 の U-12）。
+     広い幅は 2・3 段目を題の文字の頭にそろえる。狭い幅（560px 以下）は札を 2 段目の右へ移し、2・3 段目を左端から使う（題と札が 1 段に並ばないため） */
+  .my-work { grid-template-columns: auto minmax(0, 1fr) auto; grid-template-areas: "play head badge" ". meta meta" ". ops ops"; align-items: start; gap: 2px 10px; padding: 8px 0; }
+  .my-work > .my-play { grid-area: play; }
+  .my-work > .scope-badge { grid-area: badge; margin-top: 2px; }
+  .my-work > .my-meta { grid-area: meta; min-width: 0; overflow-wrap: anywhere; }
+  .my-work > .my-ops { grid-area: ops; margin-top: 4px; }
+  /* ブリッジワークの目的（has-purpose のときだけ 1 段足す） */
+  .my-work.has-purpose { grid-template-areas: "play head badge" ". meta meta" ". purpose purpose" ". ops ops"; }
+  .my-work > .my-purpose { grid-area: purpose; min-width: 0; overflow-wrap: anywhere; }
+  /* 題の行：作品の番号と段階の名前の間を空ける。段階の名前は途中で折らず、入らなければ丸ごと次の行へ（行の頭はそろえる） */
+  .my-work > .my-main { grid-area: head; display: flex; flex-wrap: wrap; align-items: baseline; column-gap: 0.6em; }
+  .my-stage { min-width: 0; }
+  .my-ops, .my-scope { display: flex; flex-wrap: wrap; gap: 8px; align-items: center; }
+  .my-ops .my-withdraw { margin-left: auto; }
+  @media (max-width: 560px) {
+    .my-work { grid-template-areas: "play head head" "meta meta badge" "ops ops ops"; }
+    .my-work.has-purpose { grid-template-areas: "play head head" "meta meta badge" "purpose purpose purpose" "ops ops ops"; }
+    .my-work > .scope-badge { margin-top: 1px; }
+  }
+  /* 丸の再生のボタン：題の文字の行の高さ（26px）の丸の中に再生の印。押すと今までどおり再生の窓（mypage-submissions.js の play）。読み上げの名前は aria-label。
+     押せる所は丸の外へ上・左・右に 9px 広げる（幅 44px。指でも押しやすく。下は 2 段目の文に掛からないよう 2px）。フォーカスの輪は studio.css の :focus-visible のまま。
+     再生の印は Lucide の play（ISC License。下の「つなぎ方」の注記と同じ許諾。canvas-app/node_modules/lucide-react 1.59.0 の dist/esm/icons から写し、塗りにした） */
+  .my-play {
+    position: relative; flex: none; width: 26px; height: 26px; padding: 0; display: inline-flex; align-items: center; justify-content: center;
+    border: 1.5px solid var(--accent); border-radius: 999px; background: var(--surface); color: var(--accent); cursor: pointer;
+  }
+  .my-play::before {
+    content: ""; width: 13px; height: 13px; margin-left: 1px; background: currentColor;
+    -webkit-mask: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 24 24'%3E%3Cpath fill='black' d='M5 5a2 2 0 0 1 3.008-1.728l11.997 6.998a2 2 0 0 1 .003 3.458l-12 7A2 2 0 0 1 5 19z'/%3E%3C/svg%3E") center / contain no-repeat;
+    mask: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 24 24'%3E%3Cpath fill='black' d='M5 5a2 2 0 0 1 3.008-1.728l11.997 6.998a2 2 0 0 1 .003 3.458l-12 7A2 2 0 0 1 5 19z'/%3E%3C/svg%3E") center / contain no-repeat;
+  }
+  .my-play::after { content: ""; position: absolute; inset: -9px -9px -2px; }
+  .my-play:hover { background: var(--accent-soft); }
+  @media (forced-colors: active) { .my-play { border-color: ButtonText; } .my-play::before { forced-color-adjust: none; background: ButtonText; } }
+  /* 一覧の上の ？（公開の範囲の説明。studio.css の .help と同じ部品）：右に寄せて札の上に置く。開くと下に説明 */
+  .list-help { margin-bottom: -6px; }
+  .list-help > summary { min-height: 28px; width: fit-content; margin-left: auto; gap: var(--s2); font-size: 14px; color: var(--text-2); }
+  .list-help .help-body { margin: 6px 0 0; }
+  .my-help-list { margin: 0; padding-left: 1.2em; }
+  .list-help .help-body p { margin-top: 4px; }
   .my-block h3 { font-size: 14px; margin-bottom: 4px; }
   .scope-badge { justify-self: end; font-size: 12px; font-weight: 600; padding: 1px 10px; border-radius: 999px; background: var(--line-soft); color: var(--text-2); white-space: nowrap; }
   .scope-badge.public { background: var(--ok-bg); color: var(--ok-fg); }
-  .scope-badge.private { background: var(--danger-line); color: var(--danger); }
+  /* 「完全非公開」は本人が選んだ範囲なので、エラーの赤にしない。灰の札に鍵の印（組 13 の U-13。提出作品のページの上映の赤い札はそのまま）。
+     鍵の線は Lucide の lock（ISC License。下の「つなぎ方」の注記と同じ許諾。canvas-app/node_modules/lucide-react 1.59.0 の dist/esm/icons から写した） */
+  .scope-badge.private { display: inline-flex; align-items: center; gap: 4px; background: var(--line-soft); color: var(--text-2); box-shadow: inset 0 0 0 1px var(--line-2); }
+  .scope-badge.private::before {
+    content: ""; flex: none; width: 12px; height: 12px; background: currentColor;
+    -webkit-mask: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 24 24' fill='none' stroke='black' stroke-width='2.4' stroke-linecap='round' stroke-linejoin='round'%3E%3Crect width='18' height='11' x='3' y='11' rx='2' ry='2'/%3E%3Cpath d='M7 11V7a5 5 0 0 1 10 0v4'/%3E%3C/svg%3E") center / contain no-repeat;
+    mask: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 24 24' fill='none' stroke='black' stroke-width='2.4' stroke-linecap='round' stroke-linejoin='round'%3E%3Crect width='18' height='11' x='3' y='11' rx='2' ry='2'/%3E%3Cpath d='M7 11V7a5 5 0 0 1 10 0v4'/%3E%3C/svg%3E") center / contain no-repeat;
+  }
+  /* 今日の段階の「今」：ほかの画面と同じ紺の札（組 13 の U-13。緑は成功・済みの色） */
+  .tag.now { background: var(--accent-soft); color: var(--accent-soft-text); }
+  /* 取り消せない確定（取り下げ・送信の中止・入れた内容を捨てる）：管理コンソールの確認と同じ赤で塗る（admin.html の .btn.danger-fill と同じ規則。組 13 の U-12。
+     研修のあとに studio.css へ移して 1 つにする） */
+  .btn.danger-fill { background: var(--danger); border-color: var(--danger); color: var(--surface); }
+  .btn.danger-fill:hover:not(:disabled) { filter: brightness(1.08); }
   .btn.compact { min-height: 36px; padding: 0 12px; font-size: 13px; border-radius: 10px; }
   @media (max-width: 560px) { .btn.compact { min-height: 44px; } }
   .input { padding: 0 12px; border-radius: 10px; border: 1px solid var(--input-line); background: var(--surface); color: var(--text); font: inherit; }
-  .compact-select { min-height: 36px; width: auto; }
+  .compact-select { min-height: 36px; width: auto; max-width: 100%; }
+  @media (max-width: 560px) { .compact-select { min-height: 44px; } } /* 狭い幅は横のボタン（.btn.compact）と同じ高さ */
   dialog.my-dialog { border: 1px solid var(--line-2); border-radius: 16px; padding: 24px; width: min(480px, calc(100vw - 32px)); background: var(--surface); color: var(--text); }
   dialog.my-dialog::backdrop { background: rgba(0, 0, 0, 0.5); }
   .my-dialog-body { display: flex; flex-direction: column; gap: 12px; }
@@ -74,7 +126,8 @@
   .my-dialog-body p { overflow-wrap: anywhere; }
   .my-dialog-body .row { display: flex; flex-wrap: wrap; gap: 8px; justify-content: flex-end; }
   .my-consent .consent-body { white-space: pre-wrap; max-height: 200px; overflow: auto; background: var(--surface-2); border-radius: 10px; padding: 10px 12px; font-size: 13px; }
-  .my-video { width: 100%; aspect-ratio: 16 / 9; background: #000; border-radius: 12px; }
+  /* 再生の窓は作品の縦横に合わせる（縦の作品を 16:9 の枠に細く映さない。組 13 の U-13。提出作品のページの上映の画面と同じ考え方） */
+  .my-video { display: block; width: 100%; aspect-ratio: auto; max-height: 70vh; background: #000; border-radius: 12px; }
   /* マイページからの動画の提出（組 11 の (8)。mypage-upload.js）：「提出した作品」の見出しの横のボタンと、2 段のダイアログ */
   .pair-bar { display: flex; align-items: flex-start; gap: var(--s2); padding-right: 20px; }
   .pair-bar .pair-head { flex: 1 1 auto; min-width: 0; }
@@ -120,6 +173,13 @@
   .guide-tool, h5.guide-h { margin-bottom: 0; } /* h4・h5 の初めの余白を、h3 と同じ 0 にそろえる（studio.css の初期化は h1〜h3 だけ） */
   .guide-tool { font-size: 17px; }
   .guide-tool:not(:first-child) { margin-top: var(--s3); padding-top: var(--s3); border-top: 1px solid var(--line-soft); }
+  /* 組 13 の文言の表：断り・知らせの文は「1 行目＋改行＋次の手」の 2 行（JS の文の「\n」を折り返しとして出す）。JS が文を入れる所だけに当てる */
+  #login-note, #failed-message, #closed-message, #refresh-error-text, #low-line-text, #models-empty, #models > p,
+  #submissions-status, #submissions-list .error-text, #share-status, #closed-share-status, .share-info p, .copy-status,
+  .upload-body p, .upload-body [data-upload="state"], .my-dialog-body > p { white-space: pre-line; }
+  /* エラーコード（D-1104-130x-b・案 A）：最後の文の後ろに小さく薄く「（E-SUB-04）」。読み上げは本文と続けて読む */
+  .err-code { font-size: 12px; font-weight: 400; white-space: nowrap; }
+  .error-text .err-code, .inline-alert .err-code { color: var(--muted); }
 </style>
 </head>
 <body>
@@ -165,9 +225,8 @@
 <section id="denied" class="center-card" hidden aria-labelledby="denied-title">
   <span class="brand-sub">A.I.KEN Studio</span>
   <h1 id="denied-title">マイページ</h1>
-  <p class="error-text" id="denied-message">利用の登録を確認できませんでした。
-［ログアウト］を押し、次の画面の「別のアカウントでログイン」で、研修で案内されたアカウントを選んでください。
-入れないときは、講師・スタッフに知らせてください。</p>
+  <p class="error-text" id="denied-message" title="案内されたアカウントでも入れないときは、講師・スタッフにお知らせください。">利用登録が確認できません。
+［ログアウト］を押し、案内されたアカウントでログインしてください。<span class="err-code muted small">（E-LOG-51）</span></p>
   <div class="row"><button type="button" class="btn" id="denied-logout-btn">ログアウト</button></div>
 </section>
 
@@ -175,7 +234,8 @@
 <section id="closed" class="center-card" hidden aria-labelledby="closed-title">
   <span class="brand-sub">A.I.KEN Studio</span>
   <h1 id="closed-title">マイページ</h1>
-  <p id="closed-message">この回は終了しました。提出した作品を保存できます。</p>
+  <p id="closed-message">この回は終了しました。
+提出した動画を保存できます。</p>
   <div id="closed-share-group" hidden>
     <p class="small muted" id="closed-share-status" role="status" hidden></p>
     <div id="closed-share-host"></div>
@@ -186,9 +246,10 @@
 <section id="failed" class="center-card" hidden aria-labelledby="failed-title">
   <span class="brand-sub">A.I.KEN Studio</span>
   <h1 id="failed-title">マイページ</h1>
-  <p class="error-text" id="failed-message">読み込めませんでした。</p>
+  <p class="error-text" id="failed-message">表示エラーが発生しました。
+ページを再読み込みしてください。<span class="err-code muted small">（E-LOG-99）</span></p>
   <div class="row">
-    <button type="button" class="btn primary" id="retry-btn">もう一度試す</button>
+    <button type="button" class="btn primary" id="retry-btn">再試行</button>
     <button type="button" class="btn" id="failed-logout-btn">ログアウト</button>
   </div>
 </section>
@@ -215,10 +276,10 @@
     <!-- 残りの主カード：残り → 段階・期間。読み上げ・Tab の順もこのとおり（Canvas への入口はヘッダーの上の帯） -->
     <section class="card hero" id="hero" aria-labelledby="credits-title">
       <div class="card-head">
-        <h2 id="credits-title" tabindex="-1">いま使える残りクレジット</h2>
+        <h2 id="credits-title" tabindex="-1">残りクレジット</h2>
         <div class="refresh">
           <span class="checked tabular" id="checked-at" hidden></span>
-          <button type="button" class="icon-btn" id="reload-btn" aria-label="最新の状態を読み込む" data-tip="最新にする">
+          <button type="button" class="icon-btn" id="reload-btn" aria-label="最新にする" data-tip="最新にする">
             <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true" focusable="false"><path d="M20 11a8 8 0 1 0-2.34 5.66"/><path d="M20 4v7h-7"/></svg>
           </button>
         </div>
@@ -240,7 +301,7 @@
       </div>
       <div class="inline-alert" id="refresh-error" role="alert" hidden>
         <p id="refresh-error-text"></p>
-        <button type="button" class="btn" id="refresh-retry-btn">もう一度試す</button>
+        <button type="button" class="btn" id="refresh-retry-btn">再試行</button>
       </div>
     </section>
 
@@ -249,7 +310,7 @@
          どちらも無ければ段ごと隠す（mypage.js の syncPair） -->
     <div class="pair" id="today-pair" hidden>
       <section class="fold-group" id="stages-group" aria-labelledby="stages-title" hidden>
-        <h2 class="pair-head" id="stages-title"><span>今日の段階</span><span class="meta tabular" id="stages-meta"></span></h2>
+        <h2 class="pair-head" id="stages-title"><span>今日のワークショップ</span><span class="meta tabular" id="stages-meta"></span></h2>
         <div class="fold-body">
           <ul class="stages" id="stages"></ul>
         </div>
@@ -257,11 +318,17 @@
       <section class="fold-group" id="submissions-group" aria-labelledby="submissions-title" hidden>
         <!-- ［動画を提出する］（組 11 の (8)。本体は mypage-upload.js）：関数 submissions の印（GET /targets の upload）が来たときだけ出す -->
         <div class="pair-bar">
-          <h2 class="pair-head" id="submissions-title"><span>提出した作品</span><span class="meta tabular" id="submissions-meta"></span></h2>
+          <h2 class="pair-head" id="submissions-title"><span>提出した動画</span><span class="meta tabular" id="submissions-meta"></span></h2>
           <button type="button" class="btn compact" id="upload-open" hidden>動画を提出する</button>
         </div>
         <div class="fold-body">
           <p class="small muted" id="submissions-status" role="status" hidden></p>
+          <!-- 公開範囲の説明（3 つの範囲と、「公開」を今は選べない理由）：一覧の上に ？ を 1 つだけ。作品の行には出さない（組 13 の U-13・D-1105-121x）。
+               中身は mypage-submissions.js が入れ、作品があるときだけ出す -->
+          <details class="help list-help" id="submissions-help" hidden>
+            <summary><span class="help-text">公開範囲</span><span class="help-q" aria-hidden="true">？</span></summary>
+            <div class="help-body" id="submissions-help-body"></div>
+          </details>
           <div id="submissions-list"></div>
         </div>
       </section>
@@ -273,11 +340,12 @@
         <details class="fold" id="models-fold">
           <summary><span>使えるモデル</span><span class="meta tabular" id="models-meta"></span></summary>
           <div class="fold-body">
-            <p class="small muted">数字は、使うクレジットの目安です。</p>
+            <p class="small muted">数字はクレジットの目安です。</p>
             <div id="models"></div>
           </div>
         </details>
-        <p class="fold-empty" id="models-empty" hidden>今は、使えるモデルがありません。講師・スタッフに知らせてください。</p>
+        <p class="fold-empty" id="models-empty" hidden>使えるモデルはありません。
+講師・スタッフにお知らせください。</p>
       </div>
 
       <!-- 作品をスマホに保存する（受講者だけ。段 1D。QR の欄）。本体は mypage-share.js。サーバーが使えないと答えたときは隠す -->
@@ -345,7 +413,7 @@
                手順 6 の OAuth client は Register automatically（Dynamic Client Registration）。claude.com/docs/connectors/custom/add-unlisted によると、Use Claude's published identity は Client ID Metadata Document にサーバーが対応しているときだけ使える。本番の認可サーバーの公開のメタデータ（auth/v1/.well-known/oauth-authorization-server）には registration_endpoint があり、client_id_metadata_document_supported は無い（2026-10-28 に読んで確かめた）。2026-10-22 の claude.ai の接続も dynamic で登録されている。
                並びは ChatGPT（App）→ Claude（App）→ その他（CLI：Codex CLI・Claude Code）→ うまくいかないとき -->
           <div class="fold-body connect-guide">
-            <p>ログインには、研修で案内された Google アカウントを使います（AIKENメンバーは会社のアカウント）。</p>
+            <p>研修で案内された Google アカウントでログインします。</p>
 
             <div class="copy-box">
               <span class="copy-label">つなぐ先（MCP の URL）</span>
@@ -357,17 +425,17 @@
             </div>
 
             <div class="notice-box">
-              <p>途中で出る許可の画面では、自分でつなぎ始めたときだけ「許可する」を押します。覚えのない許可の画面が出たら、「許可しない」を押してください。</p>
+              <p>許可の画面に覚えがないときは［許可しない］を押してください。</p>
             </div>
 
             <div class="guide-apps">
               <details class="sub-fold" id="guide-chatgpt">
                 <summary>ChatGPT（App）</summary>
                 <div class="sub-body">
-                  <p>ChatGPT のアプリ・Web 版と、アプリの中の Codex は、この手順でつなぎます。</p>
+                  <p>ChatGPT のアプリ・Web 版と、アプリ内の Codex の手順です。</p>
                   <h3 class="guide-h">初めてつなぐ</h3>
                   <ol class="steps">
-                    <li>ChatGPT のアプリ、または Web 版の <a href="https://chatgpt.com/plugins" target="_blank" rel="noopener noreferrer"><strong>「プラグイン」</strong></a>を開きます（別のタブで開きます）。</li>
+                    <li>ChatGPT のアプリ、または Web 版の <a href="https://chatgpt.com/plugins" target="_blank" rel="noopener noreferrer"><strong>「プラグイン」</strong></a>を開きます。</li>
                     <li><strong>「＋」</strong>を押し、<strong>「カスタム MCP」</strong>を選びます。</li>
                     <li>名前を入れる欄があれば、次の名前を入れます。
                       <div class="copy-box">
@@ -392,15 +460,15 @@
                     <li><strong>「認証する」</strong>を押します。</li>
                     <li>A.I.KEN Studio の画面に<strong>「Google でログイン」</strong>が出たら、押します。</li>
                     <li>Google の画面で、<strong>研修で案内された Google アカウント</strong>を選びます（出ないこともあります）。</li>
-                    <li>許可の画面で、ログイン中のアカウントを確かめて<strong>「許可する」</strong>を押します。</li>
+                    <li>許可の画面で、ログイン中のアカウントを確認して<strong>［許可する］</strong>を押します。</li>
                   </ol>
 
-                  <h3 class="guide-h">つながったか確かめる</h3>
-                  <p>新しい会話で <code>@</code> を入れ、<strong>「aiken_studio」</strong>を選んで、次の文を送ります。残りクレジットが返れば成功です。</p>
+                  <h3 class="guide-h">接続の確認</h3>
+                  <p>新しい会話で <code>@</code> を入れ、<strong>「aiken_studio」</strong>を選んで、次の文を送信します。残りクレジットが表示されれば完了です。</p>
                   <div class="copy-box">
                     <div class="copy-wrap">
                       <pre class="copy-code"><code id="cg-chatgpt-check">A.I.KEN Studio のツールで、今の残りクレジットを確認してください。生成はしないでください。</code></pre>
-                      <button type="button" class="copy-btn" data-copy="cg-chatgpt-check" aria-label="ChatGPT に送る確認用の文をコピー" title="ChatGPT に送る確認用の文をコピー"><svg class="ic-copy" width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true" focusable="false"><rect width="14" height="14" x="8" y="8" rx="2" ry="2"/><path d="M4 16c-1.1 0-2-.9-2-2V4c0-1.1.9-2 2-2h10c1.1 0 2 .9 2 2"/></svg><svg class="ic-check" width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true" focusable="false"><path d="M20 6 9 17l-5-5"/></svg></button>
+                      <button type="button" class="copy-btn" data-copy="cg-chatgpt-check" aria-label="ChatGPT に貼る確認用の文をコピー" title="ChatGPT に貼る確認用の文をコピー"><svg class="ic-copy" width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true" focusable="false"><rect width="14" height="14" x="8" y="8" rx="2" ry="2"/><path d="M4 16c-1.1 0-2-.9-2-2V4c0-1.1.9-2 2-2h10c1.1 0 2 .9 2 2"/></svg><svg class="ic-check" width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true" focusable="false"><path d="M20 6 9 17l-5-5"/></svg></button>
                     </div>
                     <p class="copy-status" role="status"></p>
                   </div>
@@ -410,7 +478,7 @@
               <details class="sub-fold" id="guide-claude-app">
                 <summary>Claude（App）</summary>
                 <div class="sub-body">
-                  <p>デスクトップと Web 版（claude.ai）の手順です。画面の名前は英語の表記です（日本語の画面では違う場合があります）。</p>
+                  <p>デスクトップと Web 版（claude.ai）の手順です。画面の名前は英語の表記です。</p>
                   <h3 class="guide-h">初めてつなぐ（個人の Pro・Max）</h3>
                   <ol class="steps">
                     <li>Claude を開き、<strong>Customize</strong> &gt; <strong>Connectors</strong> を開きます。</li>
@@ -439,19 +507,19 @@
                     <li>コネクタの一覧で、<strong>aiken_studio</strong> の <strong>Connect</strong> を押します。</li>
                     <li>A.I.KEN Studio の画面に<strong>「Google でログイン」</strong>が出たら、押します。</li>
                     <li>Google の画面で、<strong>研修で案内された Google アカウント</strong>を選びます（出ないこともあります）。</li>
-                    <li>許可の画面で、ログイン中のアカウントを確かめて<strong>「許可する」</strong>を押します。</li>
+                    <li>許可の画面で、ログイン中のアカウントを確認して<strong>［許可する］</strong>を押します。</li>
                   </ol>
                   <details class="help">
-                    <summary><span class="help-text">会社の Team・Free プランでは、違いがあります。</span><span class="help-q" aria-hidden="true">？</span></summary>
-                    <div class="help-body">会社の Team では、コネクタを足せるのは Owner と Primary Owner だけです。Owner は <strong>Organization settings</strong> &gt; <strong>Connectors</strong> で <strong>Add</strong> を押し、<strong>Custom</strong> &gt; <strong>Web</strong> を選びます。そのあとは上の手順 3〜7 と同じです（Name は <strong>aiken_studio</strong>、URL は手順 4 と同じ URL、<strong>Authentication</strong> は <strong>Sign in now</strong>、<strong>OAuth client</strong> は <strong>Register automatically</strong> を選びます。<strong>Use Claude's published identity (Recommended)</strong> は選びません）。足したあと、各メンバーが <strong>Customize</strong> &gt; <strong>Connectors</strong> で <strong>aiken_studio</strong> の <strong>Connect</strong> を押し、自分のアカウントで許可します。Free プランでは、カスタムコネクタは 1 つまでです。</div>
+                    <summary><span class="help-text">Team・Free プランでは違いがあります。</span><span class="help-q" aria-hidden="true">？</span></summary>
+                    <div class="help-body">Team では、コネクタを追加できるのは Owner と Primary Owner だけです。Owner が <strong>Organization settings</strong> &gt; <strong>Connectors</strong> &gt; <strong>Add</strong> &gt; <strong>Custom</strong> &gt; <strong>Web</strong> から、上の手順 3〜7 と同じ設定で追加します。追加後、各メンバーが <strong>Customize</strong> &gt; <strong>Connectors</strong> で <strong>aiken_studio</strong> の <strong>Connect</strong> を押します。Free プランのカスタムコネクタは 1 つまでです。</div>
                   </details>
 
-                  <h3 class="guide-h">つながったか確かめる</h3>
-                  <p>新しい会話の入力欄の左下の<strong>「＋」</strong> &gt; <strong>Connectors</strong> で <strong>aiken_studio</strong> をオンにし、次の文を送ります。ツールの許可の確認が出たら、許可します。</p>
+                  <h3 class="guide-h">接続の確認</h3>
+                  <p>新しい会話の入力欄の左下の<strong>「＋」</strong> &gt; <strong>Connectors</strong> で <strong>aiken_studio</strong> をオンにし、次の文を送信します。ツールの許可の確認が出たら、許可します。</p>
                   <div class="copy-box">
                     <div class="copy-wrap">
                       <pre class="copy-code"><code id="cg-claudeapp-check">A.I.KEN Studio のツールで、今の残りクレジットを確認してください。生成はしないでください。</code></pre>
-                      <button type="button" class="copy-btn" data-copy="cg-claudeapp-check" aria-label="Claude に送る確認用の文をコピー" title="Claude に送る確認用の文をコピー"><svg class="ic-copy" width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true" focusable="false"><rect width="14" height="14" x="8" y="8" rx="2" ry="2"/><path d="M4 16c-1.1 0-2-.9-2-2V4c0-1.1.9-2 2-2h10c1.1 0 2 .9 2 2"/></svg><svg class="ic-check" width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true" focusable="false"><path d="M20 6 9 17l-5-5"/></svg></button>
+                      <button type="button" class="copy-btn" data-copy="cg-claudeapp-check" aria-label="Claude に貼る確認用の文をコピー" title="Claude に貼る確認用の文をコピー"><svg class="ic-copy" width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true" focusable="false"><rect width="14" height="14" x="8" y="8" rx="2" ry="2"/><path d="M4 16c-1.1 0-2-.9-2-2V4c0-1.1.9-2 2-2h10c1.1 0 2 .9 2 2"/></svg><svg class="ic-check" width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true" focusable="false"><path d="M20 6 9 17l-5-5"/></svg></button>
                     </div>
                     <p class="copy-status" role="status"></p>
                   </div>
@@ -487,22 +555,22 @@
                     </li>
                     <li>A.I.KEN Studio の画面に<strong>「Google でログイン」</strong>が出たら、押します。</li>
                     <li>Google の画面で、<strong>研修で案内された Google アカウント</strong>を選びます（出ないこともあります）。</li>
-                    <li>許可の画面で、ログイン中のアカウントを確かめて<strong>「許可する」</strong>を押します。</li>
+                    <li>許可の画面で、ログイン中のアカウントを確認して<strong>［許可する］</strong>を押します。</li>
                   </ol>
 
-                  <h5 class="guide-h">つながったか確かめる</h5>
-                  <p>Codex の会話に次の文を送ります。残りクレジットが返れば成功です。</p>
+                  <h5 class="guide-h">接続の確認</h5>
+                  <p>Codex の会話に次の文を送信します。残りクレジットが表示されれば完了です。</p>
                   <div class="copy-box">
                     <div class="copy-wrap">
                       <pre class="copy-code"><code id="cg-codex-check">A.I.KEN Studio のツールで、今の残りクレジットを確認してください。生成はしないでください。</code></pre>
-                      <button type="button" class="copy-btn" data-copy="cg-codex-check" aria-label="Codex に送る確認用の文をコピー" title="Codex に送る確認用の文をコピー"><svg class="ic-copy" width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true" focusable="false"><rect width="14" height="14" x="8" y="8" rx="2" ry="2"/><path d="M4 16c-1.1 0-2-.9-2-2V4c0-1.1.9-2 2-2h10c1.1 0 2 .9 2 2"/></svg><svg class="ic-check" width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true" focusable="false"><path d="M20 6 9 17l-5-5"/></svg></button>
+                      <button type="button" class="copy-btn" data-copy="cg-codex-check" aria-label="Codex に貼る確認用の文をコピー" title="Codex に貼る確認用の文をコピー"><svg class="ic-copy" width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true" focusable="false"><rect width="14" height="14" x="8" y="8" rx="2" ry="2"/><path d="M4 16c-1.1 0-2-.9-2-2V4c0-1.1.9-2 2-2h10c1.1 0 2 .9 2 2"/></svg><svg class="ic-check" width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true" focusable="false"><path d="M20 6 9 17l-5-5"/></svg></button>
                     </div>
                     <p class="copy-status" role="status"></p>
                   </div>
                   <h4 class="guide-h guide-tool" id="guide-cli-claude-code">Claude Code</h4>
                   <h5 class="guide-h">初めてつなぐ</h5>
                   <ol class="steps">
-                    <li>ターミナルで、Claude Code のバージョンを確かめます（<strong>2.1.231 以上</strong>が必要です。古いときは、講師・スタッフに知らせてください）。
+                    <li>ターミナルで、Claude Code のバージョンを確認します（<strong>2.1.231 以上</strong>。古いときは講師・スタッフにお知らせください）。
                       <div class="copy-box">
                         <div class="copy-wrap">
                           <pre class="copy-code"><code id="cg-claude-version">claude --version</code></pre>
@@ -531,15 +599,15 @@
                     </li>
                     <li>A.I.KEN Studio の画面に<strong>「Google でログイン」</strong>が出たら、押します。</li>
                     <li>Google の画面で、<strong>研修で案内された Google アカウント</strong>を選びます（出ないこともあります）。</li>
-                    <li>許可の画面で、ログイン中のアカウントを確かめて<strong>「許可する」</strong>を押します。</li>
+                    <li>許可の画面で、ログイン中のアカウントを確認して<strong>［許可する］</strong>を押します。</li>
                   </ol>
 
-                  <h5 class="guide-h">つながったか確かめる</h5>
-                  <p>Claude Code の会話に次の文を送ります。残りクレジットが返れば成功です。</p>
+                  <h5 class="guide-h">接続の確認</h5>
+                  <p>Claude Code の会話に次の文を送信します。残りクレジットが表示されれば完了です。</p>
                   <div class="copy-box">
                     <div class="copy-wrap">
                       <pre class="copy-code"><code id="cg-claude-check">A.I.KEN Studio のツールで、今の残りクレジットを確認してください。生成はしないでください。</code></pre>
-                      <button type="button" class="copy-btn" data-copy="cg-claude-check" aria-label="Claude Code に送る確認用の文をコピー" title="Claude Code に送る確認用の文をコピー"><svg class="ic-copy" width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true" focusable="false"><rect width="14" height="14" x="8" y="8" rx="2" ry="2"/><path d="M4 16c-1.1 0-2-.9-2-2V4c0-1.1.9-2 2-2h10c1.1 0 2 .9 2 2"/></svg><svg class="ic-check" width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true" focusable="false"><path d="M20 6 9 17l-5-5"/></svg></button>
+                      <button type="button" class="copy-btn" data-copy="cg-claude-check" aria-label="Claude Code に貼る確認用の文をコピー" title="Claude Code に貼る確認用の文をコピー"><svg class="ic-copy" width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true" focusable="false"><rect width="14" height="14" x="8" y="8" rx="2" ry="2"/><path d="M4 16c-1.1 0-2-.9-2-2V4c0-1.1.9-2 2-2h10c1.1 0 2 .9 2 2"/></svg><svg class="ic-check" width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true" focusable="false"><path d="M20 6 9 17l-5-5"/></svg></button>
                     </div>
                     <p class="copy-status" role="status"></p>
                   </div>
@@ -550,11 +618,11 @@
                 <summary>うまくいかないとき</summary>
                 <div class="sub-body">
                   <ul class="guide-list">
-                    <li><strong>ログインの途中で止まった・閉じた・5 分を過ぎた</strong>：アプリから、つなぎ直します。Codex CLI は Control＋C のあと <code>codex mcp login aiken_studio</code> をもう一度。Claude Code は <code>/mcp</code> で aiken_studio を選び直します。ChatGPT・Claude・Codex のアプリは、接続の画面からもう一度つなぎます。</li>
-                    <li><strong>違うアカウントでログインした</strong>：「許可する」を押す前なら、許可の画面のいちばん下の「別のアカウントでログイン」で、研修で案内されたアカウントを選び直します。押したあとなら、講師・スタッフに知らせてください。</li>
-                    <li><strong>Claude Code の <code>/mcp</code> に aiken_studio が出ない</strong>：その他（CLI）の Claude Code の手順 2 のコマンド（<code>--scope user</code> 付き）で、登録し直します。</li>
-                    <li><strong>Claude（App）の会話でツールが出てこない</strong>：入力欄の左下の<strong>「＋」</strong> &gt; <strong>Connectors</strong> で、<strong>aiken_studio</strong> がオンになっているか確かめます。</li>
-                    <li><strong>Claude（App）でつながらない</strong>：<strong>Customize</strong> &gt; <strong>Connectors</strong> で <strong>aiken_studio</strong> を削除し、Claude（App）の手順 1 から足し直します（会社の Team のメンバーは、Owner に頼みます）。</li>
+                    <li><strong>ログインの途中で止まった・閉じた・5 分を過ぎた</strong>：アプリから再度接続します。Codex CLI は Control＋C のあと <code>codex mcp login aiken_studio</code> を再実行します。Claude Code は <code>/mcp</code> で aiken_studio を再度選びます。アプリは接続の画面から再度接続します。</li>
+                    <li><strong>違うアカウントでログインした</strong>：［許可する］の前なら、許可の画面の下の［別のアカウントでログイン］で、案内されたアカウントを選びます。押したあとは講師・スタッフにお知らせください。</li>
+                    <li><strong>Claude Code の <code>/mcp</code> に aiken_studio が出ない</strong>：Claude Code の手順 2 のコマンドで再登録します。</li>
+                    <li><strong>Claude（App）の会話でツールが出てこない</strong>：入力欄の左下の<strong>「＋」</strong> &gt; <strong>Connectors</strong> で、<strong>aiken_studio</strong> がオンか確認します。</li>
+                    <li><strong>Claude（App）で接続できない</strong>：<strong>Customize</strong> &gt; <strong>Connectors</strong> で <strong>aiken_studio</strong> を削除し、手順 1 から再度追加します（Team のメンバーは Owner に依頼します）。</li>
                   </ul>
                 </div>
               </details>
@@ -574,7 +642,7 @@
 <dialog id="my-dialog" class="my-dialog" aria-label="確認"></dialog>
 <!-- マイページからの動画の提出（組 11 の (8)。中身は mypage-upload.js が作る） -->
 <dialog id="upload-dialog" class="my-dialog upload-dialog" aria-label="動画を提出"></dialog>
-<script type="module" src="/r/39015e7c0b2b/topbar-height.js"></script>
-<script type="module" src="/r/39015e7c0b2b/mypage.js"></script>
+<script type="module" src="/r/2751bb45fefd/topbar-height.js"></script>
+<script type="module" src="/r/2751bb45fefd/mypage.js"></script>
 </body>
 </html>

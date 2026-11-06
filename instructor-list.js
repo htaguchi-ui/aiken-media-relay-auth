@@ -1,10 +1,7 @@
 // 講師ページの「回の一覧」と、回の操作のページの「← 回の一覧」「この回は開けません」の画面の部品（設計 docs/design-instructor-split.md 4.2）。
 // 表示はすべて createElement（el は instructor.js から受け取る）と textContent だけ（データを innerHTML に入れない）。
 // リンクの href は cohortPath()・LIST_PATH の定数だけで作る（回の ID は符号化する）。書き込みの RPC は 1 つも呼ばない。
-import { cohortPath, cohortRowView, LIST_PATH } from "./instructor-list-lib.js";
-
-/** 提出の講師の画面の道（site-nav.js の「提出ページ」と同じ） */
-const SUBMISSIONS_PATH = "/submissions";
+import { cohortPath, cohortRowView, LIST_PATH, submissionsPath } from "./instructor-list-lib.js";
 
 /** 一覧の 1 行（1 つの回が 1 つのリンク。新しいタブで開くこともできる） */
 function cohortRow(el, c, extras) {
@@ -55,7 +52,7 @@ export function cohortListView({ el, groups, extras, endedOpen = false, onRefres
     ),
     current.length
       ? el("ul", { className: "cohort-rows", id: "cohort-rows-current", "aria-label": "実施中とこれからの回" }, ...current.map((c) => cohortRow(el, c, extras)))
-      : el("p", { className: "muted", id: "cohort-none-current", text: "実施中とこれからの回はありません。" }),
+      : el("p", { className: "muted", id: "cohort-none-current", text: "実施中・予定の回はありません" }),
     fold,
   );
 }
@@ -70,7 +67,7 @@ export function cohortMissingView({ el, cohortId = null, onRefresh }) {
     "section",
     { className: "card", id: "cohort-missing", "aria-labelledby": "cohort-missing-h" },
     el("h2", { id: "cohort-missing-h", text: "この回は開けません" }),
-    el("p", { text: `あなたが開ける回の一覧に、${which}がありません。担当から外れた、回が消えた、会場か Day1 の日付が変わって回の ID が変わった、のどれかです。` }),
+    el("p", { text: `${which}は担当の回にありません。` }),
     el(
       "div",
       { className: "row-actions" },
@@ -81,12 +78,13 @@ export function cohortMissingView({ el, cohortId = null, onRefresh }) {
 }
 
 /**
- * 操作のページの「提出された作品（別のページ）」へのリンク（提出の講師の画面 /submissions へ。設計 docs/design-instructor-split.md の M-SP4）。
- * 提出の画面（submissions.html）と同じ公開にだけ入れる（提出が出ていない間にこのリンクだけ出すと、行き先が無い）。
- * 分割を外すときは、分割の一部としてこのリンクも一緒に消える。href は定数だけ
+ * 操作のページの「提出作品を見る」へのリンク（提出作品のページ /submissions へ。設計 docs/design-instructor-split.md の M-SP4）。
+ * 今の回を ?c= で渡し、提出作品のページは同じ回を開く（組 13 の U-03。別の回の作品を投影しない）。
+ * 提出作品のページ（submissions.html）と同じ公開にだけ入れる（提出が出ていない間にこのリンクだけ出すと、行き先が無い）。
+ * 分割を外すときは、分割の一部としてこのリンクも一緒に消える。href は定数と形を確かめた回の ID だけで作る
  */
-export function submissionsLink({ el }) {
-  return el("nav", { className: "back-row", id: "submissions-row", "aria-label": "提出された作品" }, el("a", { className: "back-link", id: "to-submissions", href: SUBMISSIONS_PATH, text: "提出された作品（別のページ）" }));
+export function submissionsLink({ el, cohortId = null }) {
+  return el("nav", { className: "back-row", id: "submissions-row", "aria-label": "提出作品" }, el("a", { className: "back-link", id: "to-submissions", href: submissionsPath(cohortId), text: "提出作品を見る" }));
 }
 
 /** 操作のページの先頭の「← 回の一覧」 */

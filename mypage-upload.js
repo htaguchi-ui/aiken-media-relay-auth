@@ -3,10 +3,14 @@
 // refresh() は関数 submissions の GET /targets を読み、答えに「マイページから出せる」の印（upload.enabled）があるときだけ［動画を提出する］を出す。
 // 印が無い（前の版の関数）・403・not_stage_student のときは隠す（関数を前の版に戻すことが、そのまま止めるスイッチになる。設計 2.6）。
 // 押すと専用の <dialog>（Canvas の提出と同じ 2 段）：段 1 ファイルと提出先 → 段 2 公開の範囲（何も選ばれていない状態から）→ begin → TUS → complete。
+// 入れた内容（段 2 にいる・タイトルか説明が空でない）があるときに Esc で閉じようとしたら、同じ窓の中で「入力内容を破棄しますか？」と聞く（組 13 の U-11）。
+// 段 2 の［提出する］で、同じ提出先に同じファイル（同じ bytes）の動画があれば、同じ窓の中で「再度提出しますか？」と聞く（止めない。
+// 設計 dup-confirm-20261105/DESIGN.md・D-1105-183x・191x）。作品の一覧（GET /my/works）は /targets と別に読み、遅れ・失敗は「作品なし」（確かめずに送る）。
 // 手元のファイルは、名前・型・大きさ・先頭 12 バイト・ブラウザでの読み（<video> で縦横・長さ・最初の 1 コマ。probeVideo）を確かめてから送らせる。
 // 判定と流れは upload-lib.js（純粋な部品）。試験は scripts/mypage_upload_nodetest.mjs（偽の fetch・TUS・probe）と、
 // 本物の index.html（CSP つき）をヘッドレスのブラウザで開く scripts/mypage_upload_browser_check.mjs。
 // 表示はすべて textContent / createElement で組み立てる（データを innerHTML に入れない）。
+// 断りの文のエラーコード（uploadErrorCode）は文の後ろに小さく薄く、ホバーの補足（uploadTip）は title に出す（組 13 の文言の表）。
 import {
   acceptText,
   checkFileName,
@@ -15,12 +19,13 @@ import {
   createUploadFlow,
   defaultStageId,
   doneText,
+  dupConfirmBody,
   errorCodeOf,
   initialScopeStep,
   judgeProbe,
   PROBE_FRAME_TIMEOUT_MS,
   PROBE_META_TIMEOUT_MS,
-  sameSizeWarning,
+  sameFileWorkNos,
   SCOPE_ORDER,
   scopeStepReducer,
   scopeStepView,
@@ -31,11 +36,13 @@ import {
   UPLOAD_MAX_BYTES,
   uploadCaps,
   UploadApiError,
+  uploadErrorCode,
+  uploadTip,
   validateForm,
   validateSend,
 } from "./upload-lib.js";
 import { tusDelete } from "./tus-lib.js";
-import { formatBytes, formatDurationSec, normalizeMyWorks } from "./submissions-lib.js";
+import { errorCodeLabel, formatBytes, formatDurationSec, normalizeMyWorks } from "./submissions-lib.js";
 
 /**
  * 段 4（設計 2.4）：手元の動画を <video> で読む。画面には出さない。音は出さない（muted）。
@@ -201,6 +208,17 @@ export function createMyUpload(o) {
     return node;
   };
 
+  /**
+   * 文を出す（textContent）。エラーコードがあれば最後の文の後ろに小さく薄く「（E-SUB-04）」（決まり 3.2 の案 A）、
+   * ホバーの補足があれば title に置く（無ければ title を外す）
+   */
+  function setText(node, text, { code = null, tip = null } = {}) {
+    node.textContent = text ?? "";
+    if (code) node.append(el("span", { className: "err-code muted small", text: errorCodeLabel(code) }));
+    if (tip) node.setAttribute("title", tip);
+    else node.removeAttribute?.("title");
+  }
+
   // ---- 本人の照らし（mypage-submissions.js の ticketFor・current と同じ形） ----
 
   async function sessionNow() {
@@ -327,8 +345,11 @@ export function createMyUpload(o) {
 
   async function open() {
     if (sess) {
-      // 送信中に閉じられたまま残っている回（開き直せなかったなど）：新しく作らず、その回を開き直す
-      if (!o.dialog.open && alive(sess)) reopen(sess);
+      // 送信中に閉じられたまま残っている回（開き直せなかったなど）：新しく作らず、その回を開き直す（入れた内容もそのまま）
+      if (!o.dialog.open && alive(sess)) {
+        sess.confirmDiscard = false; // 自分で開き直したので、捨てるかは聞かない
+        reopen(sess);
+      }
       return;
     }
     if (!caps || o.dialog.open) return;
@@ -351,6 +372,13 @@ export function createMyUpload(o) {
       phase: { kind: "idle" },
       staleFailure: null,
       confirmStop: false,
+      /** 「入れた内容を捨てて閉じますか？」を出しているか（組 13 の U-11） */
+      confirmDiscard: false,
+      /** 「再度提出しますか？」を出しているか（同じ動画の確かめ。dup-confirm 3.3）と、その本文 */
+      confirmDup: false,
+      dupBody: "",
+      /** 読み込みの番号（［再読み込み］の前に始まった作品の一覧の答えを捨てる） */
+      loadSeq: 0,
       notified: false,
       lastStep: "form",
       optionsKey: "",
@@ -390,10 +418,18 @@ export function createMyUpload(o) {
   }
 
   async function loadTargets(s) {
+    const seq = ++s.loadSeq;
     s.load = "loading";
+    s.myWorks = null;
     update(s);
-    const [t, w] = await Promise.all([call("GET", "/targets", undefined, s.ticket), call("GET", "/my/works", undefined, s.ticket)]);
-    if (!alive(s) || !t) return;
+    // 作品の一覧（同じ動画の確かめに使うだけ）は /targets と別に読む。段 1 を待たせない。遅れ・失敗は「作品なし」（dup-confirm 5.2 の 8）
+    void call("GET", "/my/works", undefined, s.ticket)
+      .then((w) => {
+        if (alive(s) && seq === s.loadSeq) s.myWorks = w?.ok ? normalizeMyWorks(w.body) : null;
+      })
+      .catch(() => {});
+    const t = await call("GET", "/targets", undefined, s.ticket);
+    if (!alive(s) || !t || seq !== s.loadSeq) return;
     if (!t.ok) {
       if (t.status === 403 || t.status === 404 || t.code === "not_stage_student") {
         setAvailable(null);
@@ -413,7 +449,6 @@ export function createMyUpload(o) {
     const serverNow = Date.parse(t.body?.server_now ?? "");
     s.targets = t.body;
     s.offsetMs = Number.isFinite(serverNow) ? serverNow - now() : 0;
-    s.myWorks = w?.ok ? normalizeMyWorks(w.body) : null;
     s.load = "ready";
     update(s);
   }
@@ -454,14 +489,45 @@ export function createMyUpload(o) {
     update(s);
   }
 
-  /** 閉じる（［やめる］・［閉じる］・Esc）。送信中は「送信をやめますか？」。確定待ちの失敗は捨ててから閉じる（Canvas と同じ） */
-  function requestClose(s) {
+  /**
+   * 捨てると困る入力があるか（組 13 の U-11）：まだ入力の形（送っていない）で、段 2 にいるか、タイトル・説明のどちらかが空でない。
+   * 送信が済んだ・やめた・送れない断りのあとは聞かない
+   */
+  function hasDraft(s) {
+    if (!alive(s) || s.load !== "ready") return false;
+    return draftIn(s, derive(s));
+  }
+  /** hasDraft の判定（derive の答え d を渡す） */
+  const draftIn = (s, d) => d.form && (s.st.step === "scope" || s.title.trim() !== "" || s.purpose.trim() !== "");
+
+  /** 同じ窓の中で「入れた内容を捨てて閉じますか？」を出す（ダイアログを重ねない） */
+  function askDiscard(s) {
+    s.confirmDiscard = true;
+    s.confirmDup = false; // 2 つの確かめを同時に出さない
+    update(s);
+    s.ui?.discardKeepBtn.focus?.();
+  }
+
+  /**
+   * 閉じる（［やめる］・［閉じる］・Esc）。送信中は「送信をやめますか？」。確定待ちの失敗は捨ててから閉じる（Canvas と同じ）。
+   * esc：Esc で閉じようとした（押し間違えやすい）。入れた内容があれば、閉じずに捨てるかを聞く（組 13 の U-11）。
+   * 「再度提出しますか？」を出している間は、［キャンセル］と同じ（段 2 に戻る。破棄の確かめには進まない。dup-confirm 3.3）
+   */
+  function requestClose(s, { esc = false } = {}) {
     if (!alive(s)) return;
     if (s.phase.kind === "completing") return; // 確かめている最中は閉じない（すぐ終わる）
     if (busyPhase(s.phase)) {
       s.confirmStop = true;
       update(s);
       s.ui.keepBtn.focus?.();
+      return;
+    }
+    if (s.confirmDup) {
+      cancelDup(s);
+      return;
+    }
+    if (esc && hasDraft(s)) {
+      if (!s.confirmDiscard) askDiscard(s);
       return;
     }
     if (s.phase.kind === "failed" && s.phase.workId) void s.flow.discard();
@@ -494,15 +560,28 @@ export function createMyUpload(o) {
   // 入れ物の <dialog> の知らせは 1 回だけ付ける（開くたびに足さない）
   o.dialog.addEventListener("cancel", (e) => {
     e.preventDefault();
-    if (sess) requestClose(sess);
+    if (sess) requestClose(sess, { esc: true });
   });
   o.dialog.addEventListener("close", () => {
     const s = sess;
     if (!s) return;
+    // 閉じられたら「再度提出しますか？」は下ろす（開き直したときに、破棄の確かめと同時に出さない。確かめの P3-3）
+    s.confirmDup = false;
     // 送信中に閉じられた（Esc の 2 回目：close watcher は cancel を止めても、操作の無いまま 2 回目が来ると閉じる）：
     // 送信は裏で続くので、開き直して「送信をやめますか？」を出す（確かめている最中＝completing は開き直すだけ）
     if (busyPhase(s.phase)) {
       reopen(s);
+      return;
+    }
+    // 入れた内容があるのに閉じられた（Esc の 2 回目など）：開き直して「入れた内容を捨てて閉じますか？」を出す（組 13 の U-11）。
+    // 開き直せなければ回を残し、［動画を提出する］で同じ回（入れた内容のまま）を開き直す
+    if (hasDraft(s)) {
+      try {
+        o.dialog.showModal();
+      } catch {
+        return;
+      }
+      askDiscard(s);
       return;
     }
     // ほかの手で閉じられた（送信中でなければ、閉じたものとして片付ける）
@@ -525,7 +604,7 @@ export function createMyUpload(o) {
 
     // 段 1
     u.title = el("h2", { id: "upload-title", tabindex: "-1", text: TEXT.title });
-    u.intro = el("p", { className: "small" }, TEXT.bridgeIntro1, el("br"), TEXT.bridgeIntro2);
+    u.intro = el("p", { className: "small", text: TEXT.bridgeIntro });
     u.fileInput = el("input", { type: "file", id: "upload-file", accept: UPLOAD_ACCEPT, className: "upload-file-input" });
     u.fileInput.addEventListener("change", go(() => void pickFile(s, u.fileInput.files?.[0] ?? null)));
     u.fileInfo = el("div", { className: "small upload-file-info", "data-upload": "file-info" });
@@ -582,9 +661,10 @@ export function createMyUpload(o) {
         update(s);
       }));
       u.radios.set(opt.value, r);
-      const kids = [el("label", { className: "upload-scope-label" }, r, el("span", { text: opt.label }))];
+      // 範囲の説明は、それぞれの丸の下に常に 1 行（D-1104-130x-c）。「公開」を選べないときは、その理由をもう 1 行（続きはホバー）
+      const kids = [el("label", { className: "upload-scope-label" }, r, el("span", { text: opt.label })), el("span", { className: "small muted", "data-upload": `scope-note-${opt.value}`, text: opt.note })];
       if (opt.value === "public") {
-        u.publicNote = el("span", { className: "small muted", "data-upload": "public-note" });
+        u.publicNote = el("span", { className: "small muted", "data-upload": "public-note", hidden: true });
         kids.push(u.publicNote);
       }
       return el("div", { className: "upload-scope-item" }, ...kids);
@@ -597,7 +677,6 @@ export function createMyUpload(o) {
       update(s);
     }));
     u.consentBox = el("div", { className: "my-consent" }, u.consentBody, el("label", { className: "small", for: "upload-consent" }, u.consentCheck, ` ${TEXT.consentCheck}`));
-    u.sameSize = el("p", { className: "small", "data-upload": "same-size" });
     u.progress = el("progress", { max: "100", "aria-label": "送信の進み具合" });
     u.stateText = el("div", { className: "small", "data-upload": "state" });
     u.stateBox = el("div", { role: "status" }, u.progress, u.stateText);
@@ -606,7 +685,8 @@ export function createMyUpload(o) {
       s.confirmStop = false;
       update(s);
     }) });
-    u.stopBtn = el("button", { type: "button", className: "btn primary", text: TEXT.cancel, "data-action": "upload-stop", onclick: go(() => {
+    // 送信の中止は取り消せない確定なので、管理コンソールの確認と同じ赤で塗る（組 13 の U-12。CSS は index.html の .btn.danger-fill）
+    u.stopBtn = el("button", { type: "button", className: "btn danger-fill", text: TEXT.cancelSend, "data-action": "upload-stop", onclick: go(() => {
       s.confirmStop = false;
       update(s);
       void s.flow.cancel();
@@ -626,7 +706,6 @@ export function createMyUpload(o) {
       u.stageLine,
       u.scopeGroup,
       u.consentBox,
-      u.sameSize,
       u.stateBox,
       u.errorText,
       u.confirmBox,
@@ -634,8 +713,34 @@ export function createMyUpload(o) {
       el("div", { className: "row" }, u.backBtn, u.cancelSendBtn, u.closeBtn, u.submitBtn, u.retryBtn, u.againBtn),
     );
 
+    // 入れた内容を捨てて閉じるかの確かめ（組 13 の U-11）。段 1・段 2 のどちらでも、窓のいちばん下に出す。
+    // 破棄しないボタンは［キャンセル］（送信の中止の確認の［続ける］とは別の値）
+    u.discardKeepBtn = el("button", { type: "button", className: "btn", text: TEXT.discardKeep, "data-action": "upload-discard-keep", onclick: go(() => {
+      s.confirmDiscard = false;
+      update(s);
+      (s.st.step === "scope" ? u.scopeTitle : u.title).focus?.();
+    }) });
+    u.discardBtn = el("button", { type: "button", className: "btn danger-fill", text: TEXT.discardClose, "data-action": "upload-discard", onclick: go(() => {
+      s.confirmDiscard = false;
+      endSession(s);
+    }) });
+    u.discardBox = el("div", { className: "upload-confirm upload-discard", "data-upload": "discard" }, el("p", { text: TEXT.confirmDiscard }), el("div", { className: "row" }, u.discardKeepBtn, u.discardBtn));
+
+    // 同じ動画の確かめ（dup-confirm 3.3）。出している間は段 2 の中身を隠し、題・本文・2 つのボタンだけにする（選んだ範囲と同意は残る）。
+    // ［提出する］は消す操作ではないので赤にしない。エラーではないのでコードは付けない
+    u.dupCancelBtn = el("button", { type: "button", className: "btn", text: TEXT.cancel, "data-action": "upload-dup-cancel", onclick: go(() => cancelDup(s)) });
+    u.dupConfirmBtn = el("button", { type: "button", className: "btn primary", text: TEXT.submitWorkshop, "data-action": "upload-dup-confirm", onclick: go(() => sendAfterDup(s)) });
+    u.dupText = el("p", { id: "upload-dup-text" });
+    u.dupBox = el(
+      "div",
+      { className: "upload-confirm upload-dup", "data-upload": "dup", role: "group", "aria-labelledby": "upload-dup-title", "aria-describedby": "upload-dup-text" },
+      el("p", { id: "upload-dup-title" }, el("strong", { text: TEXT.dupTitle })),
+      u.dupText,
+      el("div", { className: "row" }, u.dupCancelBtn, u.dupConfirmBtn),
+    );
+
     s.ui = u;
-    o.dialog.replaceChildren(el("div", { className: "my-dialog-body upload-body" }, u.loadBox, u.formBox, u.scopeBox));
+    o.dialog.replaceChildren(el("div", { className: "my-dialog-body upload-body" }, u.loadBox, u.formBox, u.scopeBox, u.dupBox, u.discardBox));
   }
 
   /** 今の状態から、見え方を決める（判定は upload-lib.js の関数の答えだけを使う） */
@@ -684,11 +789,50 @@ export function createMyUpload(o) {
     update(s);
   }
 
-  function submit(s) {
+  /** 送る（今の入力で flow の start を 1 回）。送れない状態なら何もしない。返り値は送ったか */
+  function send(s) {
     const d = derive(s);
-    if (!d.input || d.sendBlock || busyPhase(s.phase) || deadEnd(s.phase)) return;
+    if (!d.input || d.sendBlock || busyPhase(s.phase) || deadEnd(s.phase)) return false;
     s.staleFailure = null;
     void s.flow.start(d.input);
+    return true;
+  }
+
+  /**
+   * 段 2 の［提出する］・［再提出］。同じ提出先に同じファイル（同じ bytes）の動画があれば、送る前に「再度提出しますか？」を出す（dup-confirm 3.1）。
+   * 判定は段 2 で固定した提出先とファイルで行う。作品の一覧が読めていなければ確かめずに送る。確かめを出している間は受け付けない（二度押し）
+   */
+  function submit(s) {
+    if (s.confirmDup) return;
+    const d = derive(s);
+    // 押せるのは、入力の形の［提出する］と、送信をキャンセルしたあとの［再提出］だけ（済んだあとに確かめを出さない）
+    if (!(d.form || s.phase.kind === "cancelled")) return;
+    if (!d.input || d.sendBlock || busyPhase(s.phase) || deadEnd(s.phase)) return;
+    const nos = sameFileWorkNos(s.myWorks, d.input.stage.stage_id, d.input.file.size);
+    if (nos.length > 0) {
+      s.confirmDup = true;
+      s.dupBody = dupConfirmBody(d.input.stage.label, nos);
+      update(s);
+      s.ui?.dupCancelBtn.focus?.(); // 反射の Enter で 2 本目を作らない
+      return;
+    }
+    send(s);
+  }
+
+  /** 確かめの［キャンセル］・Esc：段 2 に戻る（選んだ範囲と同意は残る。送らない）。フォーカスは段 2 の見出し */
+  function cancelDup(s) {
+    if (!s.confirmDup) return;
+    s.confirmDup = false;
+    update(s);
+    s.ui?.scopeTitle.focus?.();
+  }
+
+  /** 確かめの［提出する］：今と同じ提出（新しい動画として数える）。1 回だけ送る。フォーカスは段 2 の見出し */
+  function sendAfterDup(s) {
+    if (!s.confirmDup) return;
+    s.confirmDup = false;
+    if (!send(s)) update(s);
+    s.ui?.scopeTitle.focus?.();
   }
 
   function update(s) {
@@ -707,8 +851,15 @@ export function createMyUpload(o) {
 
     const showForm = d.ready && !!d.chosen && !d.inScope;
     const showScope = d.ready && !!d.chosen && d.inScope;
+    // 送り始めた・済んだ・段 2 を離れたら「再度提出しますか？」は下ろす
+    if (s.confirmDup && (!showScope || busyPhase(phase) || phase.kind === "done" || deadEnd(phase))) s.confirmDup = false;
+    const showDup = showScope && s.confirmDup;
     u.formBox.hidden = !showForm;
-    u.scopeBox.hidden = !showScope;
+    // 確かめを出している間は段 2 の中身（ボタンを含む）を隠す：ボタンが 4 つ並んで取り違えない（dup-confirm 3.3）
+    u.scopeBox.hidden = !showScope || showDup;
+    u.dupBox.hidden = !showDup;
+    u.dupText.textContent = showDup ? s.dupBody : "";
+    u.dupConfirmBtn.textContent = d.bridge ? TEXT.submitBridge : TEXT.submitWorkshop;
     o.dialog.setAttribute("aria-label", d.inScope ? TEXT.scopeStepTitle : TEXT.title);
 
     // 段 1
@@ -744,33 +895,38 @@ export function createMyUpload(o) {
       r.checked = s.st.scope === value;
       r.disabled = !d.form || (value === "public" && !!d.view.publicBlocked);
     }
-    if (u.publicNote) u.publicNote.textContent = d.view.publicBlocked ?? TEXT.scopePublicNote;
+    if (u.publicNote) {
+      setText(u.publicNote, d.view.publicBlocked ?? "", { tip: uploadTip(d.view.publicBlocked) });
+      u.publicNote.hidden = !d.view.publicBlocked;
+    }
     u.consentBox.hidden = !(d.view.showConsent && d.consent);
     u.consentBody.textContent = d.consent?.body ?? "";
     u.consentCheck.checked = s.st.consented;
     u.consentCheck.disabled = !d.form;
-    const same = d.inScope && s.pinned && d.chosen ? sameSizeWarning(s.myWorks, d.chosen.stage_id, s.pinned.file.size) : null;
-    u.sameSize.textContent = same ?? "";
-    u.sameSize.hidden = !same;
 
     const pct = phase.kind === "uploading" ? Math.floor((phase.sent / Math.max(1, phase.total)) * 100) : 0;
     u.progress.hidden = phase.kind !== "uploading";
     u.progress.value = pct;
     let state = "";
     if (phase.kind === "starting") state = phase.cancelling ? TEXT.cancelling : TEXT.starting;
-    else if (phase.kind === "uploading") state = `${TEXT.uploading}… ${pct}%（${formatBytes(phase.sent)} / ${formatBytes(phase.total)}）`;
+    else if (phase.kind === "uploading") state = `${TEXT.uploading} ${pct}%（${formatBytes(phase.sent)} / ${formatBytes(phase.total)}）`;
     else if (phase.kind === "completing") state = TEXT.completing;
     else if (phase.kind === "done") state = doneText(phase.workNo, phase.remaining);
     else if (phase.kind === "cancelled") state = phase.notSent ? TEXT.cancelNotSent : TEXT.cancelled;
-    u.stateText.textContent = state;
+    setText(u.stateText, state, { tip: uploadTip(state) });
     u.stateBox.hidden = !state;
     u.stateBox.setAttribute("data-upload-state", phase.kind);
     const failed = phase.kind === "failed" && phase !== s.staleFailure;
-    u.errorText.textContent = failed ? phase.message : "";
+    setText(u.errorText, failed ? phase.message : "", failed ? { code: uploadErrorCode(phase.message), tip: uploadTip(phase.message) } : {});
     u.errorText.hidden = !failed;
     u.confirmBox.hidden = !(s.confirmStop && busyPhase(phase));
-    u.scopeWhy.textContent = (d.form || phase.kind === "cancelled") && d.sendBlock ? d.sendBlock : "";
-    u.scopeWhy.hidden = !u.scopeWhy.textContent;
+    // 送り始めたら・入れた内容が無くなったら、捨てるかの確かめは下ろす
+    if (s.confirmDiscard && !draftIn(s, d)) s.confirmDiscard = false;
+    u.discardBox.hidden = !s.confirmDiscard;
+    // 送信をキャンセルしたあとは［戻る］が出ないので、受付が終わった提出先の文は次の手の無い形にする
+    const why = (d.form || phase.kind === "cancelled") && d.sendBlock ? (phase.kind === "cancelled" && d.sendBlock === TEXT.stageEnded ? TEXT.stageEndedNoBack : d.sendBlock) : "";
+    setText(u.scopeWhy, why, { tip: uploadTip(why) });
+    u.scopeWhy.hidden = !why;
 
     u.backBtn.hidden = !d.form;
     u.submitBtn.hidden = !d.form;

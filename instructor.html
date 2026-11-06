@@ -10,28 +10,28 @@
 <!-- supabase-js は版を固定し、改ざんされていないことを integrity（SRI）で確かめてから使う（window.supabase）。CSP もこのファイルだけを許す -->
 <!-- defer：読み込みの間も HTML の読み進め（CSS・JS の取りに行き）を止めない。実行の順は今と同じ（下の type="module" より先に、文書の順で実行される） -->
 <script src="https://cdn.jsdelivr.net/npm/@supabase/supabase-js@2.117.2/dist/umd/supabase.js" integrity="sha384-Rj26LVGvoeRVR6+mwQmFfcR3QOBEwT+ZmuCWpuiqeTzJpCs0ER4ITAWGb4Hiy3Ok" crossorigin="anonymous" defer></script>
-<title>A.I.KEN Studio 講師の画面</title>
+<title>A.I.KEN Studio 講師ページ</title>
 <link rel="preconnect" href="https://fonts.googleapis.com">
 <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
 <!-- ログインの確かめ・RPC の接続先へ先につないでおく（supabase-js の fetch は資格情報なしなので crossorigin） -->
 <link rel="preconnect" href="https://tnzwhwitgnzoehbjrmoy.supabase.co" crossorigin>
 <link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=IBM+Plex+Sans+JP:wght@400;500;600;700&amp;display=swap">
-<link rel="stylesheet" href="/r/39015e7c0b2b/site-nav.css">
-<link rel="stylesheet" href="/r/39015e7c0b2b/gsi-button.css">
-<link rel="modulepreload" href="/r/39015e7c0b2b/admin-lib.js">
-<link rel="modulepreload" href="/r/39015e7c0b2b/auth-storage.js">
-<link rel="modulepreload" href="/r/39015e7c0b2b/cohort-close-lib.js">
-<link rel="modulepreload" href="/r/39015e7c0b2b/instructor-list-lib.js">
-<link rel="modulepreload" href="/r/39015e7c0b2b/instructor-list.js">
-<link rel="modulepreload" href="/r/39015e7c0b2b/mypage-lib.js">
-<link rel="modulepreload" href="/r/39015e7c0b2b/poll-lib.js">
-<link rel="modulepreload" href="/r/39015e7c0b2b/share-lib.js">
-<link rel="modulepreload" href="/r/39015e7c0b2b/site-nav.js">
-<link rel="modulepreload" href="/r/39015e7c0b2b/stage-lib.js">
-<link rel="modulepreload" href="/r/39015e7c0b2b/stage-minutes-lib.js">
-<link rel="modulepreload" href="/r/39015e7c0b2b/stage-timer-lib.js">
-<link rel="modulepreload" href="/r/39015e7c0b2b/stage-timer.js">
-<link rel="modulepreload" href="/r/39015e7c0b2b/submissions-lib.js">
+<link rel="stylesheet" href="/r/2751bb45fefd/site-nav.css">
+<link rel="stylesheet" href="/r/2751bb45fefd/gsi-button.css">
+<link rel="modulepreload" href="/r/2751bb45fefd/admin-lib.js">
+<link rel="modulepreload" href="/r/2751bb45fefd/auth-storage.js">
+<link rel="modulepreload" href="/r/2751bb45fefd/cohort-close-lib.js">
+<link rel="modulepreload" href="/r/2751bb45fefd/instructor-list-lib.js">
+<link rel="modulepreload" href="/r/2751bb45fefd/instructor-list.js">
+<link rel="modulepreload" href="/r/2751bb45fefd/mypage-lib.js">
+<link rel="modulepreload" href="/r/2751bb45fefd/poll-lib.js">
+<link rel="modulepreload" href="/r/2751bb45fefd/share-lib.js">
+<link rel="modulepreload" href="/r/2751bb45fefd/site-nav.js">
+<link rel="modulepreload" href="/r/2751bb45fefd/stage-lib.js">
+<link rel="modulepreload" href="/r/2751bb45fefd/stage-minutes-lib.js">
+<link rel="modulepreload" href="/r/2751bb45fefd/stage-timer-lib.js">
+<link rel="modulepreload" href="/r/2751bb45fefd/stage-timer.js">
+<link rel="modulepreload" href="/r/2751bb45fefd/submissions-lib.js">
 <style>
   :root {
     --accent: #26396E; --accent-hover: #1B2B55; --on-accent: #FFFFFF;
@@ -85,6 +85,10 @@
   .ellipsis { white-space: nowrap; overflow: hidden; text-overflow: ellipsis; min-width: 0; }
   .error-text { color: var(--danger); }
   .warn-text { color: var(--warn-fg); font-weight: 600; }
+  /* 2 行の文（1 行目と次の手を改行で分ける。決まり 1）。JS は文の \n をそのまま入れる */
+  .error-text, .warn-text, .hint, .muted, .note-box, #notice .toast p, #notice .toast li { white-space: pre-line; }
+  /* エラーコード（決まり 3.2：最後の文の後ろに小さく薄く「（E-INS-99）」） */
+  .err-code { font-size: 12px; font-weight: 400; color: var(--muted); white-space: nowrap; }
   h1, h2, h3, p { margin: 0; }
   button { font: inherit; color: inherit; cursor: pointer; }
   button:disabled { cursor: not-allowed; }
@@ -170,7 +174,7 @@
     :root { --topbar-h: calc(65px + env(safe-area-inset-top)); } /* 900px 以上。実測 65px */
     .account .btn { min-height: 40px; border-radius: 10px; font-weight: 600; }
   }
-  /* 区分の印は広い幅（900px 以上）だけ。題名「講師の画面」の幅（実測：20px で 101px・18px で 91px）より題名の欄が狭いときは、
+  /* 区分の印は広い幅（900px 以上）だけ。題名「講師ページ」の幅（実測：20px で 101px・18px で 91px）より題名の欄が狭いときは、
      題名を読み上げだけに残す（site-nav.css の container: brand） */
   @media (max-width: 899.98px) { .account .who { display: none; } }
   @media (min-width: 561px) { @container brand (max-width: 102.98px) { .brand h1 { position: absolute; width: 1px; height: 1px; padding: 0; margin: -1px; overflow: hidden; clip: rect(0, 0, 0, 0); white-space: nowrap; border: 0; } } }
@@ -211,6 +215,7 @@
   #notice .toast.ok { border-color: var(--ok-fg); }
   #notice .toast p { overflow-wrap: anywhere; }
   #notice .toast ul { margin: 4px 0 0; padding-left: 18px; }
+  #notice .toast > .btn { flex-shrink: 0; white-space: nowrap; } /* 狭い幅で長い文のとき、［閉じる］が縦に折れないように（組 13 の撮影で見つけた） */
 
   /* ---- 回の見出し ---- */
   .card h2.cohort-name { font-size: 20px; line-height: 1.4; }
@@ -252,8 +257,19 @@
     .wk-row .wk-credits { grid-column: 2; text-align: left; font-size: 13px; }
   }
   .move-row { display: grid; grid-template-columns: 1fr 1fr; gap: 12px; } /* スマホでも横に 2 つ（リストとボタンを同じ画面に収める） */
-  .undo-box { background: var(--accent-soft); border: 1px solid var(--accent-soft-line); color: var(--accent-soft-text); border-radius: 12px; padding: 12px 14px; display: flex; flex-wrap: wrap; gap: 8px 16px; align-items: center; justify-content: space-between; }
-  .undo-lines { display: flex; flex-direction: column; gap: 2px; min-width: 0; flex: 1 1 16em; }
+  /* 取り消せる 60 秒の間は［前の段階へ］を隠すので、［次へ：…］を 1 つで横いっぱいに（組 13 の U-02） */
+  .move-row:has(> #move-back[hidden]) { grid-template-columns: 1fr; }
+  /* 取り消しの箱は 1 行（組 13 の U-02）：「WS3 へ進めました［進めたのを取り消す］あと 45 秒 ?」。狭い幅では折り返す */
+  .undo-box { background: var(--accent-soft); border: 1px solid var(--accent-soft-line); color: var(--accent-soft-text); border-radius: 12px; padding: 10px 14px; display: flex; flex-wrap: wrap; gap: 8px 12px; align-items: center; }
+  .undo-box .undo-text { margin: 0; font-weight: 700; min-width: 0; overflow-wrap: anywhere; }
+  .undo-box .undo-sec { white-space: nowrap; }
+  .undo-help { position: relative; }
+  .undo-help > summary { list-style: none; cursor: pointer; display: inline-flex; align-items: center; justify-content: center; width: 24px; height: 24px; border-radius: 999px; border: 1px solid currentColor; font-size: 13px; font-weight: 700; }
+  .undo-help > summary::-webkit-details-marker { display: none; }
+  .undo-help[open] > p { position: absolute; z-index: 5; top: calc(100% + 6px); right: 0; width: min(280px, calc(100vw - 48px)); margin: 0; padding: 10px 12px; border: 1px solid var(--line-2); border-radius: 10px; background: var(--surface); color: var(--text); box-shadow: 0 8px 24px -12px rgba(15, 23, 42, .3); }
+  /* 先頭のリンクの 1 行（組 13 の U-07）：「← 回の一覧 · 提出作品を見る」 */
+  .link-row { display: flex; flex-wrap: wrap; align-items: center; gap: 0 16px; margin: -4px 0 -8px; }
+  .link-row .back-row { margin: 0; }
   /* 制作時間のタイマー（KT）：ワークショップの札の中。ボタンは折り返す（スマホでも押せる大きさのまま） */
   .timer-box { border-top: 1px solid var(--line-soft); padding-top: 12px; display: flex; flex-direction: column; gap: 8px; }
   .timer-box h3 { margin: 0; font-size: 15px; }
@@ -264,10 +280,26 @@
   .wk-clock { font-size: 26px; font-weight: 700; line-height: 1.1; min-width: 6ch; text-align: right; white-space: nowrap; }
   .wk-clock.ended { color: var(--warn-fg); }
   .wk-clock-end { font-size: 13px; font-weight: 700; margin-left: 6px; }
+  /* 回の見出しの「今」の行の右（組 13 の U-07・U-09）：残りと［大きく表示］ */
+  .wk-clock-wrap { display: inline-flex; align-items: center; gap: 8px; margin-left: auto; }
+  .now-line .now-credits + .wk-clock-wrap { margin-left: 12px; }
+  /* 残りの大きな表示（U-09）：黒地に白。終わったら背景の色と「終了」で示す（色だけに頼らない） */
+  html:has(dialog.timer-screen[open]) { overflow: hidden; }
+  dialog.timer-screen { border: 0; margin: 0; inset: 0; padding: 0; width: 100vw; height: 100vh; max-width: none; max-height: none; background: #0E1322; color: #fff; }
+  dialog.timer-screen::backdrop { background: #0E1322; }
+  .timer-screen-body { height: 100%; display: flex; flex-direction: column; align-items: center; justify-content: center; gap: 2vh; padding: 24px; text-align: center; }
+  .timer-screen-body:fullscreen { width: 100vw; height: 100vh; background: #0E1322; color: #fff; }
+  .timer-screen-note { margin: 0; font-size: 14px; color: #E2E8F0; white-space: pre-line; }
+  .timer-screen-body.ended { background: #8A3B12; }
+  .timer-screen-stage { margin: 0; font-size: clamp(20px, 4vw, 48px); font-weight: 700; overflow-wrap: anywhere; }
+  .timer-screen-time { margin: 0; font-size: 20vw; font-weight: 700; line-height: 1; font-variant-numeric: tabular-nums; }
+  .timer-screen-until { margin: 0; font-size: clamp(18px, 3vw, 36px); font-weight: 700; }
+  .timer-screen-body .btn { margin-top: 2vh; }
   .timer-row { display: flex; flex-wrap: wrap; gap: 8px; align-items: center; }
   .timer-row .btn { min-height: 44px; }
   .timer-row .input { width: 6em; min-height: 44px; }
-  .timer-stage, .timer-warn { margin: 0; overflow-wrap: anywhere; }
+  .timer-warn { margin: 0; overflow-wrap: anywhere; }
+  .timer-more .fold-in { display: flex; flex-direction: column; gap: 8px; padding-top: 4px; }
   .timer-warn { flex: 1 1 16em; }
 
   /* ---- 受講者（広い幅は列の見出しつきの 1 行・狭い幅は 1 人 2 行） ---- */
@@ -324,6 +356,9 @@
   dialog.confirm { border: 1px solid var(--line-2); border-radius: 16px; padding: 24px; width: min(440px, calc(100vw - 32px)); background: var(--surface); color: var(--text); }
   dialog.confirm::backdrop { background: rgba(0, 0, 0, 0.5); }
   dialog.confirm .confirm-body { display: flex; flex-direction: column; gap: 16px; }
+  .confirm-help > summary { list-style: none; cursor: pointer; display: inline-flex; align-items: center; justify-content: center; width: 24px; height: 24px; border-radius: 999px; border: 1px solid currentColor; font-size: 13px; font-weight: 700; }
+  .confirm-help > summary::-webkit-details-marker { display: none; }
+  .confirm-help[open] > p { margin-top: 8px; color: var(--muted); }
   dialog.confirm h2 { font-size: 17px; }
   dialog.confirm p { overflow-wrap: anywhere; }
   dialog.confirm .row { display: flex; flex-wrap: wrap; gap: 8px; justify-content: flex-end; }
@@ -348,7 +383,7 @@
 <body>
 <div id="status" class="center-card" role="status"><p class="muted">読み込み中…</p></div>
 
-<!-- ログイン前：トップ（index.html の #login）と同じ並び。名前の下に小さく「講師の画面」とだけ添える（どの画面か分かるように） -->
+<!-- ログイン前：トップ（index.html の #login）と同じ並び。名前の下に小さく「講師ページ」とだけ添える（どの画面か分かるように） -->
 <section id="login" class="center-card welcome" hidden aria-labelledby="login-title">
   <picture class="brand-logo">
     <source srcset="/img/aiken-logo-white.png" media="(prefers-color-scheme: dark)">
@@ -356,7 +391,7 @@
   </picture>
   <div class="welcome-title">
     <h1 id="login-title">A.I.KEN Studio</h1>
-    <p class="welcome-sub">講師の画面</p>
+    <p class="welcome-sub">講師ページ</p>
   </div>
   <p class="warn-text" id="login-note" role="status" hidden></p>
   <button type="button" class="gsi-btn" id="login-btn"><span class="gsi-g" aria-hidden="true"></span><span class="gsi-label">Google でログイン</span></button>
@@ -371,8 +406,8 @@
 
 <section id="denied" class="center-card" hidden aria-labelledby="denied-title">
   <span class="brand-sub">A.I.KEN Studio</span>
-  <h1 id="denied-title">講師の画面</h1>
-  <p class="error-text" id="denied-message">この画面は担当の講師と管理者だけが使えます。<br>［ログアウト］を押し、次の画面の「別のアカウントでログイン」で、研修で案内されたアカウントを選んでください。<br>入れないときは、管理者に知らせてください。</p>
+  <h1 id="denied-title">講師ページ</h1>
+  <p class="error-text" id="denied-message">ログインエラー：講師の権限がありません。<br>講師は、［ログアウト］を押し、講師のアカウントでログインしてください。<span class="err-code">（E-LOG-53）</span></p>
   <p class="muted small"><span id="denied-email" class="tabular"></span></p>
   <p class="warn-text" id="admin-guide" role="status" hidden></p>
   <div class="row">
@@ -383,10 +418,10 @@
 
 <section id="failed" class="center-card" hidden aria-labelledby="failed-title">
   <span class="brand-sub">A.I.KEN Studio</span>
-  <h1 id="failed-title">講師の画面</h1>
-  <p class="error-text" id="failed-message">読み込めませんでした。</p>
+  <h1 id="failed-title">講師ページ</h1>
+  <p class="error-text" id="failed-message">表示エラーが発生しました。<br>ページを再読み込みしてください。<span class="err-code">（E-INS-99）</span></p>
   <div class="row">
-    <button type="button" class="btn primary" id="retry-btn">もう一度試す</button>
+    <button type="button" class="btn primary" id="retry-btn">再試行</button>
     <button type="button" class="btn" id="failed-logout-btn">ログアウト</button>
   </div>
 </section>
@@ -401,7 +436,7 @@
          ［ログアウト］はアイコンだけ（名前は title と読み上げ。管理者として動いているときは title・読み上げの名前で「管理コンソールのログインを終える」と伝える） -->
     <div class="topbar-inner">
       <div class="brand">
-        <h1>講師の画面</h1>
+        <h1>講師ページ</h1>
       </div>
       <nav class="site-nav" id="site-nav" aria-label="ページの移動" hidden></nav>
       <div class="account">
@@ -420,7 +455,8 @@
 </div>
 
 <dialog id="confirm" class="confirm" aria-labelledby="confirm-title"></dialog>
-<script type="module" src="/r/39015e7c0b2b/topbar-height.js"></script>
-<script type="module" src="/r/39015e7c0b2b/instructor.js"></script>
+<dialog id="timer-screen" class="timer-screen" aria-label="制作時間の残り"></dialog>
+<script type="module" src="/r/2751bb45fefd/topbar-height.js"></script>
+<script type="module" src="/r/2751bb45fefd/instructor.js"></script>
 </body>
 </html>

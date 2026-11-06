@@ -30,6 +30,8 @@ import {
   lowNotice,
   MSG_CODE_FAILED,
   MSG_DENIED,
+  MSG_DENIED_CODE,
+  MSG_DENIED_TIP,
   oauthOptions,
   priceText,
   roleBadgeClass,
@@ -41,6 +43,7 @@ import { createMyUpload } from "./mypage-upload.js";
 import { createPoller, staleAfterThisFailure } from "./poll-lib.js";
 import { createMyShare } from "./mypage-share.js";
 import { closedNote, discardDlKey } from "./share-lib.js";
+import { errorCodeLabel } from "./submissions-lib.js";
 
 // 他のサイトに埋め込まれて操作させられるのを防ぐ（GitHub Pages では frame-ancestors を指定できないため。admin.js と同じ）
 if (window.top !== window.self) {
@@ -92,7 +95,7 @@ discardDlKey(browserStorage("session"));
 // 読み込めない（通信の失敗・integrity の不一致）ときは先へ進まない。
 // トップの役目（サービスの説明・方針と規約へのリンク）は残すため、ログイン前の画面をボタンを押せない形で出す
 if (typeof window.supabase?.createClient !== "function") {
-  $("login-note").textContent = "画面を表示できませんでした。インターネットの接続を確かめて、ページを開き直してください。";
+  $("login-note").textContent = "表示エラー：画面を読み込めません。\nページを再読み込みしてください。";
   $("login-note").hidden = false;
   document.getElementById("login-btn").disabled = true; // 末尾のボタンの登録とは書き方を分ける（試験が末尾の登録の位置で区切って読むため）
   document.getElementById("login-other-btn").disabled = true;
@@ -123,6 +126,22 @@ function el(tag, { className, text, attrs } = {}, ...children) {
   for (const [k, v] of Object.entries(attrs ?? {})) node.setAttribute(k, v);
   for (const c of children) if (c) node.append(c);
   return node;
+}
+
+/**
+ * 断りの文を出す（textContent）。エラーコードがあれば最後の文の後ろに小さく薄く「（E-LOG-99）」（D-1104-130x-b・決まり 3.2 の案 A）、
+ * ホバーの補足があれば title に置く（無ければ title を外す）。文の 1 行目と次の手は「\n」で分ける（CSS は white-space: pre-line）
+ */
+function setMessage(node, text, { code = null, tip = null } = {}) {
+  node.textContent = text;
+  if (code) node.append(el("span", { className: "err-code muted small", text: errorCodeLabel(code) }));
+  if (tip) node.setAttribute("title", tip);
+  else node.removeAttribute("title");
+}
+
+/** 「登録されていない」画面の文（コードは最後の文の後ろに 1 回だけ。入れないときの連絡先はホバー） */
+function setDenied(text) {
+  setMessage($("denied-message"), text, { code: MSG_DENIED_CODE, tip: MSG_DENIED_TIP });
 }
 
 // ---- ログイン・ログアウト ----
@@ -158,7 +177,7 @@ let lastSuccessAt = null;
 const requests = createRequestCounter();
 
 /** 本人のデータを画面から消して、読み込み中の表示にする（ログアウトの通信を待つ間・画面を離れるときに、前の人の画面を残さない） */
-function hideContent(message = "ログアウトしています…") {
+function hideContent(message = "ログアウト中…") {
   // マイページからの提出のダイアログを閉じる（送っている途中なら送信を止め、cancel を 1 回試す）。ボタンも隠す
   myUpload.clear();
   // 約 10 秒の読み直しを止める（ログアウトのあとに予約の時刻が来ても読まない）
@@ -169,7 +188,7 @@ function hideContent(message = "ログアウトしています…") {
   $("me-role").textContent = "";
   $("me-role").hidden = true;
   renderSiteNav($("site-nav"), null, "mypage");
-  $("denied-message").textContent = MSG_DENIED;
+  setDenied(MSG_DENIED);
   $("checked-at").textContent = "";
   $("checked-at").hidden = true;
   $("credits-value").textContent = "—";
@@ -323,6 +342,8 @@ const mySubmissions = createMySubmissions({
   listEl: $("submissions-list"),
   statusEl: $("submissions-status"),
   metaEl: $("submissions-meta"),
+  helpEl: $("submissions-help"),
+  helpBodyEl: $("submissions-help-body"),
   dialog: $("my-dialog"),
   apiBase: SUBMISSIONS_API_URL,
   apiKey: SUPABASE_PUBLISHABLE_KEY,
@@ -485,15 +506,15 @@ async function load({ mode = "initial" } = {}) {
         $("closed-message").textContent = closedNote(closedShare.issueUntil());
         show("closed");
       } else {
-        $("denied-message").textContent = deniedMessage(now?.user?.email ?? null);
+        setDenied(deniedMessage(now?.user?.email ?? null));
         show("denied");
       }
     } else if (inApp) {
       // 約 10 秒の読み直しの失敗は、続けて 3 回目から出す（1・2 回の一時的な失敗では赤い枠を出さない）
-      if (!poll || staleAfterThisFailure(poller.failures())) showRefreshError(outcome.message);
+      if (!poll || staleAfterThisFailure(poller.failures())) showRefreshError(outcome.message, outcome.code);
       result = "fail";
     } else {
-      $("failed-message").textContent = outcome.message;
+      setMessage($("failed-message"), outcome.message, { code: outcome.code ?? null });
       show("failed");
       result = "fail";
     }
@@ -514,18 +535,19 @@ function renderCheckedAt() {
   $("checked-at").hidden = !text;
 }
 
-/** 本人の画面からの更新に失敗したとき：表示は前回の成功の時点のまま、理由と［もう一度試す］を出す（時刻は進めない） */
-function showRefreshError(message) {
-  const at = checkedAtText(lastSuccessAt);
-  const when = at ? `表示は ${at.replace("確認 ", "")} の時点のものです。` : "";
-  $("refresh-error-text").textContent = `${message}${when}`;
+/**
+ * 本人の画面からの更新に失敗したとき：表示は前回の成功の時点のまま、理由と［再試行］を出す（時刻は進めない）。
+ * いつの時点の表示かは見出しの右の「13:42 時点」（checked-at。失敗では進めない）が言うので、文には足さない
+ */
+function showRefreshError(message, code = null) {
+  setMessage($("refresh-error-text"), message, { code });
   $("refresh-error").hidden = false;
 }
 
 function hideRefreshError() {
   const box = $("refresh-error");
   if (box.hidden) return;
-  // ［もう一度試す］にフォーカスがあったら、消す前に ⟳ へ移す（フォーカスを失わない）
+  // ［再試行］にフォーカスがあったら、消す前に ⟳ へ移す（フォーカスを失わない）
   if (box.contains(document.activeElement)) $("reload-btn").focus();
   box.hidden = true;
   $("refresh-error-text").textContent = "";
@@ -539,7 +561,7 @@ function announceUpdate(mode, before, lowBefore = "") {
   const after = $("credits-value").textContent;
   const at = checkedAtText(lastSuccessAt) ?? "";
   if (mode === "manual") {
-    $("live").textContent = `最新の状態を読み込みました。残りクレジット ${after}。${at}`;
+    $("live").textContent = `更新しました。残りクレジット ${after}。${at}`;
   } else if (mode === "return" && before !== after) {
     $("live").textContent = `残りクレジットが ${after} になりました。`;
   } else if (mode === "poll") {
@@ -630,17 +652,18 @@ function renderStages(v) {
   const name = $("stage-name");
   name.replaceChildren();
   name.hidden = !v.stageName;
-  if (v.stageName) name.append(el("span", { className: "label", text: "今の段階" }), document.createTextNode(v.stageName));
+  // 受講者の画面には「段階」を出さない（文言の決まり 2.3）
+  if (v.stageName) name.append(el("span", { className: "label", text: "現在" }), document.createTextNode(v.stageName));
   const hasList = v.stages.length > 0;
   // 一覧が無くなるとき、フォーカスがその中にあったら、主カードの見出しへ移して理由を知らせる（行き場の無いフォーカスにしない）
   const group = $("stages-group");
   if (!hasList && !group.hidden && group.contains(document.activeElement)) {
     $("credits-title").focus();
-    $("live").textContent = "今日の段階の一覧はなくなりました。";
+    $("live").textContent = "今日のワークショップはありません。";
   }
   group.hidden = !hasList;
   syncPair();
-  $("stages-meta").textContent = hasList ? `${v.stages.length} 段階` : "";
+  $("stages-meta").textContent = hasList ? `${v.stages.length} 件` : "";
   $("stages").replaceChildren(
     ...v.stages.map((s) =>
       el(
@@ -650,7 +673,8 @@ function renderStages(v) {
           "span",
           { className: "name" },
           el("span", { text: s.name }),
-          s.current ? el("span", { className: "tag tone-ok", text: "今" }) : null,
+          // 「今」はほかの画面（講師ページ・提出作品・管理コンソール）と同じ紺の札（緑は成功・済みの色。組 13 の U-13。CSS は index.html の .tag.now）
+          s.current ? el("span", { className: "tag now", text: "今" }) : null,
         ),
         el("span", { className: "num", text: `${s.usedText}・${s.limitText}` }),
       )
@@ -665,7 +689,7 @@ function renderModels(models) {
   $("models-empty").hidden = count > 0;
   $("models-meta").textContent = count > 0 ? `${count} 件` : "";
   if (!groups.length) {
-    $("models").replaceChildren(el("p", { className: "muted", text: "今は、使えるモデルがありません。講師・スタッフに知らせてください。" }));
+    $("models").replaceChildren(el("p", { className: "muted", text: "使えるモデルはありません。\n講師・スタッフにお知らせください。" }));
     return;
   }
   $("models").replaceChildren(
@@ -706,7 +730,7 @@ async function main() {
   if (params.get("error_description") || hash.get("error_description")) {
     // 文言は誰でも書き換えられるので、URL の内容は表示しない
     history.replaceState(null, "", returnUrl());
-    showLoginNote("ログインできませんでした。もう一度ログインしてください。");
+    showLoginNote("ログインできませんでした。\n再度ログインしてください。");
     show("login");
     return;
   }
@@ -721,7 +745,7 @@ async function main() {
     return;
   }
   if (error) {
-    $("failed-message").textContent = "ログイン状態を確認できませんでした。もう一度試してください。";
+    setMessage($("failed-message"), "ログインエラー：状態を確認できません。\n［再試行］を押してください。");
     show("failed");
     return;
   }
@@ -820,6 +844,7 @@ $("connect-fold").addEventListener("click", (e) => {
 });
 
 main().catch(() => {
-  $("failed-message").textContent = "エラーが発生しました。ページを開き直してください。";
+  // 原因が分からない起動の失敗（E-LOG-99）。index.html の #failed の初めの文と同じ文・同じコード
+  setMessage($("failed-message"), "表示エラーが発生しました。\nページを再読み込みしてください。", { code: "E-LOG-99" });
   show("failed");
 });

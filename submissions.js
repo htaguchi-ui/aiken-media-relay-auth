@@ -22,8 +22,9 @@ import {
   takeStoredSession,
 } from "./auth-storage.js";
 import { MSG_CODE_FAILED, oauthOptions } from "./mypage-lib.js";
-import { explainError, isStageSchemaMissing, MSG_STAGE_NOT_READY, normalizeEmail, rejectionName } from "./admin-lib.js";
-import { clientOrder, instructorCohortLabel, normalizeInstructorCohorts } from "./stage-lib.js";
+import { errorCode, errorText, isStageSchemaMissing, normalizeEmail, rejectionName } from "./admin-lib.js";
+import { clientOrder, instructorCohortLabel, MSG_PAGE_NOT_READY, normalizeInstructorCohorts, withAdminLine } from "./stage-lib.js";
+import { initialSubmissionsCohortId, requestedCohortId } from "./instructor-list-lib.js";
 import { fillIcons, renderSiteNav } from "./site-nav.js";
 import { discardDlKey } from "./share-lib.js";
 import { createPoller } from "./poll-lib.js";
@@ -51,7 +52,7 @@ import {
 // 他のサイトに埋め込まれて操作させられるのを防ぐ（マイページ・管理コンソール・講師ページと同じ）
 if (window.top !== window.self) {
   document.documentElement.hidden = true;
-  throw new Error("提出の画面は埋め込みでは使えません");
+  throw new Error("提出作品は埋め込みでは使えません。");
 }
 
 // ===== 共通の認証・ログアウト・管理者として使う部分（instructor.js と同じ文字。ここから） =====
@@ -97,7 +98,7 @@ discardDlKey(browserStorage("session"));
 
 // 読み込めない（通信の失敗・integrity の不一致）ときは先へ進まない
 if (typeof window.supabase?.createClient !== "function") {
-  $("status").replaceChildren(el("p", { text: "画面を読み込めませんでした。" }), el("p", { text: "通信を確かめて開き直してください。" }));
+  $("status").replaceChildren(el("p", { text: "表示エラー：画面を読み込めません。" }), el("p", { text: "ページを再読み込みしてください。" }));
   throw new Error("supabase-js を読み込めませんでした");
 }
 
@@ -130,6 +131,14 @@ function el(tag, props = {}, ...children) {
   return node;
 }
 
+/**
+ * エラーコードの札（決まり 3.2：最後の文の後ろに小さく薄く「（E-INS-99）」。コードは文の定数に入れず、別の値で持つ）。
+ * 文は textContent に入れ、この札だけを子にする（el の子に渡す。code が無ければ null）
+ */
+function codeTag(code) {
+  return code ? el("span", { className: "err-code", text: `（${code}）` }) : null;
+}
+
 // ---- ログイン・ログアウト ----
 
 /** Google のログインへ移る。ふつうはアカウントを選ぶ画面を出さず、「別のアカウントでログイン」のときだけ出す（決定 70） */
@@ -151,7 +160,7 @@ async function endSession() {
 }
 
 /** 本人のデータを画面から消して、読み込み中の表示にする（ログアウトの通信を待つ間・画面を離れるときに、前の人の画面を残さない） */
-function hideContent(message = "ログアウトしています…") {
+function hideContent(message = "ログアウト中…") {
   poller.stop(); // 約 10 秒の読み直しを止める（ログアウトのあとに予約の時刻が来ても読まない）
   $("me-email").textContent = "";
   $("me-email").removeAttribute("title");
@@ -173,6 +182,8 @@ function hideContent(message = "ログアウトしています…") {
   state.stageId = null;
   state.selectedWorkId = null;
   ui.openFolds.clear();
+  ui.stagesOpen = false;
+  ui.stagesAll = false;
   $("status").replaceChildren(el("p", { className: "muted", text: message }));
   show("status");
 }
@@ -230,7 +241,7 @@ function startWatch(userId) {
 
 const NOTICE_MAX = 3;
 
-function notify(message, kind = "ok", details = []) {
+function notify(message, kind = "ok", details = [], code = null) {
   if (ending) return; // ログアウトの途中は、遅れて届いた結果を知らせない
   const box = $("notice");
   const node = el(
@@ -239,8 +250,8 @@ function notify(message, kind = "ok", details = []) {
     el(
       "div",
       {},
-      el("p", { text: message }),
-      details.length ? el("ul", {}, ...details.map((d) => el("li", { text: d }))) : null,
+      el("p", { text: message }, details.length ? null : codeTag(code)),
+      details.length ? el("ul", {}, ...details.map((d, i) => el("li", { text: d }, i === details.length - 1 ? codeTag(code) : null))) : null,
     ),
     el("button", { type: "button", className: "btn compact", text: "閉じる", onclick: () => node.remove() }),
   );
@@ -253,13 +264,13 @@ function clearNotice() {
   $("notice").replaceChildren();
 }
 
-// ---- 確認のダイアログ（既定は「やめる」） ----
+// ---- 確認のダイアログ（既定は［キャンセル］） ----
 
 /**
- * 確認を出す。「やめる」が最初にフォーカスされ、Esc でもやめる。続けるなら true。
+ * 確認を出す。［キャンセル］が最初にフォーカスされ、Esc でもキャンセル。続けるなら true。help があれば窓の ？ の中に出す（1 個まで）。
  * 押されたボタンで直接決める（close イベントの returnValue は、続けて開き直したときに前のダイアログの分と取り違える）
  */
-function confirmDialog({ title, lines, okText, danger = false }) {
+function confirmDialog({ title, lines, okText, danger = false, help = "" }) {
   const dialog = $("confirm");
   return new Promise((resolve) => {
     const ctl = new AbortController();
@@ -269,12 +280,15 @@ function confirmDialog({ title, lines, okText, danger = false }) {
       if (dialog.open) dialog.close();
       resolve(value);
     };
-    const cancel = el("button", { type: "button", className: "btn big", text: "やめる", autofocus: true, onclick: () => finish(false) });
+    const cancel = el("button", { type: "button", className: "btn big", text: "キャンセル", autofocus: true, onclick: () => finish(false) });
     const ok = el("button", { type: "button", className: danger ? "btn danger big" : "btn primary big", text: okText, onclick: () => finish(true) });
+    const more = help
+      ? el("details", { className: "confirm-help", id: "confirm-help" }, el("summary", { "aria-label": "くわしく", text: "?" }), el("p", { className: "small", text: help }))
+      : null;
     dialog.replaceChildren(
-      el("div", { className: "confirm-body" }, el("h2", { id: "confirm-title", text: title }), ...lines.map((t) => el("p", { text: t })), el("div", { className: "row" }, cancel, ok)),
+      el("div", { className: "confirm-body" }, el("h2", { id: "confirm-title", text: title }), ...lines.map((t) => el("p", { text: t })), more, el("div", { className: "row" }, cancel, ok)),
     );
-    // Esc は、閉じる前に止めて、やめるとして扱う
+    // Esc は、閉じる前に止めて、キャンセルとして扱う
     dialog.addEventListener("cancel", (e) => {
       e.preventDefault();
       finish(false);
@@ -303,11 +317,23 @@ function closeIdentity() {
   }
 }
 
-/** 画面に出す失敗（読み込みの失敗）：どの画面にするかを決める */
+/**
+ * 画面に出す失敗（読み込みの失敗）：どの画面にするかを決める。failed は { message（前置き「読み込みエラー：」付きの完成した文）, code }。
+ * 表示する所は message をそのまま出す（前置きを重ねない。決まり 3.7）。50 番台は 2 行目「管理者にお知らせください。」（withAdminLine）
+ */
 function loadFailure(error) {
   if (rejectionName(error) === "instructor_only" || String(error?.code) === "42501") return { action: "denied" };
-  if (isStageSchemaMissing(error)) return { action: "failed", message: `講師の画面は、まだ使えません。${MSG_STAGE_NOT_READY}` };
-  return { action: "failed", message: explainError(error) };
+  if (isStageSchemaMissing(error)) return { action: "failed", message: withAdminLine(`読み込みエラー：${MSG_PAGE_NOT_READY}`, "E-ADM-50"), code: "E-ADM-50" };
+  const code = errorCode("読み込み", error, { area: ERROR_AREA });
+  return { action: "failed", message: withAdminLine(errorText("読み込み", error), code), code };
+}
+
+/** 失敗の画面（#failed）に文とエラーコードを出す */
+function showFailed(message, code = null) {
+  $("failed-message").textContent = message;
+  const tag = codeTag(code);
+  if (tag) $("failed-message").append(tag);
+  show("failed");
 }
 
 /** first：もう受け取った instructor_cohorts の答え（chooseClient の 1 回目。同じ部品・同じ問い合わせを 2 回送らない）。無ければ読む */
@@ -329,11 +355,11 @@ async function loadCohorts(first = null) {
 // 古い管理コンソールの鍵（aiken-studio-admin-auth）は読まない。
 
 /** 管理者として動いているときの［ログアウト］の title：管理コンソールのログインだけを終え、共有のログイン（マイページ・Canvas）は残す */
-const MSG_END_ADMIN_CONSOLE = "管理コンソールのログインだけを終えます（マイページ・Canvas のログインはそのまま）";
-const MSG_ADMIN_CONSOLE_NEEDED = "管理者として講師ページを使うには、管理コンソールでログインしてから開いてください。";
-// ログインの画面でだけ、管理者向けの案内の前に置く（講師が迷わないように。田口さん 2026-10-23）
-const MSG_TEACHER_LOGIN_FIRST = "講師の方は、「Google でログイン」のボタンから入ってください。";
-const MSG_ADMIN_CONSOLE_EXPIRED ="管理コンソールのログインから 12 時間たちました。管理コンソールでもう一度ログインしてから開いてください。";
+const MSG_END_ADMIN_CONSOLE = "管理コンソールだけログアウトします（マイページ・Canvas はそのまま）。";
+const MSG_ADMIN_CONSOLE_NEEDED = "管理者は、先に管理コンソールでログインしてください。";
+// ログインの画面でだけ、管理者向けの案内の前の行に置く（講師が迷わないように。田口さん 2026-10-23）
+const MSG_TEACHER_LOGIN_FIRST = "講師は、［Google でログイン］を押してください。";
+const MSG_ADMIN_CONSOLE_EXPIRED = "管理コンソールのログインが無効です。\n管理コンソールで再度ログインしてください。";
 
 /** 管理者として動いている間の { client, expiresAt, userId }（講師・ログイン前は null） */
 let adminSession = null;
@@ -461,10 +487,10 @@ function enterAdminMode(r) {
   });
 }
 
-/** 上部の表示：「管理者として操作中（管理コンソールのログイン・〜HH:MM まで）· メール」 */
+/** 上部の表示：「管理者として操作中（〜HH:MM）· メール」 */
 function adminWho() {
   const until = new Date(adminSession.expiresAt).toLocaleTimeString("ja-JP", { hour: "2-digit", minute: "2-digit" });
-  return `管理者として操作中（管理コンソールのログイン・〜${until} まで）· ${state.myEmail}`;
+  return `管理者として操作中（〜${until}）· ${state.myEmail}`;
 }
 
 /**
@@ -500,6 +526,7 @@ function leaveAdmin(message) {
   hideContent("");
   ending = true;
   adminSession = null;
+  $("denied-message").hidden = true;
   showAdminHint(message);
   show("denied");
 }
@@ -558,16 +585,23 @@ const state = {
   cohortId: null,
   /** submission_stage_overview を読んだもの（normalizeStageOverview）。null は未読込 */
   overview: null,
+  /** 読めなかったときの文（「読み込みエラー：…」の完成した文）とエラーコード（決まり 3.2。無ければ null） */
   overviewError: "",
+  overviewErrorCode: null,
   stageId: null,
   /** submission_stage_works を読んだもの（normalizeStageWorks）。null は未読込 */
   works: null,
   worksError: "",
+  worksErrorCode: null,
   selectedWorkId: null,
 };
 
-/** 画面だけの状態（描き直しても残す。hideContent が空にする） */
-const ui = { openFolds: new Set(), playerEl: null, worksSlots: null, clock: null, now: Date.now() };
+/**
+ * 画面だけの状態（描き直しても残す。hideContent が空にする）。
+ * stagesOpen：段階の一覧を開いているか（ふだんは選んでいる段階の 1 行に畳む。組 13 の U-03）／stagesAll：開いた一覧にほかの日の段階も出すか。
+ * pickCohort・requestedCohort：開いたときに 1 回だけ回を選ぶ印と、講師ページから ?c= で渡された回（U-03。開始の所で入れる）
+ */
+const ui = { openFolds: new Set(), playerEl: null, worksSlots: null, clock: null, now: Date.now(), stagesOpen: false, stagesAll: false, pickCohort: false, requestedCohort: null };
 
 function stageById(id) {
   return state.overview?.stages.find((s) => s.stageId === id) ?? null;
@@ -579,6 +613,12 @@ function defaultStageId(ov) {
 }
 
 // ---- 読み込み ----
+
+/** 原因が分からない失敗のエラーコードの領域（決まり 3.2：提出作品＝WRK。講師ページは INS）。loadFailure（2 つの画面で同じ文字）・loadErrorOf が使う */
+const ERROR_AREA = "WRK";
+
+/** 応答の形が違う（利用者には原因が分からない失敗。E-WRK-99） */
+const MSG_INVALID_RESPONSE = { message: "読み込みエラーが発生しました。\n［最新にする］を押してください。", code: "E-WRK-99" };
 
 /** 読み込みの通し番号。古い応答（あとから始めた読み込み・回や段階を替えたあとのもの）は捨てる */
 let overviewSeq = 0;
@@ -595,16 +635,17 @@ async function loadOverview() {
   const { data, error } = await rpc(SUBMISSION_RPC.stageOverview, { p_cohort_id: requested });
   if (ending || requested !== state.cohortId || seq !== overviewSeq) return true; // 古い応答は使わない
   if (error) {
-    state.overviewError = loadErrorText(error);
+    ({ message: state.overviewError, code: state.overviewErrorCode } = loadErrorOf(error));
     return false;
   }
   const ov = normalizeStageOverview(data);
   if (!ov) {
-    state.overviewError = "提出の状態を読み込めませんでした（応答の形が違います）。";
+    ({ message: state.overviewError, code: state.overviewErrorCode } = MSG_INVALID_RESPONSE);
     return false;
   }
   state.overview = ov;
   state.overviewError = "";
+  state.overviewErrorCode = null;
   if (!stageById(state.stageId)) state.stageId = defaultStageId(ov);
   return true;
 }
@@ -621,29 +662,46 @@ async function loadWorks() {
   const { data, error } = await rpc(SUBMISSION_RPC.stageWorks, { p_cohort_id: cohort, p_stage_id: stageId });
   if (ending || cohort !== state.cohortId || stageId !== state.stageId || seq !== worksSeq) return true;
   if (error) {
-    state.worksError = loadErrorText(error);
+    ({ message: state.worksError, code: state.worksErrorCode } = loadErrorOf(error));
     return false;
   }
   const w = normalizeStageWorks(data);
   if (!w) {
-    state.worksError = "作品の一覧を読み込めませんでした（応答の形が違います）。";
+    ({ message: state.worksError, code: state.worksErrorCode } = MSG_INVALID_RESPONSE);
     return false;
   }
   state.works = w;
   state.worksError = "";
+  state.worksErrorCode = null;
   syncPlayerButtons(); // 定期読込で公開範囲・名簿上の扱いが変わったら、URL の後着より先に止める
   return true;
 }
 
-/** 失敗の文。DB の日本語の hint は explainError が拾う。提出の RPC がまだ無い（公開前）ときは、その旨 */
-function loadErrorText(error) {
-  if (String(error?.code) === "PGRST202" || String(error?.code) === "42883") return "提出の機能は、まだ使えません。";
-  return explainError(error);
+/** 失敗の文とコード：{ message（「読み込みエラー：…」の完成した文）, code }。提出の RPC がまだ無い（公開前）ときは、その旨（E-WRK-50）。
+ * 表示する所は message をそのまま出す（前置きを重ねない。決まり 3.7）。50 番台は 2 行目「管理者にお知らせください。」
+ */
+function loadErrorOf(error) {
+  if (String(error?.code) === "PGRST202" || String(error?.code) === "42883") {
+    return { message: withAdminLine("読み込みエラー：提出の機能は、まだ使えません。", "E-WRK-50"), code: "E-WRK-50" };
+  }
+  const code = errorCode("読み込み", error, { area: ERROR_AREA });
+  return { message: withAdminLine(errorText("読み込み", error), code), code };
+}
+
+/** 一覧・作品の読み込みの失敗の知らせ（先に失敗した方の文とコード） */
+function notifyLoadError() {
+  if (state.overviewError) notify(state.overviewError, "error", [], state.overviewErrorCode);
+  else notify(state.worksError, "error", [], state.worksErrorCode);
 }
 
 async function loadCohortsAndOverview(first = null) {
   const c = await loadCohorts(first);
   if (ending || c.stale || c.error) return { c, ok: false };
+  if (ui.pickCohort) {
+    // 開いたときに 1 回だけ（U-03）：講師ページから渡された回（?c=）が担当にあればその回。無ければ講師ページの一覧と同じ並び（実施中が先）の先頭
+    ui.pickCohort = false;
+    state.cohortId = initialSubmissionsCohortId(state.cohorts, ui.requestedCohort);
+  }
   const ok = await loadOverview();
   if (ending) return { c, ok: false };
   return { c, ok: ok && (await loadWorks()) };
@@ -687,19 +745,19 @@ async function load({ fromApp = false, cohorts = null } = {}) {
         const { data } = await activeClient().auth.getSession();
         if (ending) return;
         $("denied-email").textContent = data?.session?.user?.email ?? "";
+        $("denied-message").hidden = false;
         // 管理者は、管理コンソールでログインしてから開く（設計書 5.3.1 の 3）
         if (!adminSession) showAdminHint(adminHint ?? MSG_ADMIN_CONSOLE_NEEDED);
         show("denied");
       } else if (!fromApp || !state.cohorts.length) {
-        $("failed-message").textContent = f.message;
-        show("failed");
+        showFailed(f.message, f.code);
       } else {
-        notify(`読み込み直せませんでした。${f.message}`, "error");
+        notify(f.message, "error", [], f.code);
       }
       return;
     }
     if (ending) return;
-    if (!ok && fromApp) notify(`最新の状態を読み込めませんでした。${state.overviewError || state.worksError}`, "error");
+    if (!ok && fromApp) notifyLoadError();
     $("me-email").textContent = adminSession ? adminWho() : state.myEmail;
     $("me-email").title = state.myEmail;
     const role = $("me-role");
@@ -724,6 +782,8 @@ async function reloadAfterCohortChange() {
   state.stageId = null;
   state.selectedWorkId = null;
   ui.openFolds.clear();
+  ui.stagesOpen = false;
+  ui.stagesAll = false;
   render();
   const ok = await loadOverview();
   if (ending) return;
@@ -736,7 +796,7 @@ async function reloadAfterCohortChange() {
 async function reloadWorks() {
   const ok = await loadWorks();
   if (ending) return;
-  if (!ok) notify(`作品の一覧を読み込めませんでした。${state.worksError}`, "error");
+  if (!ok) notify(state.worksError, "error", [], state.worksErrorCode);
   renderStages();
   renderWorks();
 }
@@ -757,7 +817,7 @@ function refreshAll({ quiet = false } = {}) {
     if (!quiet && refreshingQuiet) {
       refreshingQuiet = false;
       void refreshing.then((r) => {
-        if (r === "fail" && !ending) notify(`最新の状態を読み込めませんでした。${state.overviewError || state.worksError}`, "error");
+        if (r === "fail" && !ending) notifyLoadError();
       });
     }
     return refreshing;
@@ -768,7 +828,7 @@ function refreshAll({ quiet = false } = {}) {
       const a = await loadOverview();
       const b = a ? await loadWorks() : false;
       if (ending) return "skip";
-      if (!(a && b) && !quiet) notify(`最新の状態を読み込めませんでした。${state.overviewError || state.worksError}`, "error");
+      if (!(a && b) && !quiet) notifyLoadError();
       ui.now = Date.now();
       renderStages();
       renderWorks();
@@ -797,7 +857,7 @@ function schedulePoll() {
   // 一覧の読み直し（何度呼んでもよい。予約は 1 つだけ）
   poller.start();
   if (ui.clock) return;
-  // 「あと ○ 分受け付けます」を書き換える
+  // 「受付中・残り ○ 分」を書き換える
   ui.clock = setInterval(() => {
     if (ending || $("app").hidden) return;
     ui.now = Date.now();
@@ -807,11 +867,14 @@ function schedulePoll() {
 
 // ---- 再生（設計 2.7・4.7。画面は置き場を知らず、サーバーが返した署名つき URL を使う） ----
 
-/** 再生の URL を求める。URL は DB にもログにも残さない。失敗は文つきの Error */
-async function fetchPlaybackUrl(workId) {
+/**
+ * 再生の URL を求める。URL は DB にもログにも残さない。失敗は文つきの Error（code はエラーコード）。
+ * screening：上映の中から呼ぶ（上映の中では［最新にする］を押せないので、2 行目を「上映を閉じて…」にする）
+ */
+async function fetchPlaybackUrl(workId, { screening = false } = {}) {
   const { data } = await activeClient().auth.getSession();
   const token = data?.session?.access_token;
-  if (!token) throw new Error("ログインの期限が切れました。ページを開き直してください。");
+  if (!token) throw playbackError(MSG_PLAYBACK_EXPIRED);
   let res;
   try {
     res = await fetch(`${SUPABASE_URL}/functions/v1/submissions/playback`, {
@@ -823,31 +886,51 @@ async function fetchPlaybackUrl(workId) {
       credentials: "omit",
     });
   } catch {
-    throw new Error("通信できませんでした。通信状態を確かめてください。");
+    // 次の手は 1 つ（押した操作か自動かで分けない。決まり 1）
+    throw playbackError("通信エラー：接続できませんでした。\nインターネット接続を確認してください。");
   }
   const body = await res.json().catch(() => null);
   const code = body?.error?.code ?? (typeof body?.error === "string" ? body.error : null) ?? body?.code ?? null;
-  if (!res.ok) throw new Error(playbackErrorText(res.status, code));
-  if (typeof body?.url !== "string" || !body.url) throw new Error("再生の URL を受け取れませんでした。");
+  if (!res.ok) throw playbackError(playbackErrorText(res.status, code, { screening }), playbackErrorCode(res.status, code));
+  if (typeof body?.url !== "string" || !body.url) throw playbackError(MSG_PLAYBACK_FAILED, "E-WRK-99");
   return body.url;
 }
 
-function playbackErrorText(status, code) {
-  const paused = submissionsPauseText(code);
+function playbackErrorText(status, code, { screening = false } = {}) {
+  const paused = submissionsPauseText(code, { viewer: "instructor" });
   if (paused) return paused;
-  if (code === "cold_unavailable") return "この作品は保管庫に移っているため、まだ再生できません。";
-  if (status === 404) return "この作品は再生できません（取り下げられたか、見る権限がありません）。最新にしてください。";
-  if (status === 401 || status === 403) return "再生する権限がありません。ページを開き直してください。";
-  if (status === 429 || status === 503) return "混み合っています。少し待ってから、もう一度押してください。";
-  return "再生の準備ができませんでした。少し待ってから、もう一度押してください。";
+  if (code === "cold_unavailable") return "この作品は現在再生できません。";
+  if (status === 404) return `再生エラー：作品が見つかりません。\n${screening ? "上映を閉じて［最新にする］を押してください。" : "［最新にする］を押してください。"}`;
+  if (status === 401) return MSG_PLAYBACK_EXPIRED;
+  if (status === 403) return "再生エラー：権限がありません。\nページを再読み込みしてください。";
+  if (status === 429 || status === 503) return "混雑しています。\nしばらくしてから再度お試しください。";
+  return MSG_PLAYBACK_FAILED;
+}
+
+/** playbackErrorText の文のエラーコード（理由が分からない物だけ E-WRK-99） */
+function playbackErrorCode(status, code) {
+  if (submissionsPauseText(code) || code === "cold_unavailable" || [401, 403, 404, 429, 503].includes(status)) return null;
+  return "E-WRK-99";
+}
+
+/** 再生の失敗の文（理由が分からない物・例外。E-WRK-99） */
+const MSG_PLAYBACK_FAILED = "再生エラーが発生しました。\nしばらくしてから再度お試しください。";
+const MSG_PLAYBACK_EXPIRED = "ログインの有効期限が切れました。\nページを再読み込みしてください。";
+/** 文とエラーコード（決まり 3.2。無ければ null）を持つ Error */
+function playbackError(message, code = null) {
+  const err = new Error(message);
+  err.code = code;
+  return err;
 }
 
 /**
- * 動画の部品（プレーヤー・上映で共通）。load(workId, { autoplay }) で URL を求めて入れる。
+ * 動画の部品（プレーヤー・上映で共通）。load(workId, { autoplay, pressed }) で URL を求めて入れる。
+ * pressed は講師が押した操作（選ぶ・再生・前後・キー）。自動（［順に再生］の次の作品）は false。失敗の文は同じ（次の手は 1 つ）。
+ * onMessage(文, エラーコード)。screening：上映の中の部品（失敗の文の 2 行目を上映向けにする）。
  * 再生中に URL が切れて止まったら（error）、URL を取り直して同じ位置から続ける（1 つの作品で 2 回まで）。
  * 古い要求（別の作品を選んだあとに届いたもの）は捨てる
  */
-function createVideoBox(onMessage) {
+function createVideoBox(onMessage, { screening = false } = {}) {
   const video = document.createElement("video");
   video.controls = true;
   video.playsInline = true;
@@ -857,38 +940,38 @@ function createVideoBox(onMessage) {
   let token = 0;
   let current = null;
   let retries = 0;
-  async function load(workId, { autoplay }) {
+  async function load(workId, { autoplay, pressed = false }) {
     const my = ++token;
     current = workId;
     retries = 0;
     onMessage("");
     try {
-      const url = await fetchPlaybackUrl(workId);
+      const url = await fetchPlaybackUrl(workId, { screening });
       if (my !== token) return;
       video.src = url;
       if (autoplay) await video.play().catch(() => {});
     } catch (e) {
-      if (my === token) onMessage(e instanceof Error ? e.message : "再生の準備ができませんでした。");
+      if (my === token) onMessage(...(e instanceof Error ? [e.message, e.code ?? null] : [MSG_PLAYBACK_FAILED, "E-WRK-99"]));
     }
   }
   video.addEventListener("error", () => {
     if (!current || !video.currentSrc) return;
     if (retries >= 2) {
-      onMessage("再生できませんでした。少し待ってから、もう一度押してください。");
+      onMessage("再生エラー：動画を読み込めません。\nしばらくしてから再度お試しください。");
       return;
     }
     retries += 1;
     const my = ++token;
     const at = video.currentTime;
     const wasPlaying = !video.paused;
-    void fetchPlaybackUrl(current)
+    void fetchPlaybackUrl(current, { screening })
       .then((url) => {
         if (my !== token) return;
         video.src = url;
         video.currentTime = at;
         if (wasPlaying) void video.play().catch(() => {});
       })
-      .catch((e) => my === token && onMessage(e instanceof Error ? e.message : "再生できませんでした。"));
+      .catch((e) => my === token && onMessage(...(e instanceof Error ? [e.message, e.code ?? null] : [MSG_PLAYBACK_FAILED, "E-WRK-99"])));
   });
   function stop() {
     token += 1;
@@ -901,7 +984,7 @@ function createVideoBox(onMessage) {
 }
 
 // ---- 表示 ----
-// 上：回と段階（今の段階を強調して最初に開く）／中：一覧とプレーヤー／［上映の画面を開く］。見た目は講師ページ（instructor.html）と同じ
+// 上：回と段階（今の段階を強調して最初に開く）／中：一覧とプレーヤー／［上映する］。見た目は講師ページ（instructor.html）と同じ
 
 let player = null;
 let screenRefresh = null;
@@ -919,9 +1002,9 @@ function render() {
   if (ending) return; // ログアウトの途中・ほかのタブでログアウトしたあとは描かない
   const cards = [cohortCard()];
   if (state.overviewError) {
-    cards.push(el("section", { className: "card" }, el("p", { className: "error-text", role: "alert", text: state.overviewError })));
+    cards.push(el("section", { className: "card" }, el("p", { className: "error-text", role: "alert", text: state.overviewError }, codeTag(state.overviewErrorCode))));
   } else if (!state.cohorts.length) {
-    cards.push(el("section", { className: "card" }, el("p", { className: "muted", text: "担当の回がありません。担当の登録は管理者に確かめてください。" })));
+    cards.push(el("section", { className: "card" }, el("p", { className: "muted", text: "担当する回はまだありません。\n管理者にお知らせください。" })));
   } else {
     cards.push(el("section", { className: "card", id: "stages-card" }), el("section", { className: "card", id: "works-card" }));
   }
@@ -987,13 +1070,54 @@ function focusBack(card, mark) {
   if (n && n !== document.activeElement) n.focus?.();
 }
 
-/** 段階の一覧（行を押すと、その段階の作品を開く） */
+/**
+ * 段階の札（組 13 の U-03）。ふだんは「選んでいる段階の 1 行＋［段階を変える ▸］」に畳み、作品をすぐ下に出す。
+ * 開くと今日の段階（今の段階と同じ日。今が無ければ選んでいる段階の日）だけを並べ、［ほかの日も表示］でブリッジワークなども出す。
+ * 段階を選んだら畳む。開け閉めは ui に持ち、約 10 秒の読み直し（renderStages）でも保つ
+ */
 function renderStages() {
   const card = $("stages-card");
   if (!card || !state.overview) return;
   const mark = focusMark(card);
-  const rows = state.overview.stages.map((s) => {
-    const selected = s.stageId === state.stageId;
+  const stages = state.overview.stages;
+  const selected = stageById(state.stageId);
+  const toggle = el("button", {
+    type: "button",
+    className: "btn compact",
+    id: "stages-toggle",
+    "aria-expanded": ui.stagesOpen ? "true" : "false",
+    text: ui.stagesOpen ? "閉じる ▴" : "段階を変える ▸",
+    onclick: () => {
+      ui.stagesOpen = !ui.stagesOpen;
+      if (!ui.stagesOpen) ui.stagesAll = false;
+      renderStages();
+    },
+  });
+  if (!ui.stagesOpen) {
+    card.replaceChildren(
+      el(
+        "div",
+        { className: "stage-pick" },
+        el("h2", { className: "stage-pick-h", text: "段階" }),
+        selected
+          ? el(
+            "span",
+            { className: "stage-pick-now" },
+            el("span", { className: "stage-name", text: submissionStageName(selected) }),
+            selected.isCurrent ? el("span", { className: "badge active now-badge", text: "今" }) : null,
+            el("span", { className: "stage-count tabular", text: stageCountsLabel(selected) }),
+          )
+          : el("span", { className: "muted", text: "段階を選んでください。" }),
+        toggle,
+      ),
+    );
+    focusBack(card, mark);
+    return;
+  }
+  const todayKind = (stages.find((s) => s.isCurrent) ?? selected)?.dayKind ?? null;
+  const shown = ui.stagesAll || !todayKind ? stages : stages.filter((s) => s.dayKind === todayKind || s.stageId === state.stageId);
+  const rows = shown.map((s) => {
+    const isSelected = s.stageId === state.stageId;
     return el(
       "li",
       {},
@@ -1001,8 +1125,8 @@ function renderStages() {
         "button",
         {
           type: "button",
-          className: `stage-row${selected ? " selected" : ""}${s.isCurrent ? " now" : ""}`,
-          "aria-pressed": selected ? "true" : "false",
+          className: `stage-row${isSelected ? " selected" : ""}${s.isCurrent ? " now" : ""}`,
+          "aria-pressed": isSelected ? "true" : "false",
           "data-stage": s.stageId,
           onclick: () => selectStage(s.stageId),
         },
@@ -1012,19 +1136,39 @@ function renderStages() {
       ),
     );
   });
-  card.replaceChildren(el("h2", { text: "段階" }), el("ul", { className: "stage-list" }, ...rows));
+  const more = shown.length < stages.length
+    ? el("button", { type: "button", className: "btn compact", id: "stages-all", text: "ほかの日も表示", onclick: () => { ui.stagesAll = true; renderStages(); } })
+    : null;
+  card.replaceChildren(
+    ...[
+      el("div", { className: "stage-pick" }, el("h2", { className: "stage-pick-h", text: "段階" }), toggle),
+      el("ul", { className: "stage-list", id: "stage-list" }, ...rows),
+      more,
+    ].filter(Boolean),
+  );
   focusBack(card, mark);
 }
 
 function selectStage(stageId) {
-  if (stageId === state.stageId) return;
+  if (stageId === state.stageId) {
+    if (ui.stagesOpen) {
+      ui.stagesOpen = false;
+      ui.stagesAll = false;
+      renderStages();
+      $("stages-toggle")?.focus?.();
+    }
+    return;
+  }
   state.stageId = stageId;
   state.selectedWorkId = null;
   state.works = null;
   state.worksError = "";
   ui.openFolds.clear();
+  ui.stagesOpen = false;
+  ui.stagesAll = false;
   stopPlayer();
   renderStages();
+  $("stages-toggle")?.focus?.(); // 押した段階の行は畳むと消える。フォーカスを［段階を変える ▸］へ
   renderWorks({ rebuildPlayer: true });
   void reloadWorks();
 }
@@ -1078,18 +1222,18 @@ function renderWorks({ rebuildPlayer = false } = {}) {
     el("span", { className: "muted small", text: `${instructorAcceptLabel(stage, ui.now)} · ${stageCountsLabel(stage)}` }),
   ];
   const listKids = [];
-  if (state.worksError) listKids.push(el("p", { className: "error-text", role: "alert", text: state.worksError }));
+  if (state.worksError) listKids.push(el("p", { className: "error-text", role: "alert", text: state.worksError }, codeTag(state.worksErrorCode)));
   else if (!v) listKids.push(el("p", { className: "muted", text: "読み込み中…" }));
   else {
-    if (!v.people.length && !v.pending.length) listKids.push(el("p", { className: "muted", text: "まだ提出はありません。" }));
+    if (!v.people.length && !v.pending.length) listKids.push(el("p", { className: "muted", text: "提出はまだありません" }));
     for (const p of v.people) listKids.push(personNode(p, stage));
-    // 「まだ」：ワークショップだけ。ブリッジワークは分母と「まだ」を出さない（自主的な制作の扱い。助成金の注意）
-    if (stage.kind === "workshop") for (const p of v.pending) listKids.push(el("div", { className: "person" }, el("div", { className: "person-name", text: p.name }), el("span", { className: "muted", text: "まだ" })));
+    // 「未提出」：ワークショップだけ。ブリッジワークは分母と「未提出」を出さない（自主的な制作の扱い。助成金の注意）
+    if (stage.kind === "workshop") for (const p of v.pending) listKids.push(el("div", { className: "person" }, el("div", { className: "person-name", text: p.name }), el("span", { className: "muted", text: "未提出" })));
     for (const [key, group] of [["stopped", v.stopped], ["unknown", v.unknown]]) {
       if (group.length) listKids.push(foldNode(key, foldTitle(key, group), group.map((p) => personNode(p, stage))));
     }
   }
-  const screeningBtn = el("button", { type: "button", className: "btn compact", id: "screening-btn", text: "上映の画面を開く", onclick: openScreening });
+  const screeningBtn = el("button", { type: "button", className: "btn compact", id: "screening-btn", text: "上映する", onclick: openScreening });
   if (!v || screeningQueue(v).length === 0) screeningBtn.disabled = true;
   const mark = focusMark(card);
   const slots = ui.worksSlots;
@@ -1115,8 +1259,10 @@ function buildPlayer() {
   const caption = el("div", { className: "player-caption", id: "player-caption", text: "作品を選んでください。" });
   const msg = el("p", { className: "error-text small", id: "player-msg", role: "alert", hidden: true });
   const banner = el("p", { className: "note-box", id: "private-banner", hidden: true, text: PRIVATE_BANNER });
-  const box = createVideoBox((t) => {
+  const box = createVideoBox((t, code = null) => {
     msg.textContent = t;
+    const tag = codeTag(code);
+    if (tag) msg.append(tag);
     msg.hidden = !t;
   });
   const prev = el("button", { type: "button", className: "btn compact", text: "◀ 前", id: "prev-btn", onclick: () => stepWork("prev") });
@@ -1154,7 +1300,8 @@ function syncPlayerButtons() {
   if (state.selectedWorkId && !entry) {
     state.selectedWorkId = null;
     player.box.stop();
-    player.caption.textContent = "選んでいた作品は、一覧から外れました。";
+    const left = ["people", "stopped", "unknown"].some((g) => (state.works?.[g] ?? []).some((p) => p.works.length > 0));
+    player.caption.textContent = left ? "選択中の作品は一覧から外れました。" : "";
     player.banner.hidden = true;
     player.selectedPolicy = null;
   } else if (entry) {
@@ -1180,14 +1327,14 @@ function selectWork(workId) {
   player.box.stop();
   player.msg.hidden = true;
   // 完全非公開は、［▶ 再生］を押すまで動画の URL も求めない（プロジェクターに映さない。設計 4.8）
-  if (!priv && e.group === "people") void player.box.load(workId, { autoplay: false });
+  if (!priv && e.group === "people") void player.box.load(workId, { autoplay: false, pressed: true });
   renderWorks();
 }
 
 function playSelected() {
   const e = selectedEntry();
   if (!e || !player) return;
-  void player.box.load(e.work.workId, { autoplay: true });
+  void player.box.load(e.work.workId, { autoplay: true, pressed: true });
 }
 
 function stepWork(dir) {
@@ -1206,6 +1353,46 @@ function stepPerson() {
 
 // ---- 上映の画面（全画面。公開と講義内に限り公開の、出している作品だけ。設計 4.8） ----
 
+/**
+ * 上映の画面のキー（組 13 の U-08。凍結の前は ← → だけ）：→ は次の作品（1）、← は前の作品（-1）、ほかは 0（何もしない）。
+ * フォーカスが動画・入力・選択の欄にあるときは割り当てない（動画の ← → は早送りと巻き戻しの既定の動き）。
+ * 修飾キー付き・日本語の入力の途中も割り当てない。ボタンにフォーカスがあるときの ← → は既定の動きが無いので割り当てる
+ */
+function screeningKeyStep(event) {
+  if (!event || event.altKey || event.ctrlKey || event.metaKey || event.shiftKey || event.isComposing) return 0;
+  const dir = event.key === "ArrowRight" ? 1 : event.key === "ArrowLeft" ? -1 : 0;
+  if (!dir) return 0;
+  const t = event.target;
+  const tag = String(t?.tagName ?? "").toLowerCase();
+  if (["video", "audio", "input", "select", "textarea"].includes(tag) || t?.isContentEditable === true) return 0;
+  return dir;
+}
+
+/** dialog 自体は Fullscreen API の対象にできないため、中身を全画面にする。断られても上映を続けられる。 */
+function enterScreenFullscreen(dialog, body, note, retry) {
+  const failed = () => {
+    if (!dialog.open || !dialog.contains(body)) return;
+    note.textContent = "全画面にできませんでした。\n［全画面にする］で再度お試しください。";
+    note.hidden = false;
+    retry.hidden = false;
+  };
+  try {
+    if (!body.requestFullscreen) { failed(); return; }
+    body.requestFullscreen({ navigationUI: "hide" })?.catch?.(failed);
+  } catch {
+    failed();
+  }
+}
+
+/** 上映の画面を閉じたら全画面も解く（この画面が全画面のときだけ） */
+function exitScreenFullscreen(dialog) {
+  try {
+    if (dialog.contains(document.fullscreenElement)) document.exitFullscreen?.()?.catch?.(() => {});
+  } catch {
+    // 何もしない
+  }
+}
+
 function openScreening() {
   closeScreening?.();
   const dialog = $("screen");
@@ -1218,13 +1405,15 @@ function openScreening() {
   let moves = 0;
   let closed = false;
   const msg = el("p", { className: "error-text", role: "alert", hidden: true });
-  const box = createVideoBox((t) => {
+  const box = createVideoBox((t, code = null) => {
     msg.textContent = t;
+    const tag = codeTag(code);
+    if (tag) msg.append(tag);
     msg.hidden = !t;
-  });
+  }, { screening: true });
   const caption = el("div", { className: "screen-caption" });
-  const prev = el("button", { type: "button", className: "btn", text: "前へ", onclick: () => step(-1) });
-  const next = el("button", { type: "button", className: "btn", text: "次へ", onclick: () => step(1) });
+  const prev = el("button", { type: "button", className: "btn", text: "◀ 前", onclick: () => step(-1) });
+  const next = el("button", { type: "button", className: "btn", text: "次 ▶", onclick: () => step(1) });
   // 次の人の 1 本目へ。［順に再生］の途中なら、飛んだ先から自動で続ける（go が auto のまま読み込む）
   const nextPerson = el("button", { type: "button", className: "btn", text: "次の受講者 ▶▶", onclick: () => stepPerson() });
   const seq = el("button", {
@@ -1234,10 +1423,13 @@ function openScreening() {
     onclick: () => {
       if (!refreshQueue()) return;
       auto = true;
-      go(index);
+      go(index, true);
     },
   });
   const close = el("button", { type: "button", className: "btn", text: "閉じる", onclick: () => dialog.close() });
+  const fullNote = el("p", { id: "screen-fullscreen-note", className: "screen-fullscreen-note", role: "status", hidden: true });
+  const fullRetry = el("button", { type: "button", className: "btn", id: "screen-fullscreen-retry", text: "全画面にする", onclick: () => enterScreenFullscreen(dialog, body, fullNote, fullRetry) });
+  const body = el("div", { className: "screen-body" }, box.video, caption, msg, fullNote, el("div", { className: "row-actions" }, prev, next, nextPerson, seq, fullRetry, close));
   function refreshQueue() {
     if (closed || !dialog.open) return false;
     queue = screeningQueue(state.works);
@@ -1251,14 +1443,38 @@ function openScreening() {
     return true;
   }
   function step(dir) {
-    if (refreshQueue()) go(index + dir);
+    if (refreshQueue()) go(index + dir, true);
+  }
+  // ← → で前後の作品へ（U-08）。端では何もしない（同じ作品を読み直さない）
+  function onKey(e) {
+    if (closed || !dialog.open) return;
+    const dir = screeningKeyStep(e);
+    if (!dir) return;
+    e.preventDefault();
+    if (!refreshQueue()) return;
+    const to = index + dir;
+    if (to >= 0 && to < queue.length) go(to, true);
+  }
+  // Esc 1 回で閉じる：全画面のときの最初の Esc はブラウザが全画面を解くのに使う。全画面が解けたら上映の画面も閉じる
+  let wasFull = false;
+  function onFullscreen() {
+    if (closed || !dialog.open) return;
+    if (document.fullscreenElement === body) {
+      wasFull = true;
+      fullNote.hidden = true;
+      fullRetry.hidden = true;
+      return;
+    }
+    // 動画だけの全画面が上映の上に重なることがある。全画面をすべて解いたときだけ閉じる。
+    if (wasFull && !document.fullscreenElement) dialog.close();
   }
   function stepPerson() {
     if (!refreshQueue()) return;
     const n = nextPersonInQueue(queue, queue[index].work.workId);
-    if (n) go(queue.indexOf(n));
+    if (n) go(queue.indexOf(n), true);
   }
-  function go(i) {
+  /** i 番目の作品を出す。pressed は講師の操作（自動で次へ進むときは false） */
+  function go(i, pressed) {
     if (!refreshQueue()) return;
     moves++;
     index = Math.max(0, Math.min(queue.length - 1, i));
@@ -1267,7 +1483,7 @@ function openScreening() {
     prev.disabled = index === 0;
     next.disabled = index === queue.length - 1;
     nextPerson.disabled = !nextPersonInQueue(queue, currentId);
-    void box.load(queue[index].work.workId, { autoplay: auto });
+    void box.load(queue[index].work.workId, { autoplay: auto, pressed: !!pressed });
   }
   box.video.addEventListener("ended", async () => {
     // ［順に再生］：次の作品へ進む前に 1 回読み直す（約 10 秒の読み直しが走っている最中なら、それが終わるのを待つ）。
@@ -1283,15 +1499,18 @@ function openScreening() {
       }
     }
     if (currentId !== endedId || moves !== endedMoves) return;
-    if (auto && refreshQueue() && index < queue.length - 1) go(index + 1);
+    if (auto && refreshQueue() && index < queue.length - 1) go(index + 1, false);
     else auto = false;
   });
-  dialog.replaceChildren(el("div", { className: "screen-body" }, box.video, caption, msg, el("div", { className: "row-actions" }, prev, next, nextPerson, seq, close)));
+  dialog.replaceChildren(body);
   dialog.addEventListener(
     "close",
     () => {
       closed = true;
       auto = false;
+      document.removeEventListener?.("keydown", onKey);
+      document.removeEventListener?.("fullscreenchange", onFullscreen);
+      exitScreenFullscreen(dialog);
       box.stop();
       dialog.replaceChildren();
       if (screenRefresh === refreshQueue) { screenRefresh = null; closeScreening = null; }
@@ -1301,7 +1520,12 @@ function openScreening() {
   screenRefresh = refreshQueue;
   closeScreening = () => dialog.close();
   dialog.showModal();
-  go(0);
+  document.addEventListener?.("keydown", onKey);
+  document.addEventListener?.("fullscreenchange", onFullscreen);
+  enterScreenFullscreen(dialog, body, fullNote, fullRetry);
+  go(0, true);
+  // 開いた直後のフォーカスは［次へ］（無ければ［閉じる］）。動画にあると ← → が早送り・巻き戻しになり、キーで作品を送れない（U-08）
+  (next.disabled ? close : next).focus?.();
 }
 
 // ---- 開始 ----
@@ -1313,7 +1537,7 @@ async function main() {
   if (params.get("error_description") || hash.get("error_description")) {
     // 文言は誰でも書き換えられるので、URL の内容は表示しない
     history.replaceState(null, "", returnUrl());
-    showLoginNote("ログインできませんでした。もう一度ログインしてください。");
+    showLoginNote("ログインできませんでした。\n再度ログインしてください。");
     show("login");
     return;
   }
@@ -1326,8 +1550,7 @@ async function main() {
     return;
   }
   if (error) {
-    $("failed-message").textContent = "ログイン状態を確認できませんでした。もう一度試してください。";
-    show("failed");
+    showFailed("ログインエラー：状態を確認できません。\n［再試行］を押してください。");
     return;
   }
   if (!session) {
@@ -1341,7 +1564,7 @@ async function main() {
     }
     if (chosen.guide) {
       // 共有のログインも管理コンソールのログインも使えない（鍵が無い・12 時間を過ぎた・取り消された）：3.7 の文と［管理コンソールを開く］を出す（5.3.1 の 3）
-      showLoginNote(MSG_TEACHER_LOGIN_FIRST + chosen.guide);
+      showLoginNote(`${MSG_TEACHER_LOGIN_FIRST}\n${chosen.guide}`);
       $("login-console-btn").hidden = false;
     }
     watchConsoleKey();
@@ -1363,6 +1586,14 @@ function openAdminConsole() {
   window.open("/admin.html", "_blank", "noopener");
 }
 
+// 講師ページから ?c= で渡された回を、main が URL を消す前に読む（組 13 の U-03。開いたときに 1 回だけ使う。
+// ログインを挟むと Google から戻る URL に ?c= が残らないので、今までどおり一覧の先頭の回になる）
+ui.requestedCohort = requestedCohortId(location.search);
+ui.pickCohort = true;
+
+/** 起動（main）が想定外の例外で止まったときのエラーコード（講師ページは E-INS-99。下の起動の失敗の文は 2 つの画面で同じ文字） */
+const BOOT_ERROR_CODE = "E-WRK-99";
+
 // 戻る・進むでキャッシュ（bfcache）から表示されたときは、読み込み直して今のログインの状態から作り直す
 window.addEventListener("pageshow", (e) => {
   if (!e.persisted) return;
@@ -1383,6 +1614,5 @@ $("admin-console-btn").addEventListener("click", openAdminConsole);
 $("login-console-btn").addEventListener("click", openAdminConsole);
 
 main().catch(() => {
-  $("failed-message").textContent = "エラーが発生しました。ページを開き直してください。";
-  show("failed");
+  showFailed("表示エラーが発生しました。\nページを再読み込みしてください。", BOOT_ERROR_CODE);
 });

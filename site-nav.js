@@ -181,7 +181,7 @@ export function siteNavItems(role, current) {
   const items = SITE_PAGES.filter((p) => access[p.key]).map((p) => ({ ...p, current: p.key === current }));
   // B の提出画面にも現在地を出す。ほかの画面・区分に移動先を追加しない。
   if (current === "submissions" && access.instructor) {
-    items.push({ key: "submissions", label: "提出ページ", href: "/submissions", current: true });
+    items.push({ key: "submissions", label: "提出作品", href: "/submissions", current: true });
   }
   return items;
 }

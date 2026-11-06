@@ -163,6 +163,7 @@ import {
   cohortDateProblem,
   cohortDateRule,
   cohortDeleteBlock,
+  cohortDeleteBlockTip,
   DAY_KIND_LABELS,
   DAY_KINDS,
   dayKindStartDate,
@@ -2343,7 +2344,7 @@ function manageSection(r) {
     );
   }
   // 段階の回の追加がある受講者は削除できない（追加は記録として残す）。利用を止めるのは「停止」
-  const deleteBlock = memberDeleteBlock({ hasStageGrants: memberHasStageGrants(r.email) });
+  const deleteBlock = memberDeleteBlock({ hasStageGrants: memberHasStageGrants(r.email), active: r.status === "active" });
   rows.push(
     el("button", {
       type: "button",
@@ -2544,7 +2545,7 @@ async function revokeStageGrant(r, g) {
   if (!confirm(`${r.email} への追加（+${formatCredits(g.credits)}）を取り消しますか？\n${REVOKE_CONFIRM_TEXT}`)) return;
   const { error } = await supabase.rpc("revoke_stage_grant", { p_grant_id: g.id, p_note: null });
   if (error) notify(explainError(error), "error");
-  else notify(`${r.email} への追加（+${formatCredits(g.credits)}）を取り消しました。${REVOKE_CONFIRM_LINES[1]}`);
+  else notify(`${r.email} への追加（+${formatCredits(g.credits)}）を取り消しました。`);
   await refresh();
 }
 
@@ -2553,7 +2554,7 @@ async function removeMember(r) {
     notify("自分自身は削除できません。", "error");
     return;
   }
-  const block = memberDeleteBlock({ hasStageGrants: await loadMemberFlag(r.email) });
+  const block = memberDeleteBlock({ hasStageGrants: await loadMemberFlag(r.email), active: r.status === "active" });
   if (block) {
     notify(block, "error");
     return;
@@ -3204,7 +3205,8 @@ function cohortCloseBox(c) {
 const adminCohortCloseAction = createCohortCloseAction({
   rpc: (name, args) => supabase.rpc(name, args),
   canStart: () => !appClosed && !state.cohortCloseBusy,
-  confirm: ({ title, lines, okText }) => ask({ title, lines, buttons: [
+  // help（削除の予定・対象外・再開の期限。組 13 の INS-130 で lines から移した）は窓の下の注記に出す（落とさない）
+  confirm: ({ title, lines, okText, help = null }) => ask({ title, lines, note: help, buttons: [
     { label: "やめる", value: false }, { label: okText, value: true, kind: "danger" },
   ], cancelValue: false, focusValue: false }),
   onBusy: (busy) => {
@@ -3663,7 +3665,8 @@ function cohortAddButtons(c) {
 }
 
 function cohortManage(c) {
-  const block = cohortDeleteBlock({ memberCount: c.member_count, ...cohortStageData(c.id) });
+  const flags = { memberCount: c.member_count, ...cohortStageData(c.id) };
+  const block = cohortDeleteBlock(flags);
   return [
     el("h3", { className: "group-title", text: "管理" }),
     el(
@@ -3671,7 +3674,7 @@ function cohortManage(c) {
       { className: "menu" },
       el("button", { type: "button", className: "mrow danger", text: "回を削除", disabled: !!block, title: block, onclick: () => removeCohort(c) }),
     ),
-    el("p", { className: "hint", text: block ?? "削除すると元に戻せません。" }),
+    el("p", { className: "hint", text: block ?? "削除すると元に戻せません。", title: cohortDeleteBlockTip(flags) }),
   ];
 }
 
@@ -3877,7 +3880,7 @@ function cohortEditForm(c) {
     { className: "stack", onsubmit: (e) => e.preventDefault() },
     field("会場", f.venue),
     el("div", { className: "grid-2" }, field("Day1", f.day1), field("Day2", f.day2)),
-    rule?.guarded ? el("p", { className: "hint", text: rule.note }) : null,
+    rule?.guarded ? el("p", { className: "hint", text: rule.note, title: rule.noteTip }) : null,
     stageMode
       ? el("p", { className: "note-box", text: STAGE_LIMIT_NOTE })
       : creditsFieldset(f, c.current_period),

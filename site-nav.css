@@ -1,4 +1,4 @@
-/* Canvas 以外の共通ヘッダー。リンクは文字だけ、選択は色と太さだけ。
+/* Canvas 以外の共通ヘッダー。リンクは文字だけ、選択は色と太さと下線。
    講師ページは studio.css を読まないため、末尾の共通の文字・影もここで定義する。 */
 .site-nav { flex: none; display: flex; align-items: center; margin-left: auto; }
 .site-nav[hidden], .site-nav [hidden] { display: none !important; }
@@ -7,6 +7,8 @@
 .site-nav-item { display: inline-flex; align-items: center; min-height: 44px; padding: 0; border: 0; border-radius: 0; background: transparent; box-shadow: none; font-size: 14px; font-weight: 400; line-height: 1.5; color: var(--text-2); text-decoration: none; white-space: nowrap; }
 a.site-nav-item:hover { color: var(--accent); text-decoration: none; }
 body .site-nav-item[aria-current="page"] { color: var(--accent); font-weight: 600 !important; background: transparent; box-shadow: none; }
+/* 今いる項目は色と太さに加えて 2px の紺の下線（組 13 の U-14。色だけに頼らない）。高さは変えない（文字の下線なので帯の高さに入らない） */
+body .site-nav-item[aria-current="page"] .site-nav-label { text-decoration-line: underline; text-decoration-thickness: 2px; text-decoration-color: var(--accent); text-underline-offset: 6px; }
 .site-nav-item:focus-visible, .site-nav-toggle:focus-visible { outline: 2px solid var(--accent); outline-offset: 4px; border-radius: 4px; }
 .site-nav-label { min-width: 0; white-space: nowrap; }
 .site-nav-icon { flex: none; display: block; }

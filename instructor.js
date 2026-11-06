@@ -33,14 +33,14 @@ import { discardDlKey } from "./share-lib.js";
 import { checkedAtText, MSG_CODE_FAILED, oauthOptions } from "./mypage-lib.js";
 import {
   cohortStatus,
-  explainError,
+  errorCode,
+  errorText,
   formatCredits,
   formatMonthDay,
   formatShortDateTime,
   isMissingFunctionError,
   isNetworkFailure,
   isStageSchemaMissing,
-  MSG_STAGE_NOT_READY,
   setStageDbReady,
   normalizeEmail,
   rejectionName,
@@ -59,9 +59,12 @@ import {
   MSG_BUSY_SLOW,
   MSG_GRANT_NETWORK_FAILURE,
   MSG_MOVE_NETWORK_FAILURE,
+  MSG_PAGE_NOT_READY,
   normalizeInstructorCohorts,
   normalizeStageStatus,
   parseStageGrantCredits,
+  perGrantExceededCode,
+  perGrantExceededText,
   revocableGrants,
   revokedGrants,
   REVOKE_CONFIRM_LINES,
@@ -70,7 +73,11 @@ import {
   stageName,
   stageStateLabel,
   stageTimeline,
+  moveButtonText,
+  undoDoneText,
+  undoLineView,
   undoView,
+  withAdminLine,
 } from "./stage-lib.js";
 import { fillIcons, renderSiteNav } from "./site-nav.js";
 import { createStageTimer } from "./stage-timer.js";
@@ -79,7 +86,8 @@ import { normalizeStageOverview, normalizeStageWorks, stageCountsLabel, SUBMISSI
 import {
   cohortCloseCanAct,
   cohortCloseError,
-  cohortCloseLines,
+  cohortCloseErrorCode,
+  cohortCloseLineItems,
   cohortCloseSameIdentity,
   cohortCloseSlotVisible,
   createCohortCloseAction,
@@ -88,6 +96,7 @@ import {
 import {
   collectMinuteChanges,
   dayTotalView,
+  minutesErrorCode,
   minutesErrorText,
   MSG_MINUTES_INVALID,
   MSG_MINUTES_LOAD_FAILED,
@@ -103,7 +112,7 @@ import {
 // 他のサイトに埋め込まれて操作させられるのを防ぐ（マイページ・管理コンソールと同じ）
 if (window.top !== window.self) {
   document.documentElement.hidden = true;
-  throw new Error("講師の画面は埋め込みでは使えません");
+  throw new Error("講師ページは埋め込みでは使えません。");
 }
 
 const SUPABASE_URL = "https://tnzwhwitgnzoehbjrmoy.supabase.co";
@@ -147,7 +156,7 @@ discardDlKey(browserStorage("session"));
 
 // 読み込めない（通信の失敗・integrity の不一致）ときは先へ進まない
 if (typeof window.supabase?.createClient !== "function") {
-  $("status").replaceChildren(el("p", { text: "画面を表示できませんでした。" }), el("p", { text: "インターネットの接続を確かめて、ページを開き直してください。" }));
+  $("status").replaceChildren(el("p", { text: "表示エラー：画面を読み込めません。" }), el("p", { text: "ページを再読み込みしてください。" }));
   throw new Error("supabase-js を読み込めませんでした");
 }
 
@@ -180,7 +189,15 @@ function el(tag, props = {}, ...children) {
   return node;
 }
 
-// 講師の画面は 016 の DB でだけ働く（016 の前は「まだ使えません」）。DB の日本語の hint をそのまま出す
+/**
+ * エラーコードの札（決まり 3.2：最後の文の後ろに小さく薄く「（E-INS-99）」。コードは文の定数に入れず、別の値で持つ）。
+ * 文は textContent に入れ、この札だけを子にする（el の子に渡す。code が無ければ null）
+ */
+function codeTag(code) {
+  return code ? el("span", { className: "err-code", text: `（${code}）` }) : null;
+}
+
+// 講師の画面は 016 の DB でだけ働く（016 の前は「まだ使えません」）。表の文がある理由は DB の hint より表の文を出す（hint は console）
 setStageDbReady(true);
 
 /** このページの道：一覧（/instructor）か、ある回の操作（/instructor/c/<回の ID>）か。ページを移るたびにこの画面は作り直されるので、開いたときに 1 回だけ読む */
@@ -207,10 +224,13 @@ const state = {
   status: null,
   /** status を最後に読み込めた時刻（ミリ秒。回の見出しの「10:42 時点」。U3-6） */
   statusAt: null,
+  /** 段階の状態を読めなかったときの文（「読み込みエラー：…」の完成した文）とエラーコード（決まり 3.2。無ければ null） */
   statusError: "",
+  statusErrorCode: null,
   /** cohort_close_status を読んだもの（normalizeCohortCloseStatus）。null は未読込・読めなかった（221。決定 96） */
   closeStatus: null,
   closeStatusError: "",
+  closeStatusErrorCode: null,
   /** instructor_stage_minutes を読んだもの（normalizeInstructorStageMinutes）。null は未読込・252 が無い・読めなかった（分の表示と［時間を変える］を隠す） */
   minutes: null,
   /** 操作の通信中（二重に押させない） */
@@ -264,7 +284,8 @@ const stageTimer = createStageTimer({
   isBusy: () => state.busy,
   withBusy: (fn) => withBusy(fn),
   confirm: (o) => confirmDialog(o),
-  notify: (m, kind) => notify(m, kind),
+  // 断りの文とエラーコード（50 番台は講師ページの側で 2 行目「管理者にお知らせください。」を足す）
+  notify: (m, kind, code = null) => notify(withAdminLine(m, code), kind, [], code),
   render: () => render(),
   // 段階が変わったと分かったとき・「つながりません」の［最新にする］：講師ページの［最新にする］と同じ読み直し
   reload: () => reloadStatus(),
@@ -297,7 +318,7 @@ async function endSession() {
 }
 
 /** 本人のデータを画面から消して、読み込み中の表示にする（ログアウトの通信を待つ間・画面を離れるときに、前の人の画面を残さない） */
-function hideContent(message = "ログアウトしています…") {
+function hideContent(message = "ログアウト中…") {
   poller.stop(); // ログアウトのあとに予約の時刻が来ても読まない
   stageTimer.reset();
   $("me-email").textContent = "";
@@ -381,7 +402,7 @@ function startWatch(userId) {
 
 const NOTICE_MAX = 3;
 
-function notify(message, kind = "ok", details = []) {
+function notify(message, kind = "ok", details = [], code = null) {
   if (ending) return; // ログアウトの途中は、遅れて届いた結果を知らせない
   const box = $("notice");
   const node = el(
@@ -390,8 +411,8 @@ function notify(message, kind = "ok", details = []) {
     el(
       "div",
       {},
-      el("p", { text: message }),
-      details.length ? el("ul", {}, ...details.map((d) => el("li", { text: d }))) : null,
+      el("p", { text: message }, details.length ? null : codeTag(code)),
+      details.length ? el("ul", {}, ...details.map((d, i) => el("li", { text: d }, i === details.length - 1 ? codeTag(code) : null))) : null,
     ),
     el("button", { type: "button", className: "btn compact", text: "閉じる", onclick: () => node.remove() }),
   );
@@ -404,13 +425,13 @@ function clearNotice() {
   $("notice").replaceChildren();
 }
 
-// ---- 確認のダイアログ（既定は「やめる」） ----
+// ---- 確認のダイアログ（既定は［キャンセル］） ----
 
 /**
- * 確認を出す。「やめる」が最初にフォーカスされ、Esc でもやめる。続けるなら true。
+ * 確認を出す。［キャンセル］が最初にフォーカスされ、Esc でもキャンセル。続けるなら true。help があれば窓の ？ の中に出す（1 個まで）。
  * 押されたボタンで直接決める（close イベントの returnValue は、続けて開き直したときに前のダイアログの分と取り違える）
  */
-function confirmDialog({ title, lines, okText, danger = false }) {
+function confirmDialog({ title, lines, okText, danger = false, help = "" }) {
   const dialog = $("confirm");
   return new Promise((resolve) => {
     const ctl = new AbortController();
@@ -420,12 +441,15 @@ function confirmDialog({ title, lines, okText, danger = false }) {
       if (dialog.open) dialog.close();
       resolve(value);
     };
-    const cancel = el("button", { type: "button", className: "btn big", text: "やめる", autofocus: true, onclick: () => finish(false) });
+    const cancel = el("button", { type: "button", className: "btn big", text: "キャンセル", autofocus: true, onclick: () => finish(false) });
     const ok = el("button", { type: "button", className: danger ? "btn danger big" : "btn primary big", text: okText, onclick: () => finish(true) });
+    const more = help
+      ? el("details", { className: "confirm-help", id: "confirm-help" }, el("summary", { "aria-label": "くわしく", text: "?" }), el("p", { className: "small", text: help }))
+      : null;
     dialog.replaceChildren(
-      el("div", { className: "confirm-body" }, el("h2", { id: "confirm-title", text: title }), ...lines.map((t) => el("p", { text: t })), el("div", { className: "row" }, cancel, ok)),
+      el("div", { className: "confirm-body" }, el("h2", { id: "confirm-title", text: title }), ...lines.map((t) => el("p", { text: t })), more, el("div", { className: "row" }, cancel, ok)),
     );
-    // Esc は、閉じる前に止めて、やめるとして扱う
+    // Esc は、閉じる前に止めて、キャンセルとして扱う
     dialog.addEventListener("cancel", (e) => {
       e.preventDefault();
       finish(false);
@@ -456,11 +480,26 @@ function closeIdentity() {
   }
 }
 
-/** 画面に出す失敗（読み込みの失敗）：どの画面にするかを決める */
+/** 原因が分からない失敗のエラーコードの領域（決まり 3.2：講師の操作＝INS。提出作品は WRK）。loadFailure（2 つの画面で同じ文字）が使う */
+const ERROR_AREA = "INS";
+
+/**
+ * 画面に出す失敗（読み込みの失敗）：どの画面にするかを決める。failed は { message（前置き「読み込みエラー：」付きの完成した文）, code }。
+ * 表示する所は message をそのまま出す（前置きを重ねない。決まり 3.7）。50 番台は 2 行目「管理者にお知らせください。」（withAdminLine）
+ */
 function loadFailure(error) {
   if (rejectionName(error) === "instructor_only" || String(error?.code) === "42501") return { action: "denied" };
-  if (isStageSchemaMissing(error)) return { action: "failed", message: `講師の画面は、まだ使えません。${MSG_STAGE_NOT_READY}` };
-  return { action: "failed", message: explainError(error) };
+  if (isStageSchemaMissing(error)) return { action: "failed", message: withAdminLine(`読み込みエラー：${MSG_PAGE_NOT_READY}`, "E-ADM-50"), code: "E-ADM-50" };
+  const code = errorCode("読み込み", error, { area: ERROR_AREA });
+  return { action: "failed", message: withAdminLine(errorText("読み込み", error), code), code };
+}
+
+/** 失敗の画面（#failed）に文とエラーコードを出す */
+function showFailed(message, code = null) {
+  $("failed-message").textContent = message;
+  const tag = codeTag(code);
+  if (tag) $("failed-message").append(tag);
+  show("failed");
 }
 
 /** first：もう受け取った instructor_cohorts の答え（chooseClient の 1 回目。同じ部品・同じ問い合わせを 2 回送らない）。無ければ読む */
@@ -502,7 +541,10 @@ async function loadCloseStatus() {
   const { data, error } = response ?? {};
   const status = error ? null : normalizeCohortCloseStatus(data, requested);
   state.closeStatus = status;
-  state.closeStatusError = status ? "" : cohortCloseError(error ?? { message: "cohort_close_invalid_response" });
+  const failure = error ?? { message: "cohort_close_invalid_response" };
+  const opts = { period: state.status?.period ?? null };
+  state.closeStatusErrorCode = status ? null : cohortCloseErrorCode(failure, opts);
+  state.closeStatusError = status ? "" : withAdminLine(cohortCloseError(failure, "読み込み", opts), state.closeStatusErrorCode);
   return !!status;
 }
 
@@ -561,12 +603,14 @@ async function loadStatus() {
   if (requested !== state.cohortId) return true; // 読み込み中に回を切り替えた
   if (seq !== statusSeq) return true; // 古い応答（その間に、もっと新しい読み込みか操作があった）
   if (error) {
-    state.statusError = explainError(error);
+    state.statusErrorCode = errorCode("読み込み", error, { area: ERROR_AREA });
+    state.statusError = withAdminLine(errorText("読み込み", error), state.statusErrorCode);
     return false;
   }
   state.status = normalizeStageStatus(data);
   state.statusAt = Date.now();
   state.statusError = "";
+  state.statusErrorCode = null;
   // 選んだ受講者のうち、もう受講者一覧に無い・停止した人は外す
   const active = new Set(state.status.students.filter((s) => s.active).map((s) => s.email));
   for (const email of [...state.selected]) if (!active.has(email)) state.selected.delete(email);
@@ -708,19 +752,19 @@ async function load({ fromApp = false, cohorts = null } = {}) {
         const { data } = await activeClient().auth.getSession();
         if (ending) return;
         $("denied-email").textContent = data?.session?.user?.email ?? "";
+        $("denied-message").hidden = false;
         // 管理者は、管理コンソールでログインしてから開く（5.3.1 の 3）
         if (!adminSession) showAdminHint(adminHint ?? MSG_ADMIN_CONSOLE_NEEDED);
         show("denied");
       } else if (!fromApp || !state.cohorts.length) {
-        $("failed-message").textContent = f.message;
-        show("failed");
+        showFailed(f.message, f.code);
       } else {
-        notify(`読み込み直せませんでした。${f.message}`, "error");
+        notify(f.message, "error", [], f.code);
       }
       return;
     }
     if (ending) return;
-    if (!ok && fromApp) notify(`最新の状態を読み込めませんでした。${state.statusError}`, "error");
+    if (!ok && fromApp) notify(state.statusError, "error", [], state.statusErrorCode);
     // 今の段階の提出の段（組 11 の (3)）：開いた直後から出すため、描く前に 1 回読む。失敗しても読み込みは失敗にしない（段を出さないだけ）
     await loadSubmitPanel();
     if (ending) return;
@@ -748,7 +792,7 @@ async function load({ fromApp = false, cohorts = null } = {}) {
 async function reloadStatus() {
   const ok = await loadStatusAndClose();
   if (ending) return;
-  if (!ok) notify(`最新の状態を読み込めませんでした。${state.statusError}`, "error");
+  if (!ok) notify(state.statusError, "error", [], state.statusErrorCode);
   render();
 }
 
@@ -880,11 +924,11 @@ async function pollTick() {
 // 古い管理コンソールの鍵（aiken-studio-admin-auth）は読まない。
 
 /** 管理者として動いているときの［ログアウト］の title：管理コンソールのログインだけを終え、共有のログイン（マイページ・Canvas）は残す */
-const MSG_END_ADMIN_CONSOLE = "管理コンソールのログインだけを終えます（マイページ・Canvas のログインはそのまま）";
-const MSG_ADMIN_CONSOLE_NEEDED = "管理者として講師ページを使うには、管理コンソールでログインしてから開いてください。";
-// ログインの画面でだけ、管理者向けの案内の前に置く（講師が迷わないように。田口さん 2026-10-23）
-const MSG_TEACHER_LOGIN_FIRST = "講師の方は、「Google でログイン」のボタンから入ってください。";
-const MSG_ADMIN_CONSOLE_EXPIRED ="管理コンソールのログインから 12 時間たちました。管理コンソールでもう一度ログインしてから開いてください。";
+const MSG_END_ADMIN_CONSOLE = "管理コンソールだけログアウトします（マイページ・Canvas はそのまま）。";
+const MSG_ADMIN_CONSOLE_NEEDED = "管理者は、先に管理コンソールでログインしてください。";
+// ログインの画面でだけ、管理者向けの案内の前の行に置く（講師が迷わないように。田口さん 2026-10-23）
+const MSG_TEACHER_LOGIN_FIRST = "講師は、［Google でログイン］を押してください。";
+const MSG_ADMIN_CONSOLE_EXPIRED = "管理コンソールのログインが無効です。\n管理コンソールで再度ログインしてください。";
 
 /** 管理者として動いている間の { client, expiresAt, userId }（講師・ログイン前は null） */
 let adminSession = null;
@@ -1012,10 +1056,10 @@ function enterAdminMode(r) {
   });
 }
 
-/** 上部の表示：「管理者として操作中（管理コンソールのログイン・〜HH:MM まで）· メール」 */
+/** 上部の表示：「管理者として操作中（〜HH:MM）· メール」 */
 function adminWho() {
   const until = new Date(adminSession.expiresAt).toLocaleTimeString("ja-JP", { hour: "2-digit", minute: "2-digit" });
-  return `管理者として操作中（管理コンソールのログイン・〜${until} まで）· ${state.myEmail}`;
+  return `管理者として操作中（〜${until}）· ${state.myEmail}`;
 }
 
 /**
@@ -1051,6 +1095,7 @@ function leaveAdmin(message) {
   hideContent("");
   ending = true;
   adminSession = null;
+  $("denied-message").hidden = true;
   showAdminHint(message);
   show("denied");
 }
@@ -1125,7 +1170,7 @@ function render() {
   if (ROUTE.kind === "cohort" && routeMissing) {
     // URL の回が自分の一覧に無い：操作のボタン・入力欄ごと消して、札だけを出す（書き込みも読み込みもその回では行わない）
     stopUndoTimer();
-    document.title = "この回は開けません – A.I.KEN Studio 講師の画面";
+    document.title = "この回は開けません – A.I.KEN Studio 講師ページ";
     view.replaceChildren(cohortMissingView({ el, cohortId: ROUTE.cohortId, onRefresh: refreshFromView }));
     return;
   }
@@ -1135,8 +1180,8 @@ function render() {
       el(
         "section",
         { className: "card", "aria-labelledby": "cohort-h" },
-        el("h2", { id: "cohort-h", text: "担当する回がありません。" }),
-        el("p", { className: "hint", text: "担当の登録は管理者に頼んでください。" }),
+        el("h2", { id: "cohort-h", text: "担当する回はまだありません" }),
+        el("p", { className: "hint", text: "管理者にお知らせください。" }),
       ),
     );
     return;
@@ -1144,7 +1189,7 @@ function render() {
   if (ROUTE.kind === "list") {
     // 回の一覧のページ：1 つの回が 1 つのリンク。実施中とこれからは上、終わった回は折りたたみ。操作・時計は持たない
     stopUndoTimer();
-    document.title = "回の一覧 – A.I.KEN Studio 講師の画面";
+    document.title = "回の一覧 – A.I.KEN Studio 講師ページ";
     view.replaceChildren(
       cohortListView({
         el,
@@ -1159,24 +1204,31 @@ function render() {
     return;
   }
   const here = state.cohorts.find((x) => x.id === state.cohortId);
-  document.title = `${here?.name ?? here?.id ?? "回の操作"} – A.I.KEN Studio 講師の画面`;
-  const parts = [backToListLink({ el }), submissionsLink({ el }), submitPanel(), cohortCard()];
+  document.title = `${here?.name ?? here?.id ?? "回の操作"} – A.I.KEN Studio 講師ページ`;
+  // 並び（組 13 の U-07）：リンクの 1 行 → 回の見出し（今の段階・残り）→ 操作（［次へ］・タイマー）→ 提出の段 →（クローズ）→ 受講者 → 追加。
+  // 提出の段は約 10 秒の読み直しで足し外しする（patchSubmitPanel が #wk-card のすぐ後ろに入れる）
+  const parts = [linkRow(), cohortCard()];
   const s = state.status;
   if (!s) {
     parts.push(
       el(
         "section",
         { className: "card" },
-        state.statusError ? el("p", { className: "error-text", text: state.statusError }) : el("p", { className: "muted", text: "読み込み中…" }),
+        state.statusError ? el("p", { className: "error-text", text: state.statusError }, codeTag(state.statusErrorCode)) : el("p", { className: "muted", text: "読み込み中…" }),
         state.statusError ? el("button", { type: "button", className: "btn", text: "最新にする", onclick: () => reloadStatus() }) : null,
       ),
     );
   } else if (s.creditMode === "stage") {
-    parts.push(stageCard(s), closeSlot(), studentsCard(s), grantCard(s));
+    parts.push(stageCard(s), submitPanel(), closeSlot(), studentsCard(s), grantCard(s));
   }
   view.replaceChildren(...parts.filter(Boolean));
   updateUndoTimer();
   updateGrantButton();
+}
+
+/** 先頭のリンクの 1 行（組 13 の U-07）：「← 回の一覧 · 提出作品を見る」。提出作品へは今の回を渡す（U-03） */
+function linkRow() {
+  return el("div", { className: "link-row", id: "link-row" }, backToListLink({ el }), submissionsLink({ el, cohortId: state.cohortId }));
 }
 
 /** 回の見出し：回の名前・ID と会場と日付・期間のバッジ・今の段階とそのクレジット数・［最新にする］ */
@@ -1205,8 +1257,10 @@ function cohortCard() {
           state.cohortId = select.value;
           state.status = null;
           state.statusError = "";
+          state.statusErrorCode = null;
           state.closeStatus = null;
           state.closeStatusError = "";
+          state.closeStatusErrorCode = null;
           closeStatusSeq++;
           state.selected.clear();
           ui.openDays.delete(select.value); // 切り替えた回は、その回の初期値（今を含む日）から開く
@@ -1252,22 +1306,27 @@ function cohortCard() {
 function nowLine(s) {
   if (!s) return null;
   if (s.creditMode !== "stage") {
-    return el("div", { className: "stack" }, el("p", { text: "この回は Day ごとの枠です。" }), el("p", { className: "hint", text: "段階の操作はありません。" }));
+    return el("div", { className: "stack" }, el("p", { text: "この回には段階がありません。" }));
   }
   if (s.current) {
+    // 右に制作時間の残り（分：秒）と［⛶ 大きく表示］（組 11 の (6)・組 13 の U-07・U-09）。動いている・終わったときだけ
     return el(
       "div",
       { className: "now-line" },
       el("span", { className: "badge active", text: "今" }),
       el("span", { className: "now-name", id: "stage-current", text: stageName(s.current) }),
       s.current.credits === null ? null : el("span", { className: "now-credits tabular", text: `${formatCredits(s.current.credits)} クレジット` }),
+      stageTimer.clock(),
     );
   }
-  const text = s.period === "before" ? "Day1 の 0:00 に始まります。" : s.period === "after" ? "Day2 は終わりました。" : "今の段階はありません。";
+  const text = s.period === "before" ? "段階は Day1 の 0:00 に始まります。" : s.period === "after" ? "Day2 は終了しました。" : "今の段階はありません。";
   return el("p", { className: "now-line quiet", text });
 }
 
-/** ワークショップ：日ごとのリスト（今日の日だけ開く）・60 秒の取り消し・［前へ戻す］［次へ進める］・押せない理由 */
+/**
+ * ワークショップ（操作の札。組 13 の U-07 で上から「60 秒の取り消し → ［前の段階へ］［次へ：…］→ 押せない理由 → 制作時間 → 日ごとのリスト」）。
+ * 取り消せる 60 秒の間は［前の段階へ］を隠す（戻す道を取り消しの 1 つにする。U-02）。60 秒が過ぎたら updateUndoTimer が描き直さずに出し直す
+ */
 function stageCard(s) {
   const mv = stageMoveView(s);
   const undo = undoView(s, Date.now());
@@ -1276,42 +1335,71 @@ function stageCard(s) {
   const opened = openDaysOf(tl, cohortId);
   const move = (direction) => moveStage(direction, mv, s);
   const closed = isClosed();
-  const why = closed ? MSG_CLOSED_NO_MOVE : moveWhy(mv);
+  const undoShown = undo.available && !closed;
+  const closedText = closedNoMoveText();
+  const outside = s.period === "before" || s.period === "after";
+  const why = closed ? closedText : outside ? "" : moveWhy(mv);
   return el(
     "section",
-    { className: "card", "aria-labelledby": "wk-h" },
-    // 右上に制作時間の残り（分：秒。組 11 の (6)）。動いている・終わったときだけ
-    el("div", { className: "card-head" }, el("h2", { id: "wk-h", text: "ワークショップ" }), stageTimer.clock()),
-    tl.groups.length ? el("div", { className: "wk-list", role: "group", "aria-label": "ワークショップの一覧" }, ...tl.groups.map((g) => dayFold(g, opened, cohortId))) : null,
-    undo.available && !closed
-      ? el(
-        "div",
-        { className: "undo-box", id: "undo-box" },
-        el(
-          "div",
-          { className: "undo-lines" },
-          el("p", { id: "undo-text", text: undoText(undo) }),
-          el("p", { id: "undo-jobs", className: "small", text: undoJobsText(undo), hidden: undo.jobsSince === null }),
-        ),
-        el("button", {
-          type: "button",
-          className: "btn",
-          text: "前の段階に戻す",
-          disabled: state.busy,
-          onclick: () => undoMove(undo, s),
-        }),
-        busySlowNote("undo"),
-      )
-      : null,
+    { className: "card", id: "wk-card", "aria-labelledby": "wk-h" },
+    el("div", { className: "card-head" }, el("h2", { id: "wk-h", text: "ワークショップ" })),
+    undoShown ? undoBox(s, undo) : null,
     el(
       "div",
       { className: "move-row" },
-      el("button", { type: "button", className: "btn big", id: "move-back", text: "前へ戻す", disabled: state.busy || closed || !mv.canPrev, title: closed ? MSG_CLOSED_NO_MOVE : mv.canPrev ? null : mv.prevWhy, onclick: () => move("back") }),
-      el("button", { type: "button", className: "btn primary big", id: "move-next", text: busyText("move-next", "次へ進める"), disabled: state.busy || closed || !mv.canNext, title: closed ? MSG_CLOSED_NO_MOVE : mv.canNext ? null : mv.nextWhy, onclick: () => move("next") }),
+      el("button", {
+        type: "button",
+        className: "btn big",
+        id: "move-back",
+        text: busyText("move-back", moveButtonText("back", mv.prev)),
+        hidden: undoShown,
+        disabled: state.busy || closed || !mv.canPrev,
+        title: closed ? closedText : mv.canPrev ? stageName(mv.prev) : mv.prevWhy,
+        onclick: () => move("back"),
+      }),
+      el("button", {
+        type: "button",
+        className: "btn primary big",
+        id: "move-next",
+        text: busyText("move-next", moveButtonText("next", mv.next)),
+        disabled: state.busy || closed || !mv.canNext,
+        title: closed ? closedText : mv.canNext ? stageName(mv.next) : mv.nextWhy,
+        onclick: () => move("next"),
+      }),
     ),
     busySlowNote("move-next", "move-back"),
     why ? el("p", { className: "hint", id: "move-why", text: why }) : null,
     stageTimer.card(),
+    tl.groups.length ? el("div", { className: "wk-list", role: "group", "aria-label": "ワークショップの一覧" }, ...tl.groups.map((g) => dayFold(g, opened, cohortId))) : null,
+  );
+}
+
+/**
+ * 60 秒の取り消しの箱（1 行。U-02）：「WS3 へ進めました［進めたのを取り消す］あと 45 秒 ?」。
+ * 生成の件数は ? の奥（undo-help）。id（undo-box・undo-text・undo-jobs）は保つ（updateUndoTimer が id で書き換える）
+ */
+function undoBox(s, undo) {
+  const line = undoLineView(s, undo);
+  return el(
+    "div",
+    { className: "undo-box", id: "undo-box" },
+    el("p", { id: "undo-text", className: "undo-text", text: line.text }),
+    el("button", {
+      type: "button",
+      className: "btn",
+      id: "undo-btn",
+      text: busyText("undo", line.button),
+      disabled: state.busy,
+      onclick: () => undoMove(undo, s),
+    }),
+    el("span", { id: "undo-sec", className: "undo-sec tabular", text: line.sec }),
+    el(
+      "details",
+      { className: "undo-help", id: "undo-help", hidden: undo.jobsSince === null },
+      el("summary", { "aria-label": "取り消したときの生成の扱い", text: "?" }),
+      el("p", { id: "undo-jobs", className: "small", text: undoJobsText(undo) }),
+    ),
+    busySlowNote("undo"),
   );
 }
 
@@ -1410,7 +1498,15 @@ function isClosed() {
   return state.closeStatus?.state === "closed";
 }
 
-const MSG_CLOSED_NO_MOVE = "クローズ済みです。先に開き直してください。";
+/**
+ * クローズ済みの回の［戻る］［次へ］の下の行とボタンの title。再開できるときだけ 2 行目（次の手）を出す
+ * （再開の期限切れ・削除が始まった回では再開もできないので、次の手を書かない。理由は「回のクローズ」の札が言う）
+ */
+const MSG_CLOSED_NO_MOVE = "この回はクローズ済みです。";
+const MSG_CLOSED_REOPEN_FIRST = "先に回を再開してください。";
+function closedNoMoveText() {
+  return cohortCloseCanAct(state.closeStatus, "reopen") ? `${MSG_CLOSED_NO_MOVE}\n${MSG_CLOSED_REOPEN_FIRST}` : MSG_CLOSED_NO_MOVE;
+}
 
 /**
  * 回のクローズ（0179。決定 96）の札。出すのは Day2 の最後の段階が今のとき・Day2 のあと・クローズ済みのとき・
@@ -1422,19 +1518,33 @@ function closeSlot() {
   if (!cohortCloseSlotVisible(state.status, status, state.closeStatusError)) {
     return el("section", { id: "cohort-close-panel", hidden: true, "aria-label": "回のクローズ" });
   }
-  const lines = state.closeStatusError ? [state.closeStatusError] : cohortCloseLines(status);
+  const items = state.closeStatusError
+    ? [{ text: state.closeStatusError, tip: null, code: state.closeStatusErrorCode }]
+    : cohortCloseLineItems(status, Date.now(), { period: state.status?.period ?? null });
   const kind = status?.state === "closed" ? "reopen" : "close";
+  // 行ごとのホバーの文は、札の ？（1 つ）にまとめる（組 13 の INS-123。タッチの端末でも読める）。
+  // 開いた状態は描き直し（約 10 秒の読み直し）でも保つ（fold と同じ ui.folds）
+  const tips = items.map((i) => i.tip).filter(Boolean);
+  const help = tips.length
+    ? el("details", { className: "confirm-help", id: "cohort-close-help", open: ui.folds.has("close-help") }, el("summary", { "aria-label": "くわしく", text: "?" }), el("p", { className: "small", text: tips.join("") }))
+    : null;
+  help?.addEventListener("toggle", () => {
+    if (!help.isConnected) return;
+    if (help.open) ui.folds.add("close-help");
+    else ui.folds.delete("close-help");
+  });
   return el(
     "section",
     { className: "card", id: "cohort-close-panel", "aria-labelledby": "cohort-close-h" },
     el("h2", { id: "cohort-close-h", text: "回のクローズ" }),
-    ...lines.map((text) => el("p", { className: state.closeStatusError ? "warn-text" : "hint", text })),
+    ...items.map((i) => el("p", { className: state.closeStatusError ? "warn-text" : "hint", text: withAdminLine(i.text, i.code) }, codeTag(i.code))),
+    help,
     cohortCloseCanAct(status, kind)
       ? el("button", {
         type: "button",
         className: kind === "close" ? "btn danger big" : "btn big",
         id: "cohort-close-action",
-        text: kind === "close" ? "この回をクローズ" : "回を開き直す",
+        text: kind === "close" ? "この回をクローズ" : "回を再開する",
         disabled: state.busy,
         onclick: () => changeCohortClose(kind),
       })
@@ -1442,19 +1552,15 @@ function closeSlot() {
   );
 }
 
-/** 取り消しの案内の文（1 行目。残りの秒数を含む） */
-function undoText(undo) {
-  return `段階を移しました。あと ${undo.remainingSec} 秒は、前の段階に戻せます。`;
-}
-
-/** 取り消しの案内の 2 行目（その間の生成の件数。分からなければ空） */
+/** 取り消しの箱の ? の奥の文（その間の生成の件数。分からなければ空。? ごと隠す） */
 function undoJobsText(undo) {
-  return undo.jobsSince === null ? "" : `移してからの生成 ${formatCredits(undo.jobsSince)} 件は、戻しても今の段階の使用として残ります。`;
+  return undo.jobsSince === null ? "" : `段階を移したあとの生成 ${formatCredits(undo.jobsSince)} 件は、取り消しても今の段階に数えます。`;
 }
 
 /**
  * 取り消せる間だけ、1 秒ごとに残りの秒数の文を書き換える（入力中の欄を作り直さない）。
- * 時間は、読み込んだときのサーバーとの時刻の差を足した今の時刻で数え（undoView）、60 秒を過ぎたら取り消しの箱だけを消す。
+ * 時間は、読み込んだときのサーバーとの時刻の差を足した今の時刻で数え（undoView）、60 秒を過ぎたら取り消しの箱だけを消し、
+ * 隠していた［前の段階へ］を出し直す（描き直さない。U-02）。
  * 「この間の生成」の件数は、約 10 秒の読み直し（poll-lib.js。組 11 の (3)）が読んだ state.status から書き換える（この箱のためには読まない）
  */
 function updateUndoTimer() {
@@ -1467,18 +1573,22 @@ function updateUndoTimer() {
   undoTimer = setInterval(() => {
     const undo = state.status ? undoView(state.status, Date.now()) : { available: false };
     if (!undo.available) {
-      // 60 秒が過ぎた：画面全体は描き直さず、取り消しの箱だけを消す（入力中の欄のフォーカスを外さない）
+      // 60 秒が過ぎた：画面全体は描き直さず、取り消しの箱だけを消して［前の段階へ］を出す（入力中の欄のフォーカスを外さない）
       stopUndoTimer();
       document.getElementById("undo-box")?.remove();
+      const back = document.getElementById("move-back");
+      if (back) back.hidden = false;
       return;
     }
+    const line = undoLineView(state.status, undo);
     const text = document.getElementById("undo-text");
-    if (text) text.textContent = undoText(undo);
+    if (text && text.textContent !== line.text) text.textContent = line.text;
+    const sec = document.getElementById("undo-sec");
+    if (sec) sec.textContent = line.sec;
     const jobs = document.getElementById("undo-jobs");
-    if (jobs) {
-      jobs.textContent = undoJobsText(undo);
-      jobs.hidden = undo.jobsSince === null;
-    }
+    if (jobs) jobs.textContent = undoJobsText(undo);
+    const help = document.getElementById("undo-help");
+    if (help) help.hidden = undo.jobsSince === null;
   }, 1000);
 }
 
@@ -1555,7 +1665,7 @@ function studentsCard(s) {
       el("button", {
         type: "button",
         className: "btn compact",
-        text: allOn ? "選択を外す" : "全員を選ぶ",
+        text: allOn ? "選択を解除" : "全員を選択",
         disabled: !activeEmails.length,
         onclick: () => {
           for (const e of activeEmails) {
@@ -1580,7 +1690,7 @@ function studentsCard(s) {
         ),
         el("ul", { className: "students", "aria-label": "受講者" }, ...items),
       )
-      : el("p", { className: "muted", text: "受講者がいません。" }),
+      : el("p", { className: "muted", text: "受講者はまだいません" }),
   );
 }
 
@@ -1608,12 +1718,12 @@ function shownSubmitPanel() {
 
 /** 提出の段の 2 行目 */
 function submitNamesText(names) {
-  return names.length ? `出した人：${names.join("・")}` : "まだ誰も出していません。";
+  return names.length ? `提出した人：${names.join("・")}` : "提出はまだありません";
 }
 
 /**
- * 今の段階の提出の段（組 11 の (3)）：「提出（ワークショップ 2「台本と生成」）  7 / 10 人 · 作品 9 本」と「出した人：…」。
- * 「提出された作品（別のページ）」のすぐ下。文は textContent だけ。読み上げの知らせ（aria-live）は付けない
+ * 今の段階の提出の段（組 11 の (3)）：「提出（ワークショップ 2「台本と生成」）  7 / 10 人 · 作品 9 本」と「提出した人：…」。
+ * ワークショップの札（#wk-card）のすぐ下（組 13 の U-07）。文は textContent だけ。読み上げの知らせ（aria-live）は付けない
  */
 function submitPanel() {
   const p = shownSubmitPanel();
@@ -1626,7 +1736,7 @@ function submitPanel() {
   );
 }
 
-/** 提出の段だけを書き換える（無ければ足し、出さなくなったら外す） */
+/** 提出の段だけを書き換える（無ければワークショップの札のすぐ下に足し、出さなくなったら外す。並びは render と同じ。U-07） */
 function patchSubmitPanel() {
   if (ending) return;
   const node = document.getElementById("submit-panel");
@@ -1636,7 +1746,7 @@ function patchSubmitPanel() {
     return;
   }
   if (!node) {
-    document.getElementById("submissions-row")?.after?.(submitPanel());
+    document.getElementById("wk-card")?.after?.(submitPanel());
     return;
   }
   const title = document.getElementById("submit-title");
@@ -1676,12 +1786,12 @@ function patchStatusAt() {
   at.className = "small muted tabular";
 }
 
-/** 続けて読めないとき：回の見出しを「10:42 時点・更新できていません」にする（表示は前に読めた時点のまま） */
+/** 続けて読めないとき：回の見出しを「10:42 時点・更新エラー」にする（表示は前に読めた時点のまま） */
 function markStale() {
   const at = document.getElementById("status-at");
   const time = checkedAtText(state.statusAt);
   if (!at || !time) return;
-  at.textContent = `${time}・更新できていません`;
+  at.textContent = `${time}・更新エラー`;
   at.className = "small warn-text tabular";
 }
 
@@ -1745,8 +1855,8 @@ function limitItems(s) {
   const l = s.limits;
   const items = [];
   if (!state.isAdmin) {
-    if (l.perGrant !== null) items.push(`1 回に追加できる上限：${formatCredits(l.perGrant)} クレジット`);
-    if (l.perStudentStage !== null) items.push(`1 人あたりのこの段階の追加の合計：最大 ${formatCredits(l.perStudentStage)} クレジット`);
+    if (l.perGrant !== null) items.push(`1 回の追加：最大 ${formatCredits(l.perGrant)} クレジット`);
+    if (l.perStudentStage !== null) items.push(`この段階の 1 人への追加の合計：最大 ${formatCredits(l.perStudentStage)} クレジット`);
     if (l.perCohortDay !== null) {
       items.push(
         l.cohortDayTotal === null
@@ -1755,7 +1865,7 @@ function limitItems(s) {
       );
     }
   }
-  if (l.total !== null) items.push(`1 人あたりのこの回の追加の合計：最大 ${formatCredits(l.total)} クレジット（取り消した分も数えます）`);
+  if (l.total !== null) items.push(`この回の 1 人への追加の合計：最大 ${formatCredits(l.total)} クレジット（取り消した分を含む）`);
   return items;
 }
 
@@ -1789,7 +1899,7 @@ function grantCard(s) {
     "section",
     { className: "card", "aria-labelledby": "grant-h" },
     el("h2", { id: "grant-h", text: "クレジットを追加" }),
-    el("p", { className: "hint", text: "追加は今の段階だけに効きます。" }),
+    el("p", { className: "hint", text: "今の段階だけに追加します。" }),
     el(
       "div",
       { className: "grant-form" },
@@ -1839,7 +1949,7 @@ function grantCard(s) {
         ? fold(
           "revoked",
           `取り消した追加（${revoked.length} 件）`,
-          el("p", { className: "small muted", text: "回の合計には数えます。" }),
+          el("p", { className: "small muted", text: "回の合計に含みます。" }),
           el(
             "ul",
             { className: "my-grants revoked", "aria-label": "取り消した追加" },
@@ -1900,6 +2010,7 @@ const cohortCloseAction = createCohortCloseAction({
   rpc,
   confirm: confirmDialog,
   canStart: () => !state.busy && !ending && operableCohort(),
+  errorOpts: () => ({ period: state.status?.period ?? null }),
   onBusy: (busy) => {
     state.busy = busy;
     if (busy) {
@@ -1915,19 +2026,20 @@ const cohortCloseAction = createCohortCloseAction({
   onSuccess: async (_status, raw, kind, isCurrent) => {
     if (!isCurrent()) return;
     notify(raw.changed === false
-      ? kind === "close" ? "この回はすでにクローズされています。" : "この回はすでに開き直されています。"
-      : kind === "close" ? "回をクローズしました。停止した受講者と削除予定を確認してください。"
-      : `回を開き直し、${raw.restored_count} 人を有効に戻しました。個別変更などで戻さなかった人は ${raw.skipped_count} 人です。`);
+      ? kind === "close" ? "この回はクローズ済みです。" : "この回は再開済みです。"
+      : kind === "close" ? "回をクローズしました。"
+      : `回を再開しました。\n有効に戻した受講者：${raw.restored_count} 人（対象外 ${raw.skipped_count} 人）`);
     state.selected.clear();
     await loadStatusAndClose();
   },
-  onError: async (message) => {
-    notify(message, "error");
+  onError: async (message, error) => {
+    const code = cohortCloseErrorCode(error, { period: state.status?.period ?? null });
+    notify(withAdminLine(message, code), "error", [], code);
     await loadStatusAndClose();
   },
 });
 
-/** 回のクローズ・開き直し。確認のあいだに回・部品・ログインが変わったら送らない */
+/** 回のクローズ・再開。確認のあいだに回・部品・ログインが変わったら送らない */
 function changeCohortClose(kind) {
   const id = state.cohortId;
   const client = activeClient();
@@ -1967,11 +2079,13 @@ async function withBusy(fn, kind = null, target = null) {
 
 /**
  * 失敗を知らせて、理由を問わず最新を読み直す（U3-1。通信の失敗では操作が済んでいるかもしれない。ほかの人が先に段階を動かしていた
- * stage_changed も同じ）。通信の失敗のときは、networkMessage があればその文を出す。openMine：通信の失敗のとき「あなたの追加」を開いておく
+ * stage_changed も同じ）。通信の失敗のときは、networkMessage があればその文を出す。openMine：通信の失敗のとき「あなたの追加」を開いておく。
+ * op：前置き「〇〇エラー：」の操作の名前（移動・追加・取り消し。決まり 3.7）
  */
-async function failWith(error, { networkMessage = null, openMine = false } = {}) {
+async function failWith(error, { op = "", networkMessage = null, openMine = false } = {}) {
   const network = isNetworkFailure(error);
-  notify(network && networkMessage ? networkMessage : explainError(error), "error");
+  const code = network && networkMessage ? null : errorCode(op, error, { area: ERROR_AREA });
+  notify(network && networkMessage ? networkMessage : withAdminLine(errorText(op, error), code), "error", [], code);
   if (network && openMine) ui.folds.add("mine");
   await loadStatus();
 }
@@ -1987,6 +2101,7 @@ async function moveStage(direction, mv, s) {
     okText: direction === "back" ? "戻す" : "進める",
   });
   if (!ok) return;
+  let moved = false;
   await withBusy(async () => {
     const { error } = await rpc("cohort_stage_move", {
       p_cohort_id: state.cohortId,
@@ -1995,12 +2110,25 @@ async function moveStage(direction, mv, s) {
       p_note: null,
     });
     if (error) {
-      await failWith(error, { networkMessage: MSG_MOVE_NETWORK_FAILURE });
+      await failWith(error, { op: "移動", networkMessage: MSG_MOVE_NETWORK_FAILURE });
       return;
     }
-    notify(`${stageName(to)}へ${direction === "back" ? "戻しました" : "進めました"}。`);
+    moved = true;
     await loadStatusAndClose(); // 最後の段階に入るとクローズの札が出る
+    // 60 秒の取り消しの箱（「WS3 へ進めました」）が出るときは、同じことを言うトーストを出さない（箱が出ないときだけ知らせる）
+    const boxShown = !!state.status && !isClosed() && undoView(state.status, Date.now()).available;
+    if (!boxShown) notify(`${stageName(to)}へ${direction === "back" ? "戻しました" : "進めました"}。`);
   }, direction === "back" ? "move-back" : "move-next");
+  // 進めたら、次に押す［▶ 45 分で始める］（無ければ分の欄）へ画面を寄せてフォーカスを置く（組 13 の U-07。始め忘れを防ぐ）
+  if (moved && direction === "next") focusTimerStart();
+}
+
+/** 制作時間を始めるボタンへ寄せてフォーカスを置く。押せないとき・札が無いときは何もしない */
+function focusTimerStart() {
+  const target = [document.getElementById("timer-quick"), document.getElementById("timer-minutes")].find((n) => n && n.isConnected !== false && !n.disabled);
+  if (!target) return;
+  target.scrollIntoView?.({ block: "center" });
+  target.focus?.();
 }
 
 async function undoMove(undo, s) {
@@ -2014,10 +2142,10 @@ async function undoMove(undo, s) {
       p_note: "取り消し（前の段階に戻す）",
     });
     if (error) {
-      await failWith(error, { networkMessage: MSG_MOVE_NETWORK_FAILURE });
+      await failWith(error, { op: "移動", networkMessage: MSG_MOVE_NETWORK_FAILURE });
       return;
     }
-    notify(`${stageName(undo.toStage)}に戻しました。`);
+    notify(undoDoneText(undo.toStage));
     await loadStatusAndClose();
   }, "undo");
 }
@@ -2027,14 +2155,18 @@ async function addGrant(s) {
   const emails = [...state.selected];
   // 全角の数字・カンマは半角に直して受け付ける。大きすぎるときは、講師なら設定の 1 回の上限の文、分からなければ「数が大きすぎます」（C-2。50,000 は出さない）
   const check = stageGrantCreditsCheck(state.creditsText, { isInstructor: !state.isAdmin, limits: s.limits });
+  // 講師の追加が 0 に設定されている（管理者の設定を変える必要がある）ときだけコード（E-INS-51）
+  const stoppedCode = state.isAdmin ? null : perGrantExceededCode(s.limits?.perGrant ?? null);
   if (!check.ok) {
-    notify(check.message, "error");
+    const code = check.message === perGrantExceededText(s.limits?.perGrant ?? null) ? stoppedCode : null;
+    notify(withAdminLine(check.message, code), "error", [], code);
     return;
   }
   const credits = check.credits;
   const plan = instructorGrantPlan({ emails, credits, students: s.students, limits: s.limits, isInstructor: !state.isAdmin, status: s });
   if (!plan.ok) {
-    notify("追加できません。", "error", plan.problems);
+    const code = plan.problems.includes(perGrantExceededText(s.limits?.perGrant ?? null)) ? stoppedCode : null;
+    notify("追加できません。", "error", plan.problems, code);
     return;
   }
   const names = emails.map((e) => s.students.find((x) => x.email === e)?.name ?? e);
@@ -2048,10 +2180,10 @@ async function addGrant(s) {
       p_note: state.noteText.trim() || null,
     });
     if (error) {
-      await failWith(error, { networkMessage: MSG_GRANT_NETWORK_FAILURE, openMine: true });
+      await failWith(error, { op: "追加", networkMessage: MSG_GRANT_NETWORK_FAILURE, openMine: true });
       return;
     }
-    notify(`${emails.length} 人に、1 人あたり ${formatCredits(credits)} クレジットを追加しました。`);
+    notify(`${emails.length} 人に +${formatCredits(credits)} を追加しました。`);
     state.selected.clear();
     state.creditsText = "";
     state.noteText = "";
@@ -2063,14 +2195,14 @@ async function revokeGrant(g, name, s) {
   clearNotice();
   const ok = await confirmDialog({
     title: "追加を取り消しますか？",
-    lines: [`${name} への追加（+${formatCredits(g.credits)}）を取り消します。`, ...REVOKE_CONFIRM_LINES],
-    okText: "取り消す",
+    lines: [`${name} のこの段階の上限が ${formatCredits(g.credits)} 減ります。`, ...REVOKE_CONFIRM_LINES],
+    okText: "追加を取り消す",
   });
   if (!ok) return;
   await withBusy(async () => {
     const { error } = await rpc("revoke_stage_grant", { p_grant_id: g.id, p_note: null });
     if (error) {
-      await failWith(error, { openMine: true });
+      await failWith(error, { op: "取り消し", openMine: true });
       return;
     }
     notify(`${name} への追加（+${formatCredits(g.credits)}）を取り消しました。`);
@@ -2110,7 +2242,7 @@ async function openMinutesEditor() {
   const { data, error } = response ?? {};
   const m = error ? null : normalizeInstructorStageMinutes(data, cohortId);
   if (!m) {
-    notify(minutesErrorText(error, MSG_MINUTES_LOAD_FAILED), "error");
+    notify(minutesErrorText(error, MSG_MINUTES_LOAD_FAILED), "error", [], minutesErrorCode(error));
     if (error && isMissingFunctionError(error, "instructor_stage_minutes")) {
       state.minutes = null; // 252 が無い：分の表示とボタンを隠す
       render();
@@ -2125,7 +2257,7 @@ async function openMinutesEditor() {
 }
 
 /**
- * 「今日の時間（分）」の窓（<dialog id="confirm"> を使う。Esc・［やめる］で閉じる）。行は今日の段階だけ（seq の順）。空は「外す」。
+ * 「今日の時間（分）」の窓（<dialog id="confirm"> を使う。Esc・［キャンセル］で閉じる）。行は今日の段階だけ（seq の順）。空は「外す」。
  * ［保存］は、入力に誤りがある・変わった段階が無い・通信中のときは押せない。保存は変わった段階だけを 1 回で送る（withBusy を通す）
  */
 function showMinutesDialog(m) {
@@ -2159,7 +2291,7 @@ function showMinutesDialog(m) {
   let saving = false;
   let failed = false; // 保存の失敗の文を出している（次の入力で消す）
   const save = el("button", { type: "button", className: "btn primary big", id: "minutes-save", text: "保存", onclick: () => submit() });
-  const cancel = el("button", { type: "button", className: "btn big", text: "やめる", onclick: () => finish() });
+  const cancel = el("button", { type: "button", className: "btn big", text: "キャンセル", onclick: () => finish() });
 
   /** 入力を読み直して、合計・注意・誤り・目安・［保存］の可否を書き換える（窓は描き直さない。入力のフォーカスを保つ） */
   const update = () => {
@@ -2225,12 +2357,15 @@ function showMinutesDialog(m) {
     }
     if (result.error) {
       const message = minutesErrorText(result.error);
+      const code = minutesErrorCode(result.error);
       if (ctl.signal.aborted) {
-        notify(message, "error");
+        notify(message, "error", [], code);
         return;
       }
       failed = true;
       errorLine.textContent = message;
+      const tag = codeTag(code);
+      if (tag) errorLine.append(tag);
       update();
       return;
     }
@@ -2263,7 +2398,7 @@ function showMinutesDialog(m) {
     ),
   );
   update();
-  // Esc は、閉じる前に止めて、やめるとして扱う。ほかの所（ログアウトの hideContent）で閉じられたら、この窓の見張りも終える
+  // Esc は、閉じる前に止めて、キャンセルとして扱う。ほかの所（ログアウトの hideContent）で閉じられたら、この窓の見張りも終える
   dialog.addEventListener("cancel", (e) => {
     e.preventDefault();
     finish();
@@ -2282,7 +2417,7 @@ async function main() {
   if (params.get("error_description") || hash.get("error_description")) {
     // 文言は誰でも書き換えられるので、URL の内容は表示しない
     history.replaceState(null, "", returnUrl());
-    showLoginNote("ログインできませんでした。もう一度ログインしてください。");
+    showLoginNote("ログインできませんでした。\n再度ログインしてください。");
     show("login");
     return;
   }
@@ -2295,8 +2430,7 @@ async function main() {
     return;
   }
   if (error) {
-    $("failed-message").textContent = "ログイン状態を確認できませんでした。もう一度試してください。";
-    show("failed");
+    showFailed("ログインエラー：状態を確認できません。\n［再試行］を押してください。");
     return;
   }
   if (!session) {
@@ -2310,7 +2444,7 @@ async function main() {
     }
     if (chosen.guide) {
       // 共有のログインも管理コンソールのログインも使えない（鍵が無い・12 時間を過ぎた・取り消された）：3.7 の文と［管理コンソールを開く］を出す（5.3.1 の 3）
-      showLoginNote(MSG_TEACHER_LOGIN_FIRST + chosen.guide);
+      showLoginNote(`${MSG_TEACHER_LOGIN_FIRST}\n${chosen.guide}`);
       $("login-console-btn").hidden = false;
     }
     watchConsoleKey();
@@ -2332,6 +2466,9 @@ function openAdminConsole() {
   window.open("/admin.html", "_blank", "noopener");
 }
 
+/** 起動（main）が想定外の例外で止まったときのエラーコード（提出作品は E-WRK-99。下の起動の失敗の文は 2 つの画面で同じ文字） */
+const BOOT_ERROR_CODE = "E-INS-99";
+
 // 戻る・進むでキャッシュ（bfcache）から表示されたときは、読み込み直して今のログインの状態から作り直す
 window.addEventListener("pageshow", (e) => {
   if (!e.persisted) return;
@@ -2352,6 +2489,5 @@ $("admin-console-btn").addEventListener("click", openAdminConsole);
 $("login-console-btn").addEventListener("click", openAdminConsole);
 
 main().catch(() => {
-  $("failed-message").textContent = "エラーが発生しました。ページを開き直してください。";
-  show("failed");
+  showFailed("表示エラーが発生しました。\nページを再読み込みしてください。", BOOT_ERROR_CODE);
 });

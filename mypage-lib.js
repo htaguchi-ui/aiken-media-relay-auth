@@ -17,7 +17,7 @@ export function formatCredits(value) {
 /** つなぎ方の［コピー］：コピーできたときの知らせ */
 export const MSG_COPY_OK = "コピーしました";
 /** つなぎ方の［コピー］：クリップボードが使えないとき（枠の文字を選んだ状態にして出す） */
-export const MSG_COPY_FALLBACK = "コピーできませんでした。枠の文字を選んだので、選んだ文字をコピーしてください。";
+export const MSG_COPY_FALLBACK = "コピーできませんでした。\n選択した文字を手動でコピーしてください。";
 /** コピーの知らせを消すまでの時間（ミリ秒。失敗の知らせは消さない） */
 export const COPY_OK_CLEAR_MS = 4000;
 
@@ -56,8 +56,8 @@ export function roleBadgeClass(role) {
   return role === "student" || role === "member" || role === "instructor" || role === "admin" ? role : "";
 }
 
-/** 枠の対象外（管理者以外）で、案内の文も無いときの 1 行 */
-export const MSG_NO_WINDOW = "クレジットの枠はありません";
+/** 枠の対象外（管理者以外）で、案内の文も無いときの 1 行（管理コンソールの「管理者はクレジットの枠の対象外です。」と同じ言い方） */
+export const MSG_NO_WINDOW = "クレジットの枠の対象外です。";
 
 /** 残りがこの割合以下なら、色を変えて知らせる */
 export const LOW_RATIO = 0.2;
@@ -99,7 +99,7 @@ export function creditsView(credits, role) {
 
 /** 残りが少ない・無いときの 1 行（色だけで伝えないための文。どちらでもないときは null） */
 export const MSG_LOW = "残りが少なくなっています";
-export const MSG_EMPTY = "残りがありません。追加が必要なときは、講師・スタッフに知らせてください。";
+export const MSG_EMPTY = "残りがありません。\n追加が必要なときは、講師・スタッフにお知らせください。";
 
 /**
  * 残りの主カードに添える注意の 1 行。view は creditsView の結果、credits は user-api の credits。
@@ -288,28 +288,39 @@ export function priceText(model) {
   }
 }
 
-export const MSG_CODE_FAILED = "ログインを完了できませんでした。もう一度ログインしてください。";
-/** 「登録されていない」画面の 3 つの文（C-1）。1 文ずつ改行して出す（画面の側は white-space: pre-line）。2 文目は講師の画面の拒否の画面（instructor.html）と同じ */
-const MSG_DENIED_FIRST = "利用の登録を確認できませんでした。";
-const MSG_DENIED_NEXT = "［ログアウト］を押し、次の画面の「別のアカウントでログイン」で、研修で案内されたアカウントを選んでください。";
-const MSG_DENIED_HELP = "入れないときは、講師・スタッフに知らせてください。";
-export const MSG_DENIED = [MSG_DENIED_FIRST, MSG_DENIED_NEXT, MSG_DENIED_HELP].join("\n");
+export const MSG_CODE_FAILED = "ログインを完了できませんでした。\n再度ログインしてください。";
+/**
+ * 「登録されていない」画面の 2 つの文（C-1）。1 文ずつ改行して出す（画面の側は white-space: pre-line）。
+ * 2 文目は拒否の画面の形「［ログアウト］を押し、〇〇のアカウントでログインしてください。」（講師ページは「講師のアカウント」なので写しではない）。
+ * コード（E-LOG-51）は最後の文の後ろに 1 回だけ（MSG_DENIED_CODE）。入れないときの連絡先はホバー（MSG_DENIED_TIP）
+ */
+const MSG_DENIED_FIRST = "利用登録が確認できません。";
+const MSG_DENIED_NEXT = "［ログアウト］を押し、案内されたアカウントでログインしてください。";
+export const MSG_DENIED = [MSG_DENIED_FIRST, MSG_DENIED_NEXT].join("\n");
+export const MSG_DENIED_CODE = "E-LOG-51";
+export const MSG_DENIED_TIP = "案内されたアカウントでも入れないときは、講師・スタッフにお知らせください。";
 
 /**
- * 「登録されていない」画面の文。ログインしたメールアドレスが分かれば 1 文目を「このアカウント（…）は登録されていません。」の形にする
+ * 「登録されていない」画面の文。ログインしたメールアドレスが分かれば 1 文目を「このアカウント（…）の利用登録が確認できません。」の形にする
  * （違うアカウントで入ったと気づけるように。メールを出すのはこの画面だけ）。分からなければ MSG_DENIED
  */
 export function deniedMessage(email) {
   if (typeof email !== "string" || !email.trim()) return MSG_DENIED;
-  return [`このアカウント（${email.trim()}）は登録されていません。`, MSG_DENIED_NEXT, MSG_DENIED_HELP].join("\n");
+  return [`このアカウント（${email.trim()}）の利用登録が確認できません。`, MSG_DENIED_NEXT].join("\n");
 }
-export const MSG_EXPIRED = "ログインの有効期限が切れました。もう一度ログインしてください。";
-export const MSG_FAILED = "読み込めませんでした。インターネットの接続を確かめて、もう一度試してください。";
+export const MSG_EXPIRED = "ログインの有効期限が切れました。\n再度ログインしてください。";
+/** 読み込みの失敗（#failed・#refresh-error。どちらにも［再試行］がある） */
+export const MSG_FAILED = "読み込みエラー：情報を取得できません。\n［再試行］を押してください。";
+/** 通信できなかったとき（status 0）。submissions-lib.js の MSG_NETWORK_PRESS_AGAIN と同じ文（試験で照らす） */
+export const MSG_ME_OFFLINE = "通信エラー：接続できませんでした。\nインターネット接続を確認してください。";
+/** /me の応答の形が違う（原因が分からない。E-LOG-99） */
+export const MSG_ME_BAD_REPLY = "読み込みエラーが発生しました。\nしばらくしてから再度お試しください。";
+export const MSG_ME_BAD_REPLY_CODE = "E-LOG-99";
 
 /**
  * user-api の応答（HTTP の状態と JSON）から、画面の進め方を決める
  * - ok：表示する（body は検査済み）／unauthorized：ログインし直し／denied：名簿に無い・無効／failed：通信の失敗など
- * status が 0 は通信できなかったとき
+ * status が 0 は通信できなかったとき。code はエラーコード（文の後ろに小さく薄く出す。無ければ付けない。決まり 3.2）
  */
 export function decideApiOutcome(status, body) {
   if (status === 200) {
@@ -317,14 +328,15 @@ export function decideApiOutcome(status, body) {
       body.credits && typeof body.credits === "object" && Array.isArray(body.models);
     return ok
       ? { action: "ok", body }
-      : { action: "failed", message: "情報を読み込めませんでした。続くときは、講師・スタッフに知らせてください。" };
+      : { action: "failed", message: MSG_ME_BAD_REPLY, code: MSG_ME_BAD_REPLY_CODE };
   }
   if (status === 401) return { action: "unauthorized", message: MSG_EXPIRED };
   // 名簿に無い・停止中・本人確認の不備（user-api の 403 not_registered）。許可していない接続元などの 403 は通信の失敗として扱う
-  if (status === 403 && body?.error === "not_registered") return { action: "denied", message: MSG_DENIED };
+  if (status === 403 && body?.error === "not_registered") return { action: "denied", message: MSG_DENIED, code: MSG_DENIED_CODE };
   if (status === 503) {
-    return { action: "failed", message: "ただいま混み合っています。少し待ってから、もう一度試してください。" };
+    return { action: "failed", message: "混雑しています。\nしばらくしてから再度お試しください。" };
   }
+  if (status === 0) return { action: "failed", message: MSG_ME_OFFLINE };
   return { action: "failed", message: MSG_FAILED };
 }
 

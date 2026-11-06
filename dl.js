@@ -1,6 +1,6 @@
 // 保存のページ（/dl/。docs/design-submissions.md 4.9「スマホで開く」・段 1D）。マイページで出した QR（または［この端末で開く］）の行き先。ログインは要らず、URL の断片（#k=）の鍵だけで開く。
 // 動き：(1) 鍵を URL の断片から取り出し、すぐ history.replaceState で URL から消す。鍵はこのページの中の変数に置き、**読み直し（再読み込み）で戻れるよう、このタブの sessionStorage にだけ一時に置く**（下の「鍵の置き場」）
-//       (2) POST /dl/open { key }。準備中は 10 秒ごとに、ready の間は 1 分ごとに読み直す（時計は始まらない・仕事は進まない）。ready なら［ZIP を保存］と作品ごとの［保存］（D11）。最初の通信が失敗したら［もう一度読み込む］
+//       (2) POST /dl/open { key }。準備中は 10 秒ごとに、ready の間は 1 分ごとに読み直す（時計は始まらない・仕事は進まない）。ready なら［ZIP を保存］と動画ごとの［保存］（D11）。最初の通信が失敗したら［再読み込み］
 //       (3) 保存の URL は POST /dl/url { key, file? } で取り、そのとき初めて保存を始める（期限の短い署名つき URL。1 本のリンクで 30 回まで）
 //       (4) 使えない理由は区別せず「このリンクは使えません」（設計 4.9）。使えないと分かったら鍵を捨てる（変数・sessionStorage の両方）
 // 鍵の置き場（Codex TASK-0244 F244-01：鍵を URL から消すと、通信が一瞬失敗したあとの再読み込みで鍵が無く、まだ有効なリンクが「使えません」になる）：
@@ -28,6 +28,8 @@ import {
   DL_SAVE_ZIP,
   DL_TITLE,
   DL_UNAVAILABLE,
+  dlErrorCode,
+  dlExpiredText,
   dlFileLabel,
   dlGuide,
   dlLoadErrorText,
@@ -114,6 +116,8 @@ export function createDlPage(o) {
   let tooLong = false;
   /** 使える時間が終わった（鍵は捨てた。終わりの文を出す） */
   let expired = false;
+  /** 終わりの文（リンクの期限が保存期間の終わりと同じなら「保存期間は終了しました。」。dlExpiredText） */
+  let expiredText = MSG_DL_EXPIRED;
   /** サーバーの時計との差（/dl/open のたびに数え直す）。server_now が無いときは null（端末の時計だけでは期限を決めない） */
   let serverOffset = null;
   const serverNow = () => (serverOffset === null ? null : now() + serverOffset);
@@ -141,6 +145,12 @@ export function createDlPage(o) {
     }
     for (const c of children.flat()) if (c !== null && c !== undefined && c !== false) node.append(c);
     return node;
+  };
+
+  /** 断りの文の後ろに付けるエラーコードの部品（文と別の値。小さく薄く。コードが無ければ null。決まり 3.2） */
+  const codeTail = (text) => {
+    const code = dlErrorCode(text);
+    return code ? el("span", { className: "err-code", text: `（${code}）` }) : null;
   };
 
   async function call(path, body) {
@@ -173,6 +183,7 @@ export function createDlPage(o) {
     const at = serverNow();
     if (at === null || Date.parse(open.expiresAt) > at) return;
     if (store.get() === key) store.remove();
+    expiredText = dlExpiredText(open);
     key = null;
     open = null;
     expired = true;
@@ -245,7 +256,7 @@ export function createDlPage(o) {
 
   /**
    * 読み直し：準備中は 10 秒ごと（最大 90 回）／ready の間は 1 分ごと（最大 240 回。「あと何分」を新しくし、時間が終わったら 404 を拾う）／
-   * 最初の通信が失敗したままのときは 10 秒ごとに最大 6 回（［もう一度読み込む］も出す）
+   * 最初の通信が失敗したままのときは 10 秒ごとに最大 6 回（［再読み込み］も出す）
    */
   function schedulePoll() {
     stopPoll();
@@ -274,14 +285,14 @@ export function createDlPage(o) {
     }, delay);
   }
 
-  /** ［もう一度読み込む］：最初の通信が失敗したあと、鍵を持ったまま /dl/open をやり直す */
+  /** ［再読み込み］：最初の通信が失敗したあと、鍵を持ったまま /dl/open をやり直す */
   async function retry() {
     if (!key || busy || loading || !stillStored()) return;
     retryCount = 0;
     await load();
   }
 
-  /** ZIP（file なし）か作品 1 本の保存を始める */
+  /** ZIP（file なし）か動画 1 本の保存を始める */
   async function save(file = null) {
     if (busy || !key || !stillStored()) return;
     const myKey = key;
@@ -329,11 +340,11 @@ export function createDlPage(o) {
     expireIfDue();
     const parts = [el("h1", { text: DL_TITLE })];
     if (!key || !open) {
-      if (!key) parts.push(el("p", { className: "error-text", "data-testid": "dl-unavailable", role: "alert", text: expired ? MSG_DL_EXPIRED : DL_UNAVAILABLE }));
+      if (!key) parts.push(el("p", { className: "error-text", "data-testid": "dl-unavailable", role: "alert", text: expired ? expiredText : DL_UNAVAILABLE }));
       else if (notice) {
         // 最初の通信が失敗した：鍵はこのページが持っている。同じページで読み直せる（再読み込みでも、鍵は sessionStorage から戻る）
         parts.push(
-          el("p", { className: "error-text", "data-testid": "dl-load-failed", role: "alert", text: notice }),
+          el("p", { className: "error-text", "data-testid": "dl-load-failed", role: "alert", text: notice }, codeTail(notice)),
           el("button", { type: "button", className: "btn primary big", "data-action": "dl-retry", text: DL_RETRY_LABEL, disabled: loading, onclick: () => void retry() }),
           el("p", { className: "muted small", "data-testid": "dl-rescan", text: MSG_DL_RESCAN }),
         );
@@ -373,7 +384,7 @@ export function createDlPage(o) {
           );
         }
       }
-      if (notice) parts.push(el("p", { className: noticeTone === "error" ? "error-text" : "muted", "data-testid": "dl-notice", role: noticeTone === "error" ? "alert" : "status", text: notice }));
+      if (notice) parts.push(el("p", { className: noticeTone === "error" ? "error-text" : "muted", "data-testid": "dl-notice", role: noticeTone === "error" ? "alert" : "status", text: notice }, noticeTone === "error" ? codeTail(notice) : null));
     }
     o.root.replaceChildren(...parts.filter((n) => n !== null));
   }
@@ -416,6 +427,7 @@ export function createDlPage(o) {
     notReadyHint = false;
     open = null;
     expired = false;
+    expiredText = MSG_DL_EXPIRED;
     notice = "";
     busy = false;
     pollCount = 0;

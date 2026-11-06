@@ -7,7 +7,7 @@
 <!-- CSP（SEC-03。2026-10-23）：スクリプトは自分のサイトの JS（redirect-check.js・auth-storage.js）・版を固定した supabase-js・下のインラインのモジュール（hash）だけ。
      通信は Supabase（Auth・RPC）だけ。フォームは送らない。埋め込みの禁止（frame-ancestors）は meta では効かないので vercel.json の全体の見出しで付ける。
      下のインラインのモジュール（type="module" のスクリプト）の中身を 1 文字でも変えたら hash が合わなくなり、この画面が動かなくなる。公開の build（tools/build-site.mjs）が食い違いで止め、正しい hash を知らせるので、ここを直す -->
-<meta http-equiv="Content-Security-Policy" content="default-src 'none'; script-src 'self' https://cdn.jsdelivr.net/npm/@supabase/supabase-js@2.117.2/dist/umd/supabase.js 'sha256-UIneAgjT+pc9+LpvFSKWgJPH942qWW8xTNvkogkxw5c='; connect-src https://tnzwhwitgnzoehbjrmoy.supabase.co; style-src 'unsafe-inline'; img-src 'self'; object-src 'none'; base-uri 'none'; form-action 'none'">
+<meta http-equiv="Content-Security-Policy" content="default-src 'none'; script-src 'self' https://cdn.jsdelivr.net/npm/@supabase/supabase-js@2.117.2/dist/umd/supabase.js 'sha256-WFRwTthzpIm+Fx5COwuCdXlzZ36xOlqj+dute7O/Of4='; connect-src https://tnzwhwitgnzoehbjrmoy.supabase.co; style-src 'unsafe-inline'; img-src 'self'; object-src 'none'; base-uri 'none'; form-action 'none'">
 <title>A.I.KEN Studio ログイン</title>
 <!-- supabase-js は版を固定し、改ざんされていないことを integrity（SRI）で確かめてから使う（window.supabase） -->
 <script src="https://cdn.jsdelivr.net/npm/@supabase/supabase-js@2.117.2/dist/umd/supabase.js" integrity="sha384-Rj26LVGvoeRVR6+mwQmFfcR3QOBEwT+ZmuCWpuiqeTzJpCs0ER4ITAWGb4Hiy3Ok" crossorigin="anonymous"></script>
@@ -48,6 +48,9 @@
   p { margin: 0 0 12px; }
   .muted { color: var(--muted); font-size: 0.9rem; }
   .error { color: var(--danger); }
+  /* 断りは「1 行目＋改行＋次の手」（JS の文の改行をそのまま出す）。エラーコードは最後の文の後ろに小さく薄く（決まり 3.2） */
+  #status, .error, #blocked .muted { white-space: pre-line; }
+  .err-code { color: var(--muted); font-size: 0.8rem; font-weight: 400; white-space: nowrap; }
   .who { margin: 12px 0 16px; padding: 12px 14px; border: 1px solid var(--border); border-radius: 12px; background: var(--card-2); }
   .who dt { color: var(--muted); font-size: 0.85rem; line-height: 1.5; }
   .who dt:not(:first-child) { margin-top: 10px; padding-top: 10px; border-top: 1px solid var(--border); }
@@ -230,20 +233,20 @@
   </section>
 
   <section id="consent" hidden>
-    <p><span class="nb">許可すると、</span><span class="nb">次のアプリが、</span><span class="nb">あなたのアカウントで</span> <span class="nb">A.I.KEN Studio を</span><span class="nb">使えるようになります。</span></p>
+    <p><span class="nb">次のアプリに、</span><span class="nb">このアカウントでの利用を</span><span class="nb">許可しますか？</span></p>
     <dl class="who">
       <dt>許可したあとに戻るアプリ</dt>
       <dd class="dest" id="redirect-desc"></dd>
       <dd class="dest-addr" id="redirect-addr" hidden></dd>
-      <dt>接続しようとしているアプリ</dt>
-      <dd><bdi id="client-name"></bdi> <span class="name-note"><span class="nb">（アプリが名乗っている名前です。</span><span class="nb">本物とは限りません）</span></span></dd>
+      <dt>接続するアプリ</dt>
+      <dd><bdi id="client-name"></bdi> <span class="name-note" title="アプリが自分で名乗っている名前です。"><span class="nb">（本物とは限りません）</span></span></dd>
       <dt>ログイン中のアカウント</dt>
       <dd id="user-email"></dd>
     </dl>
     <div class="warn" role="note">
       <details class="help">
         <summary><span class="help-text"><span id="warn-default"><span class="nb">自分で始めた接続のときだけ、</span><span class="nb">許可してください。</span></span><span id="loopback-warning" hidden><span class="nb">この PC で自分が始めた</span><span class="nb">接続のときだけ、</span><span class="nb">許可してください。</span></span></span><span class="help-q" aria-hidden="true">？</span></summary>
-        <div class="help-body">あなた自身がアプリでつなぐ操作をして、その流れでこの画面が開いたときだけ、許可してください。人から送られたリンクで開いたときは、「許可しない」を押してください。許可したあとの画面の URL も、人に送らないでください。</div>
+        <div class="help-body">人から送られたリンクで開いたときは［許可しない］を押してください。</div>
       </details>
       <p><span class="nb">この画面の URL は、</span><span class="nb">人に送らないでください。</span></p>
     </div>
@@ -252,12 +255,12 @@
       <button id="deny-btn">許可しない</button>
     </div>
     <p class="muted" style="margin-top:16px"><span class="nb">アカウントが違う場合は</span> <button class="link" id="switch-btn">別のアカウントでログイン</button></p>
-    <p class="muted switch-note"><span class="nb">ほかのタブの A.I.KEN Studio も</span><span class="nb">ログアウトします。</span></p>
+    <p class="muted switch-note"><span class="nb">ほかのタブも</span><span class="nb">ログアウトします。</span></p>
   </section>
 
   <section id="blocked" hidden>
-    <p class="error">このアカウント（<span id="blocked-email"></span>）では使えません。</p>
-    <p class="muted"><span class="nb">許可された会社の Google アカウント（</span><span class="nb">@a-i-ken.jp</span> / <span class="nb">@a-i-ken.com</span> / <span class="nb">@orenda.co.jp</span> / <span class="nb">@net-fun.co.jp</span><span class="nb">）でログインしてください。</span></p>
+    <p class="error" id="blocked-head">このアカウント（<span id="blocked-email"></span>）は使えません。</p>
+    <p class="muted"><span class="nb">案内された Google アカウントで</span><span class="nb">ログインしてください。</span></p>
     <div class="actions"><button class="primary" id="relogin-btn">別のアカウントでログイン</button></div>
   </section>
 </main>
@@ -301,7 +304,7 @@
 
   // 読み込めない（通信の失敗・integrity の不一致）ときは先へ進まない
   if (typeof window.supabase?.createClient !== "function") {
-    document.getElementById("status").textContent = "画面の部品を読み込めませんでした。通信状態を確認して、ページを開き直してください。";
+    document.getElementById("status").textContent = "表示エラー：画面を読み込めません。\nページを再読み込みしてください。";
     throw new Error("supabase-js を読み込めませんでした");
   }
   const { createClient } = window.supabase;
@@ -462,24 +465,33 @@
     dropSession(CONSENT_OWNED_KEY);
     if (target) await endOwnedSession(target);
   };
-  const expiredText = `${CONSENT_TIME_LIMIT_MS / 60000} 分が過ぎたため、ログインを終了しました。使っているアプリ（ChatGPT・Claude（claude.ai）・Codex・Claude Code）から、もう一度接続してください。`;
-  /** 共有のログインのとき（ログアウトはしない）の、許可の画面の時間切れの文 */
-  const expiredSharedText = `${CONSENT_TIME_LIMIT_MS / 60000} 分が過ぎたため、接続の操作を終了しました。使っているアプリ（ChatGPT・Claude（claude.ai）・Codex・Claude Code）から、もう一度接続してください。`;
+  const expiredText = `接続の有効期限（${CONSENT_TIME_LIMIT_MS / 60000} 分）が切れました。\nアプリから再度接続してください。`;
+  /** 共有のログインのとき（ログアウトはしない）の、許可の画面の時間切れの文。利用者がすることは同じなので、文も同じ */
+  const expiredSharedText = expiredText;
   /** 許可の画面を出している間に、ログインが替わった（別の人・ログアウト）ときの文 */
-  const changedText = "ログインが替わったため、接続の操作を止めました。使っているアプリ（ChatGPT・Claude（claude.ai）・Codex・Claude Code）から、もう一度接続してください。";
+  const changedText = "接続エラー：ログイン状態が変わりました。\nアプリから再度接続してください。";
 
   const $ = (id) => document.getElementById(id);
   const show = (id) => {
     for (const s of ["login", "consent", "blocked"]) $(s).hidden = s !== id;
     $("status").hidden = true;
   };
-  const fail = (message) => {
+  /** 断りの文（node の中身）と、その後ろのエラーコード（文と別の値。小さく薄く。決まり 3.2）。コードが無ければ文だけ */
+  const setText = (node, message, code = null) => {
+    node.textContent = message;
+    if (!code) return;
+    const c = document.createElement("span");
+    c.className = "err-code";
+    c.textContent = "（" + code + "）";
+    node.appendChild(c);
+  };
+  const fail = (message, code = null) => {
     for (const s of ["login", "consent", "blocked"]) $(s).hidden = true;
     $("status").hidden = false;
     $("status").innerHTML = "";
     const p = document.createElement("p");
     p.className = "error";
-    p.textContent = message;
+    setText(p, message, code);
     $("status").appendChild(p);
   };
 
@@ -515,24 +527,26 @@
 
   async function main() {
     if (!authorizationId) {
-      fail("このページは、ChatGPT・Claude（claude.ai）・Codex・Claude Code の接続の操作から開いてください。");
+      fail("接続エラー：接続の情報がありません。\nアプリから接続を始めてください。");
       return;
     }
 
     // ログインが拒否されて戻ってきた場合（許可外のアカウントなど）は、その理由を表示する。
-    // URL の文言は誰でも書き換えられるので、登録時の確認処理が返す既知の文言だけをそのまま出し、それ以外は固定の文言にする
+    // URL の文言は誰でも書き換えられるので、登録時の確認処理が返す既知の文言だけを、決めた画面の文に置き換えて出し、それ以外は固定の文言にする。
+    // サーバーの文（DB の関数）は変えない。対応表のキーはサーバーの文、値は画面の文とエラーコード
     const hash = new URLSearchParams(location.hash.replace(/^#/, ""));
     const loginError = params.get("error_description") || hash.get("error_description");
     if (loginError) {
-      const KNOWN_ERRORS = [
-        "許可された会社の Google アカウント（@a-i-ken.jp / @a-i-ken.com / @orenda.co.jp / @net-fun.co.jp）でログインしてください。",
-        "許可された会社の Google Workspace で管理されているアカウントでログインしてください（個人の Google アカウントは使えません）。",
-        "このアカウントはまだ利用登録されていません。管理者に登録を依頼してください。",
-      ];
-      $("blocked-email").textContent = "選択した Google アカウント";
-      $("blocked").querySelector(".muted").textContent = KNOWN_ERRORS.includes(loginError)
-        ? loginError
-        : "ログインできませんでした。許可された会社の Google アカウント（@a-i-ken.jp / @a-i-ken.com / @orenda.co.jp / @net-fun.co.jp）でログインし直してください。";
+      const KNOWN_ERRORS = new Map([
+        ["許可された会社の Google アカウント（@a-i-ken.jp / @a-i-ken.com / @orenda.co.jp / @net-fun.co.jp）でログインしてください。", { text: "案内された Google アカウントでログインしてください。", code: null }],
+        ["許可された会社の Google Workspace で管理されているアカウントでログインしてください（個人の Google アカウントは使えません）。", { text: "個人の Google アカウントは使えません。\n会社の Google アカウントで再度ログインしてください。", code: null }],
+        ["このアカウントはまだ利用登録されていません。管理者に登録を依頼してください。", { text: "利用登録が確認できません。\n講師・スタッフにお知らせください。", code: "E-LOG-51" }],
+      ]);
+      const known = KNOWN_ERRORS.get(loginError);
+      // メールが分からないので、1 行目は括弧ごと出さない。理由が分からないときは、アカウントのせいに読めない文にする
+      $("blocked-head").textContent = known ? "このアカウントは使えません。" : "ログインエラーが発生しました。";
+      if (known) setText($("blocked").querySelector(".muted"), known.text, known.code);
+      else setText($("blocked").querySelector(".muted"), "案内されたアカウントで再度ログインしてください。", "E-LOG-99");
       show("blocked");
       return;
     }
@@ -540,7 +554,7 @@
     // PKCE のコード交換（Google から戻ってきた直後）が終わるまで待つ
     const { data: { session }, error: sessionError } = await supabase.auth.getSession();
     if (sessionError) {
-      fail("ログイン状態を確認できませんでした。ページを開き直してください。");
+      fail("ログインエラー：状態を確認できません。\nページを再読み込みしてください。");
       return;
     }
     if (!session) {
@@ -694,14 +708,13 @@
     const { data: membership, error: membershipError } = await supabase.rpc("my_membership");
     if (stale()) return "stale";
     if (membershipError) {
-      fail("利用登録の状態を確認できませんでした。少し待ってからページを開き直してください。");
+      fail("ログインエラー：登録の確認に失敗しました。\nしばらくしてから再読み込みしてください。");
       return false;
     }
     if (!membership?.registered || membership.status !== "active") {
       $("blocked-email").textContent = email;
-      $("blocked").querySelector(".muted").textContent = membership?.registered
-        ? "利用が停止されています。管理者にお問い合わせください。"
-        : "この機能を使うには、管理者による利用登録が必要です。管理者に登録を依頼してください。";
+      if (membership?.registered) setText($("blocked").querySelector(".muted"), "アカウントが停止中です。\n講師・スタッフにお知らせください。", "E-LOG-50");
+      else setText($("blocked").querySelector(".muted"), "利用登録が確認できません。\n講師・スタッフにお知らせください。", "E-LOG-51");
       show("blocked");
       return false;
     }
@@ -709,14 +722,15 @@
     const { data, error } = await supabase.auth.oauth.getAuthorizationDetails(authorizationId);
     if (stale()) return "stale";
     if (error) {
-      fail("接続の情報を取得できませんでした。使っているアプリ（ChatGPT・Claude（claude.ai）・Codex・Claude Code）から、もう一度接続してください。（" + error.message + "）");
+      console.warn("接続の情報を取得できません", error?.message);
+      fail("接続エラー：接続の情報を取得できません。\nアプリから再度接続してください。", "E-LOG-03");
       return false;
     }
     // 接続アプリは誰でも自動登録できるので、戻り先が ChatGPT・Claude（claude.ai）か PC 内のアプリ（Codex・Claude Code など）でなければ先へ進ませない。
     // 許可済みで戻り先 URL（認可コード付き）が直接返ってきた場合も同じ判定をしてから戻す
     const decision = decideConsent(data);
     if (decision.action === "block") {
-      fail("この接続元（" + decision.host + "）からは利用できません。使っているアプリ（ChatGPT・Claude（claude.ai）・Codex・Claude Code）から接続してください。");
+      fail("接続エラー：この接続元（" + decision.host + "）は許可されていません。\n使えるアプリ（ChatGPT・Claude Code など）から接続してください。");
       return false;
     }
     if (decision.action === "redirect") {
@@ -728,7 +742,7 @@
       return true;
     }
     if (decision.action !== "consent") {
-      fail("接続の情報を読み取れませんでした。使っているアプリ（ChatGPT・Claude（claude.ai）・Codex・Claude Code）から、もう一度接続してください。");
+      fail("接続エラー：接続の情報を取得できません。\nアプリから再度接続してください。", "E-LOG-04");
       return false;
     }
 
@@ -787,7 +801,7 @@
   // 許可・拒否のあとの戻り先も、自動で遷移させずに同じ判定をしてから戻す
   const goBack = (url) => {
     if (!isAllowedRedirect(url)) {
-      fail("戻り先が正しくないため中止しました。使っているアプリ（ChatGPT・Claude（claude.ai）・Codex・Claude Code）から、もう一度接続してください。");
+      fail("接続エラー：戻り先が正しくありません。\nアプリから再度接続してください。");
       return;
     }
     location.assign(url);
@@ -816,13 +830,15 @@
       // 許可したら、戻る前に、この画面で始めたログインはすぐログアウトする（共有のログインは切らない）
       await finish();
       if (error) {
-        fail("許可に失敗しました。使っているアプリ（ChatGPT・Claude（claude.ai）・Codex・Claude Code）から、もう一度接続してください。（" + error.message + "）");
+        console.warn("許可の送信がエラーで返りました", error.message);
+        fail("許可エラーが発生しました。\nアプリから再度接続してください。", "E-LOG-05");
         return;
       }
       goBack(data?.redirect_url);
     } catch (e) {
       await finish();
-      fail("許可に失敗しました。使っているアプリ（ChatGPT・Claude（claude.ai）・Codex・Claude Code）から、もう一度接続してください。（" + (e?.message || e) + "）");
+      console.warn("許可を送信できません", e?.message || e);
+      fail("通信エラー：許可を送信できません。\nアプリから再度接続してください。");
     }
   });
 
@@ -842,19 +858,22 @@
       shownIdentity = null;
       await finish();
       if (error) {
-        fail("処理に失敗しました。このタブを閉じてください。（" + error.message + "）");
+        console.warn("拒否の送信がエラーで返りました", error.message);
+        fail("接続エラー：拒否の送信に失敗しました。\nこのタブを閉じてください。");
         return;
       }
       goBack(data?.redirect_url);
     } catch (e) {
       await finish();
-      fail("処理に失敗しました。このタブを閉じてください。（" + (e?.message || e) + "）");
+      console.warn("拒否を送信できません", e?.message || e);
+      fail("接続エラー：拒否の送信に失敗しました。\nこのタブを閉じてください。");
     }
   });
 
   main().catch(async (e) => {
     await finish();
-    fail("エラーが発生しました：" + (e?.message || e));
+    console.warn("接続の画面の想定外の失敗", e?.message || e);
+    fail("接続エラーが発生しました。\nアプリから再度接続してください。", "E-LOG-99");
   });
 </script>
 </body>

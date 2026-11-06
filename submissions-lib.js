@@ -61,11 +61,18 @@ const SCOPES = ["public", "lecture", "private"];
 const ACCEPT_STATES = ["current", "grace", "until", "closed", "upcoming"];
 
 // A の約束 0.7：停止中の理由は、操作や画面が違っても同じ文で伝える。
-export const MSG_SUBMISSIONS_PAUSED = "いま提出の受け付けを止めています。講師の案内を待ってください。";
-export const MSG_SUBMISSIONS_READ_PAUSED = "いま作品の再生と保存を止めています。講師の案内を待ってください。";
-export function submissionsPauseText(code) {
+// 画面の文は「1 行目＋改行＋次の手」の形（組 13 の文言の表・決まり 1）。出す所は white-space: pre-line で 2 行にする
+export const MSG_SUBMISSIONS_PAUSED = "提出の受付を停止中です。\n講師の案内をお待ちください。";
+export const MSG_SUBMISSIONS_READ_PAUSED = "再生と保存を停止中です。\n講師の案内をお待ちください。";
+/**
+ * 講師が見る画面（提出作品）の再生と保存の停止の文（組 13 の INS-151）：講師に「講師の案内を」は合わないので 1 行目だけ。
+ * 1 行目はマイページの表（MP-040）の 1 行目と同じ文。受講者の文（上の定数）はマイページの表の持ち物なので、ここでは変えない
+ */
+export const MSG_SUBMISSIONS_READ_PAUSED_INSTRUCTOR = "再生と保存を停止中です。";
+/** viewer：見る人（"student"＝受講者〔既定〕・"instructor"＝講師） */
+export function submissionsPauseText(code, { viewer = "student" } = {}) {
   if (code === "submissions_paused") return MSG_SUBMISSIONS_PAUSED;
-  if (code === "submissions_read_paused") return MSG_SUBMISSIONS_READ_PAUSED;
+  if (code === "submissions_read_paused") return viewer === "instructor" ? MSG_SUBMISSIONS_READ_PAUSED_INSTRUCTOR : MSG_SUBMISSIONS_READ_PAUSED;
   return null;
 }
 
@@ -102,6 +109,37 @@ export function formatBytes(bytes) {
 }
 
 export const SCOPE_LABELS = { public: "公開", lecture: "講義内に限り公開", private: "完全非公開" };
+/**
+ * 公開範囲を選ぶときの名前（組 13 の U-13）。提出のダイアログの 3 つの丸（upload-lib.js の TEXT）と、
+ * マイページの一覧の ？ の中（myScopeHelp）で同じ文を使う。Canvas の submit/messages.ts と同じ文。
+ * 名前は決定済みなので括弧の説明は付けない。説明は SCOPE_CHOICE_NOTES（選択肢の下の 1 行。D-1104-130x-c）。
+ * 一覧の選ぶ欄は短い名前（SCOPE_LABELS）にして、説明は ？ の奥に置く（D-1105-121x）
+ */
+export const SCOPE_CHOICE_LABELS = {
+  lecture: "講義内に限り公開",
+  private: "完全非公開",
+  public: "公開",
+};
+/** 公開範囲の 3 つの説明（提出の窓では選択肢の下に常に 1 行ずつ。ホバーにしない。D-1104-130x-c。Canvas・ChatGPT と同じ文） */
+export const SCOPE_CHOICE_NOTES = {
+  lecture: "この回の受講者と講師だけが見られます。",
+  private: "講師だけが見られます。講義では映しません。",
+  public: "A.I.KEN が事例紹介・Web サイト・SNS・営業資料に使います。",
+};
+/**
+ * 押して試す操作の通信の失敗（組 13 の U-10 の T-05。通信の失敗は 1 通りの文。文言の表の決まり 5.2 の 1）。
+ * 自動で読み直す所には使わない（押すボタンが無いため）
+ */
+export const MSG_NETWORK_PRESS_AGAIN = "通信エラー：接続できませんでした。\nインターネット接続を確認してください。";
+/**
+ * エラーコードの出し方（D-1104-130x-b・文言の決まり 3.2 の案 A）：最後の文の後ろに小さく薄く「（E-SUB-04）」。
+ * コードは文の定数に入れず別の値で持ち、出す所でこの形にする（文の試験とコードの試験を分ける）。コードが無ければ ""
+ */
+export function errorCodeLabel(code) {
+  return typeof code === "string" && code ? `（${code}）` : "";
+}
+/** 名簿で停止中のアカウント（member_disabled）の断り。マイページの提出と一覧の操作で同じ文（コードは E-LOG-50） */
+export const MSG_MEMBER_DISABLED = "アカウントが停止中です。\n講師・スタッフにお知らせください。";
 /** 知らない公開範囲は、社外に出ない側（完全非公開）として読む */
 export function normalizeScope(v) {
   return SCOPES.includes(v) ? v : "private";
@@ -112,7 +150,7 @@ export function normalizeScope(v) {
 // =====================================================================
 
 /** 画面の一覧に出す、完全非公開の帯（設計 4.8） */
-export const PRIVATE_BANNER = "完全非公開：講義では映しません。プロジェクターに映していないか確かめてください。";
+export const PRIVATE_BANNER = "完全非公開：画面を映さないでください。";
 /** Opus の音の印（設計 4.8。行は「♪?」、ふれると説明） */
 export const OPUS_MARK = { text: "♪?", title: "iPhone などで音が出ないことがあります" };
 /** 提出作品のページの一覧の読み直しの間隔（ミリ秒。組 11 で 30 秒から約 10 秒に。部品は poll-lib.js） */
@@ -155,21 +193,21 @@ export function submissionStageName(stage) {
 }
 
 /**
- * 段階の行の受け付けの状態（設計 4.8）。サーバーが決めた状態と終わりの時刻から、今の時刻に合わせて書く。
- * 「受け付け中・このワークショップの間」→「あと 7 分受け付けます」→「受け付けは終わりました」。ブリッジワークは「受け付け中・11/25 23:59 まで」。
- * まだ始まっていない段階（upcoming）は「まだ始まっていません」
+ * 段階の行の受付の状態（設計 4.8）。サーバーが決めた状態と終わりの時刻から、今の時刻に合わせて書く。
+ * 「受付中・このワークショップの間」→「受付中・残り 7 分」→「受付終了」。ブリッジワークは「受付中・11/25 23:59 まで」。
+ * まだ始まっていない段階（upcoming）は「受付前」
  */
 export function instructorAcceptLabel(stage, nowMs = Date.now()) {
   const { state, until } = stage.accept;
   const untilMs = until ? Date.parse(until) : NaN;
-  if (state === "upcoming") return "まだ始まっていません";
-  if (state === "closed") return "受け付けは終わりました";
-  if (state === "current") return "受け付け中・このワークショップの間";
-  if (!Number.isFinite(untilMs) || untilMs <= nowMs) return "受け付けは終わりました";
-  if (state === "grace") return `あと ${Math.max(1, Math.ceil((untilMs - nowMs) / 60000))} 分受け付けます`;
+  if (state === "upcoming") return "受付前";
+  if (state === "closed") return "受付終了";
+  if (state === "current") return "受付中・このワークショップの間";
+  if (!Number.isFinite(untilMs) || untilMs <= nowMs) return "受付終了";
+  if (state === "grace") return `受付中・残り ${Math.max(1, Math.ceil((untilMs - nowMs) / 60000))} 分`;
   // until は「この時刻を含まない終わり」。画面には最後の分（display_until。無ければ 1 分前）を出す（A の約束 0.2 版の 2）
   const shown = stage.accept.displayUntil ?? new Date(untilMs - 60000).toISOString();
-  return `受け付け中・${formatShortDateTime(shown)} まで`;
+  return `受付中・${formatShortDateTime(shown)} まで`;
 }
 
 /**
@@ -287,10 +325,10 @@ export function screeningQueue(view) {
   return playbackQueue(view).filter((q) => q.work.scope === "public" || q.work.scope === "lecture");
 }
 
-/** 「止められている人の提出（n）」「名簿にいない人の提出（n）」の見出し。n は作品の本数 */
+/** 「停止中の人の提出（n）」「名簿にいない人の提出（n）」の見出し。n は作品の本数 */
 export function foldTitle(kind, people) {
   const n = people.reduce((sum, p) => sum + p.works.length, 0);
-  return kind === "stopped" ? `止められている人の提出（${n}）` : `名簿にいない人の提出（${n}）`;
+  return kind === "stopped" ? `停止中の人の提出（${n}）` : `名簿にいない人の提出（${n}）`;
 }
 
 /** プレーヤーの下の 1 行：「佐藤 花子 · 作品 1 · 13:41」 */
@@ -303,14 +341,25 @@ export function playerCaption(entry) {
 // マイページ（設計 4.5・4.11・5.2・4.9 の短い案内）
 // =====================================================================
 
-export const WITHDRAW_CONFIRM_LINE = "この作品を講師の一覧から外し、保存したファイルを消します。元に戻せません。";
-export const MSG_WITHDRAWN = "作品を取り下げました。";
-export const MSG_CANCELLED_UPLOAD = "送信をやめました。";
-export const MY_WORKS_EMPTY = "提出した作品はまだありません。";
-export const PUBLIC_BLOCKED_LEGAL = "公開は準備中です。準備ができたら、アカウントが有効な間にマイページで選べます。";
-export const PUBLIC_BLOCKED_LINK = "公開は、アカウントが有効な間に、Google でログインしたマイページで選べます。";
+export const WITHDRAW_CONFIRM_LINE = "動画は削除され、元に戻せません。";
+export const MSG_WITHDRAWN = "動画を取り下げました。";
+export const MSG_CANCELLED_UPLOAD = "送信をキャンセルしました。";
+/** 1 行だけの空の状態なので句点を付けない（文言の決まり 2.2.1） */
+export const MY_WORKS_EMPTY = "提出した動画はまだありません";
+/** 「公開」を選べない理由。続きはホバー（title）に置く（PUBLIC_BLOCKED_TIPS） */
+export const PUBLIC_BLOCKED_LEGAL = "「公開」は準備中です。";
+export const PUBLIC_BLOCKED_LINK = "「公開」は Google でログインすると選べます。";
+/** 「公開」を選べない理由のホバーの文（理由の文 → 補足） */
+export const PUBLIC_BLOCKED_TIPS = {
+  [PUBLIC_BLOCKED_LEGAL]: "準備ができたら、アカウントが有効な間にマイページで選べます。",
+  [PUBLIC_BLOCKED_LINK]: "アカウントが有効な間だけ選べます。",
+};
+/** 理由の文のホバー（無ければ null） */
+export function publicBlockedTip(reason) {
+  return (typeof reason === "string" && PUBLIC_BLOCKED_TIPS[reason]) || null;
+}
 /** サーバーが変えられないとした作品（can_change_scope が偽）にだけ出す 1 行。種類によらない（組 11） */
-export const SCOPE_FIXED_NOTE = "この作品の公開範囲は、変えられません。";
+export const SCOPE_FIXED_NOTE = "公開範囲は変更できません。";
 
 /** GET /my/works を読む。形が違えば null */
 export function normalizeMyWorks(raw) {
@@ -343,16 +392,41 @@ export function normalizeMyWorks(raw) {
   return { loginKind: raw.login_kind === "google" ? "google" : raw.login_kind === "link" ? "link" : "other", consent, works, uploading };
 }
 
-/** 「作品 2 ・ ワークショップ 2「台本と生成」・0:28・24 MB」のような、作品の行の 2 行目 */
+/** 作品の行の題の右に並べる段階の名前：「ワークショップ 2「台本と生成」」（題名が無ければ「ブリッジワーク」のように名前だけ。無ければ ""） */
+export function myWorkStage(w) {
+  return w.stageTitle ? `${w.stageLabel}「${w.stageTitle}」` : w.stageLabel;
+}
+
+/** 「0:28 · 24 MB · 11/20 13:34」のような、作品の行の 2 段目（段階の名前は題の行。組 13 の U-13・D-1105-121x） */
 export function myWorkMeta(w) {
-  const parts = [w.stageTitle ? `${w.stageLabel}「${w.stageTitle}」` : w.stageLabel, formatDurationSec(w.durationSec), w.bytes === null ? null : formatBytes(w.bytes), w.readyAt ? formatShortDateTime(w.readyAt) : null];
+  const parts = [formatDurationSec(w.durationSec), w.bytes === null ? null : formatBytes(w.bytes), w.readyAt ? formatShortDateTime(w.readyAt) : null];
   return parts.filter(Boolean).join(" · ");
 }
 
-/** 作品の行の題名（ブリッジワークはタイトル。ワークショップは「作品 N」） */
+/** 作品の行の題名（ブリッジワークはタイトル。ワークショップは「動画 N」。受講者の文は「動画」。文言の決まり 2.3） */
 export function myWorkHeading(w) {
-  const no = w.workNo === null ? "作品" : `作品 ${w.workNo}`;
+  const no = w.workNo === null ? "動画" : `動画 ${w.workNo}`;
   return w.title ? `${w.title}（${no}）` : no;
+}
+
+/**
+ * 読み上げの名前の頭（題の行の文と同じ並び）：「動画 1 ワークショップ 1「企画」」「会社紹介（動画 1） ブリッジワーク」。
+ * 作品の番号は段階ごとに振るので、段階の名前を入れて WS1 と WS2 の「動画 1」を区別する（組 13 の U-13・確かめの P3-1）
+ */
+function myWorkNameWith(w, tail) {
+  const stage = myWorkStage(w);
+  const name = stage ? `${myWorkHeading(w)} ${stage}` : myWorkHeading(w);
+  return /[）」]$/.test(name) ? `${name}${tail}` : `${name} ${tail}`;
+}
+
+/** 丸の再生のボタンの読み上げの名前：「動画 1 ワークショップ 1「企画」を再生」「会社紹介（動画 1） ブリッジワーク を再生」 */
+export function myWorkPlayLabel(w) {
+  return myWorkNameWith(w, "を再生");
+}
+
+/** 公開範囲を変える欄（select）の読み上げの名前：「動画 1 ワークショップ 1「企画」の公開範囲」 */
+export function myWorkScopeLabel(w) {
+  return myWorkNameWith(w, "の公開範囲");
 }
 
 /** 「公開」を選べない理由（1 行）。選べるなら null */
@@ -360,6 +434,28 @@ export function publicBlockedReason({ loginKind, consent }) {
   if (loginKind !== "google") return PUBLIC_BLOCKED_LINK;
   if (!consent || !consent.legalReviewed) return PUBLIC_BLOCKED_LEGAL;
   return null;
+}
+
+/** マイページの一覧の ？ の見出し（一覧の上に 1 つだけ。組 13 の U-13・D-1105-121x） */
+export const MY_SCOPE_HELP_LABEL = "公開範囲";
+/** 法務の確認の前で「公開」を選べないときの、？ の中の短い 1 行（一覧の行には出さない。判定は publicBlockedReason のまま。提出の窓の理由と同じ文） */
+export const PUBLIC_NOT_YET = "「公開」は準備中です。";
+/**
+ * Google でログインしていないときの、？ の中の 1 行。？ の中（details）にはホバーが無いので、理由とホバーの文を続けて出す
+ * （提出の窓と一覧の操作の断りは PUBLIC_BLOCKED_LINK とホバーのまま）
+ */
+export const PUBLIC_BLOCKED_LINK_HELP = `${PUBLIC_BLOCKED_LINK}${PUBLIC_BLOCKED_TIPS[PUBLIC_BLOCKED_LINK]}`;
+
+/**
+ * 一覧の ？ の中：3 つの範囲の名前と説明（提出の窓の 3 つの丸と同じ文。並びは一覧の選ぶ欄と同じ）と、「公開」を今は選べないときの理由（選べるなら null）。
+ * 一覧の行には説明も理由も出さない（行を詰めるため。D-1105-121x。提出の窓は D-1104-130x-c のまま）
+ */
+export function myScopeHelp(ctx) {
+  const blocked = publicBlockedReason(ctx);
+  return {
+    lines: ["public", "lecture", "private"].map((s) => `${SCOPE_CHOICE_LABELS[s]}：${SCOPE_CHOICE_NOTES[s]}`),
+    note: blocked === PUBLIC_BLOCKED_LEGAL ? PUBLIC_NOT_YET : blocked === PUBLIC_BLOCKED_LINK ? PUBLIC_BLOCKED_LINK_HELP : blocked,
+  };
 }
 
 const SCOPE_RANK = { private: 0, lecture: 1, public: 2 };
@@ -373,15 +469,16 @@ const SCOPE_RANK = { private: 0, lecture: 1, public: 2 };
  * 戻り値：{ ok:false, reason } か { ok:true, kind: "narrow"|"widen"|"public", confirmLines, consent? }
  */
 export function scopeChangePlan(work, next, ctx) {
-  if (!SCOPES.includes(next) || next === work.scope) return { ok: false, reason: "公開範囲が変わっていません。" };
-  if (!work.canChangeScope) return { ok: false, reason: "この作品の公開範囲は、今は変えられません。" };
+  if (!SCOPES.includes(next) || next === work.scope) return { ok: false, reason: "公開範囲は変更されていません。" };
+  if (!work.canChangeScope) return { ok: false, reason: SCOPE_FIXED_NOTE };
   if (next === "public") {
     const blocked = publicBlockedReason(ctx);
     if (blocked) return { ok: false, reason: blocked };
-    return { ok: true, kind: "public", confirmLines: [`公開範囲を「${SCOPE_LABELS.public}」に変えます。`], consent: ctx.consent };
+    // 題（「公開範囲を変更しますか？」）が範囲のことを言うので、本文は変更先だけ
+    return { ok: true, kind: "public", confirmLines: [`「${SCOPE_LABELS.public}」に変更します。`], consent: ctx.consent };
   }
   const narrow = SCOPE_RANK[next] < SCOPE_RANK[work.scope];
-  return { ok: true, kind: narrow ? "narrow" : "widen", confirmLines: [`公開範囲を「${SCOPE_LABELS[next]}」に変えます。`] };
+  return { ok: true, kind: narrow ? "narrow" : "widen", confirmLines: [`「${SCOPE_LABELS[next]}」に変更します。`] };
 }
 
 /** 空き容量の目安（GB）：ZIP の大きさの 2 倍を切り上げた値（保存した ZIP と、展開した動画の両方が入るため。設計 4.9）。例：1.2 GB → 3 */
@@ -395,15 +492,32 @@ export function requiredFreeGb(zipBytes) {
 export function qrShortNote(zipBytes) {
   const lines = ["Wi-Fi で保存してください。"];
   const gb = requiredFreeGb(zipBytes);
-  if (gb !== null) lines.push(`空き容量は ${gb} GB 以上いります。`);
+  if (gb !== null) lines.push(`${gb} GB 以上の空き容量が必要です。`);
   return lines;
 }
 
-export const MSG_SCOPE_CHANGED = "公開範囲を変えました。";
-export const MSG_MY_WORKS_FAILED = "提出した作品を読み込めませんでした。";
-export const MSG_MY_WORKS_BUSY = "混み合っています。少し待ってから、もう一度押してください。";
-export const MSG_MY_NETWORK = "通信できませんでした。通信状態を確かめてください。";
-export const MSG_MY_STALE = "作品の状態が変わっています。最新にしてから、もう一度押してください。";
+export const MSG_SCOPE_CHANGED = "公開範囲を変更しました。";
+/** 見出し「提出した動画」の下に出るので「一覧」で通じる */
+export const MSG_MY_WORKS_FAILED = "読み込みエラー：一覧を取得できません。";
+export const MSG_MY_WORKS_BUSY = "混雑しています。\nしばらくしてから再度お試しください。";
+export const MSG_MY_NETWORK = MSG_NETWORK_PRESS_AGAIN;
+/** 404 のあとは一覧を読み直す（取り下げ・公開範囲の変更・送信のキャンセルのどれでも。mypage-submissions.js）ので、押し直しは勧めない */
+export const MSG_MY_STALE = "動画の状態が更新されました。\n一覧を確認してください。";
+/** コードを付ける断り（error-codes.md：E-SUB-50・E-WRK-99） */
+export const MSG_MY_NOT_STAGE_STUDENT = "操作エラー：受講者として未登録です。\n講師・スタッフにお知らせください。";
+export const MSG_MY_ACTION_FAILED = "操作エラーが発生しました。\nしばらくしてから再度お試しください。";
+export const MSG_MY_PLAYBACK_FAILED = "再生エラーが発生しました。\nしばらくしてから再度お試しください。";
+/** マイページの一覧の操作・再生の断りのコード（文 → コード。コードは文と別の値で持つ。決まり 3.2） */
+const MY_ERROR_CODES = new Map([
+  [MSG_MY_NOT_STAGE_STUDENT, "E-SUB-50"],
+  [MSG_MEMBER_DISABLED, "E-LOG-50"],
+  [MSG_MY_ACTION_FAILED, "E-WRK-99"],
+  [MSG_MY_PLAYBACK_FAILED, "E-WRK-99"],
+]);
+/** myActionErrorText・myPlaybackErrorText の文に付けるコード（無ければ null） */
+export function myErrorCode(text) {
+  return MY_ERROR_CODES.get(text) ?? null;
+}
 
 /** マイページの操作の失敗（サーバーの拒否の名前 → 文。設計 4.11・5.2・A の約束 0.2 版 3 章） */
 export function myActionErrorText(code, status) {
@@ -411,11 +525,11 @@ export function myActionErrorText(code, status) {
   if (paused) return paused;
   switch (code) {
     case "submission_busy":
-      return "回の情報が変わりました。もう一度押してください。";
+      return "操作エラー：回の設定が変わりました。\n再度お試しください。";
     case "not_stage_student":
-      return "この回の受講者として登録されていないため、この操作はできません。";
+      return MSG_MY_NOT_STAGE_STUDENT;
     case "submission_closed":
-      return "この段階の受け付けは終わったため、取り下げられません。";
+      return "受付終了後は取り下げできません。";
     case "scope_fixed":
       return SCOPE_FIXED_NOTE;
     case "public_unavailable":
@@ -423,28 +537,28 @@ export function myActionErrorText(code, status) {
     case "public_needs_google":
       return PUBLIC_BLOCKED_LINK;
     case "consent_outdated":
-      return "同意の文が新しくなりました。画面を開き直して、もう一度読んでから選んでください。";
+      return "同意の文が更新されました。\nページを再読み込みしてください。";
     case "member_disabled":
-      return "アカウントが止められているため、この操作はできません。";
+      return MSG_MEMBER_DISABLED;
     case "already_ready":
-      return "この作品は、すでに提出が済んでいます。最新にしてください。";
+      return "この動画は提出済みです。";
     default:
       break;
   }
   if (status === 0) return MSG_MY_NETWORK;
   if (status === 404) return MSG_MY_STALE;
   if (status === 429 || status === 503) return MSG_MY_WORKS_BUSY;
-  return "エラーが起きました。少し待ってから、もう一度押してください。";
+  return MSG_MY_ACTION_FAILED;
 }
 
 /** 再生の失敗（マイページ） */
 export function myPlaybackErrorText(code, status) {
   const paused = submissionsPauseText(code);
   if (paused) return paused;
-  if (code === "cold_unavailable") return "この作品は保管庫に移っているため、まだ再生できません。";
-  if (status === 404) return "この作品は再生できません。最新にしてください。";
+  if (code === "cold_unavailable") return "この動画は現在再生できません。";
+  if (status === 404) return "再生エラー：動画が見つかりません。";
   if (status === 0) return MSG_MY_NETWORK;
-  return "再生の準備ができませんでした。少し待ってから、もう一度押してください。";
+  return MSG_MY_PLAYBACK_FAILED;
 }
 
 /** 受講者に見える文の一覧（試験で D12 の言葉を確かめる） */
@@ -455,6 +569,7 @@ export function studentFacingTexts() {
     ...["submission_busy", "not_stage_student", "submission_closed", "scope_fixed", "public_unavailable", "public_needs_google", "consent_outdated", "member_disabled", "already_ready", "x"].map((c) => myActionErrorText(c, 400)),
     myActionErrorText("x", 0), myActionErrorText("x", 404), myActionErrorText("x", 503), myPlaybackErrorText("cold_unavailable", 409), myPlaybackErrorText("x", 404), myPlaybackErrorText("x", 500),
     ...Object.values(SCOPE_LABELS), ...qrShortNote(1_200_000_000),
+    MY_SCOPE_HELP_LABEL, PUBLIC_NOT_YET, PUBLIC_BLOCKED_LINK_HELP, ...Object.values(SCOPE_CHOICE_LABELS), ...Object.values(SCOPE_CHOICE_NOTES), ...Object.values(PUBLIC_BLOCKED_TIPS),
   ];
 }
 
@@ -462,9 +577,9 @@ export function studentFacingTexts() {
 // 管理コンソールの「受け付けの終わり」（設計 6.3・2.3）
 // =====================================================================
 
-export const NO_DAY2_TEXT = "回の日付が決まっていないため、受け付けていません";
+export const NO_DAY2_TEXT = "受付なし（回の日付が未設定）";
 export const DEADLINE_RULE_TEXT = {
-  workshop: "その段階が今の間と、終わってから 10 分",
+  workshop: "段階の間と、終了後 10 分",
   bridge: "Day2 の前々日の 23:59 まで",
 };
 
@@ -490,11 +605,11 @@ export function normalizeDeadlines(raw) {
   return { cohortId: str(raw.cohort_id), day2Date: str(raw.day2_date), coldDueAt: str(raw.cold_due_at), serverNow: str(raw.server_now), stages };
 }
 
-/** 段階の「今の規則」の 1 行。手の設定があれば「手の設定：11/25 23:59 まで」。Day2 の日付が無ければ受け付けていない旨 */
+/** 段階の「今の規則」の 1 行。手動の設定があれば「手動で設定：11/25 23:59 まで」。Day2 の日付が無ければ受け付けていない旨 */
 export function deadlineRuleLine(stage, day2Date) {
   if (!day2Date) return NO_DAY2_TEXT;
-  // 手の設定はサーバーでは「含まない終わり」。入力・表示は最後の分にそろえる（「23:59」と入れたら、23:59 の間も受け付ける）
-  if (stage.manualUntil) return `手の設定：${formatShortDateTime(lastMinuteIso(stage.manualUntil))} まで`;
+  // 手動の設定はサーバーでは「含まない終わり」。入力・表示は最後の分にそろえる（「23:59」と入れたら、23:59 の間も受け付ける）
+  if (stage.manualUntil) return `手動で設定：${formatShortDateTime(lastMinuteIso(stage.manualUntil))} まで`;
   const base = DEADLINE_RULE_TEXT[stage.kind];
   // rule_until は「含まない終わり」（11/26 0:00）。画面には最後の分（11/25 23:59）を出す
   const last = stage.ruleUntil && Number.isFinite(Date.parse(stage.ruleUntil)) ? new Date(Date.parse(stage.ruleUntil) - 60000).toISOString() : null;
@@ -529,36 +644,37 @@ export function jstLocalFromIso(iso) {
   return new Date(ms + JST_OFFSET_MS).toISOString().slice(0, 16);
 }
 
-/** 保存済みの手の設定（含まない終わり）→ 入力欄の値（最後の分。日本時間）。不正は "" */
+/** 保存済みの手動の設定（含まない終わり）→ 入力欄の値（最後の分。日本時間）。不正は "" */
 export function inputValueFromDeadline(endIso) {
   const last = lastMinuteIso(endIso);
   return last ? jstLocalFromIso(last) : "";
 }
 
-export const DEADLINE_INPUT_HELP = "この時刻まで受け付けます。";
+export const DEADLINE_INPUT_HELP = "この時刻まで提出できます。";
 
 /**
- * 手の設定の入力を確かめる（設計 6.3・2.3）。最後に断るのは DB。
+ * 手動の設定の入力を確かめる（設計 6.3・2.3）。最後に断るのは DB。
  * 入力は「最後の分」（例 23:59）。サーバーは「この時刻より前を受け付ける」（含まない終わり）なので、送る値は入力の 1 分あと
  * （23:59 と入れたら翌 0:00 を送る。日付をまたいでもよい）。これで、入力と表示の「23:59 まで」がそろう。
- * 戻り値：{ error } ＝ 保存できない／{ iso, confirm } ＝ 保存できる（iso は送る値。confirm があれば、過去の時刻なので確認を出す）
+ * 戻り値：{ error, tip? } ＝ 保存できない（tip は error のホバーの文）／{ iso, confirm } ＝ 保存できる（iso は送る値。confirm があれば、過去の時刻なので確認を出す）
  */
 export function deadlineProblem(localValue, { coldDueAt, nowMs = Date.now() }) {
-  if (!String(localValue ?? "").trim()) return { error: "日時を入れてください。" };
+  if (!String(localValue ?? "").trim()) return { error: "日時を入力してください。" };
   const typed = isoFromJstLocal(localValue);
-  if (!typed) return { error: "日時の形が正しくありません。" };
+  if (!typed) return { error: "日時の形式が正しくありません。" };
   const ms = Date.parse(typed) + MINUTE_MS;
   const iso = new Date(ms).toISOString();
   const coldMs = coldDueAt ? Date.parse(coldDueAt) : NaN;
   // サーバーは「回の終了から 7 日後（cold_due_at）以降」を断る。送る値で比べ、入力できる最後の日時を文に出す
-  if (Number.isFinite(coldMs) && ms >= coldMs) return { error: `${formatShortDateTime(new Date(coldMs - 2 * MINUTE_MS).toISOString())} までの日時にしてください（回の終了から 7 日後の前まで）。` };
-  if (ms <= nowMs) return { iso, confirm: "過去の日時です。保存すると、この段階の受け付けは、すぐに終わります。" };
+  if (Number.isFinite(coldMs) && ms >= coldMs) return { error: `日時は ${formatShortDateTime(new Date(coldMs - 2 * MINUTE_MS).toISOString())} までです。`, tip: DEADLINE_COLD_TIP };
+  // 確認の窓の題が「過去の日時です」なので、本文は結果だけ
+  if (ms <= nowMs) return { iso, confirm: "保存すると、すぐに受付終了になります。" };
   return { iso, confirm: null };
 }
 
-export const MSG_DEADLINE_SAVED = "受け付けの終わりを保存しました。";
+export const MSG_DEADLINE_SAVED = "受付終了を保存しました。";
 export const MSG_DEADLINE_RESET = "既定の規則に戻しました。";
-export const DEADLINE_RESET_CONFIRM = "手の設定を消して、既定の規則に戻します。";
+export const DEADLINE_RESET_CONFIRM = "手動の設定を削除し、既定の規則に戻します。";
 
 /** 変更の履歴の 1 行（from・to はサーバーでは「含まない終わり」。画面には最後の分で出す） */
 export function deadlineEventLine(e) {
@@ -567,18 +683,39 @@ export function deadlineEventLine(e) {
   return `${formatShortDateTime(e.at)}${who}：${shown(e.from)} → ${e.to ? shown(e.to) : "既定に戻した"}${e.note ? `（${e.note}）` : ""}`;
 }
 
-/** 手の設定の保存の失敗（サーバーの拒否の名前 → 文） */
+/** 日時が回の終了から 7 日後を過ぎたときの断りのホバー（サーバーは cold_due_at 以降を断る） */
+export const DEADLINE_COLD_TIP = "回の終了から 7 日後より前の日時だけ保存できます。";
+/** コードを付ける断り（error-codes.md：E-LOG-54・E-ADM-99・E-WRK-50・E-ADM-54。管理コンソールの文なので、マイページの文 → コードの表とは分ける） */
+export const MSG_DEADLINE_ADMIN_ONLY = "権限エラー：管理者の権限がありません。\n再度ログインしてください。";
+export const MSG_DEADLINE_FAILED = "保存エラーが発生しました。\nしばらくしてから再度お試しください。";
+/** 提出の RPC が DB に無い（PGRST202・42883。公開前）。読み込みと保存の両方で出るので前置きは付けない（組 13 の文言の表 adm-1561） */
+export const MSG_DEADLINE_RPC_MISSING = "サーバーの更新が未適用です。";
+/** 読み込みの応答の形が違う・別の回の応答（adm-1564） */
+export const MSG_DEADLINE_BAD_RESPONSE = "読み込みエラー：受付終了の応答が不正です。";
+const DEADLINE_ERROR_CODES = new Map([
+  [MSG_DEADLINE_ADMIN_ONLY, "E-LOG-54"],
+  [MSG_DEADLINE_FAILED, "E-ADM-99"],
+  [MSG_DEADLINE_RPC_MISSING, "E-WRK-50"],
+  [MSG_DEADLINE_BAD_RESPONSE, "E-ADM-54"],
+]);
+/** deadlineErrorText の文に付けるコード（無ければ null） */
+export function deadlineErrorCode(text) {
+  return DEADLINE_ERROR_CODES.get(text) ?? null;
+}
+
+/** 手動の設定の保存の失敗（サーバーの拒否の名前 → 文） */
 export function deadlineErrorText(code, status) {
   switch (code) {
     case "deadline_after_cold_due":
-      return "回の終了から 7 日後より前の日時にしてください。";
+      return "日時は回の終了から 7 日後より前です。";
     case "cohort_dates_missing":
-      return NO_DAY2_TEXT;
+      // 札の文（NO_DAY2_TEXT）ではなく保存の失敗の文。DB は day2_date が無い回を断るので、2 行目は Day2
+      return "保存エラー：回の日付が未設定です。\n先に Day2 の日付を入力してください。";
     case "admin_only":
-      return "管理者だけが設定できます。管理コンソールで入り直してください。";
+      return MSG_DEADLINE_ADMIN_ONLY;
     default:
       break;
   }
-  if (status === 0) return "通信できませんでした。通信状態を確かめてください。";
-  return "保存できませんでした。少し待ってから、もう一度押してください。";
+  if (status === 0) return MSG_NETWORK_PRESS_AGAIN;
+  return MSG_DEADLINE_FAILED;
 }

@@ -8,6 +8,7 @@
 // ［閉じる］・ログアウト・ほかの人への切り替えで、QR の画像（data URL）と URL をこの部品の中から捨てる。
 // 表示はすべて textContent / createElement で組み立てる（データを innerHTML に入れない）。QR は <img> の src に入れる。
 import { qrMatrix, qrSvgDataUrl } from "./qr-code.js";
+import { errorCodeLabel } from "./submissions-lib.js";
 import {
   linkSizeLine,
   linkStateLines,
@@ -20,6 +21,7 @@ import {
   normalizeShareIssue,
   normalizeShareStatus,
   SHARE_CLOCK_NOTE,
+  SHARE_CLOCK_TIP,
   SHARE_CLOSE_LABEL,
   SHARE_DETAILS_SUMMARY,
   SHARE_GONE_LINE,
@@ -37,6 +39,7 @@ import {
   SHARE_STOP_TITLE,
   SHARE_THIS_DEVICE,
   saveGuide,
+  shareErrorCode,
   shareErrorText,
   sharePeriodLine,
   zipPhase,
@@ -158,13 +161,16 @@ export function createMyShare(o) {
     return { ok: res.ok, status: res.status, code, body: json };
   }
 
+  /** 知らせの 1 行。エラーコードは文の後ろに小さく薄く（決まり 3.2 の案 A。断りの文から shareErrorCode で引く） */
   function say(text, tone = "ok") {
     o.statusEl.textContent = text;
+    const code = tone === "error" ? shareErrorCode(text) : null;
+    if (code) o.statusEl.append(el("span", { className: "err-code muted small", text: errorCodeLabel(code) }));
     o.statusEl.className = tone === "error" ? "error-text" : "muted";
     o.statusEl.hidden = !text;
   }
 
-  // ---- 確認の <dialog>（mypage-submissions.js と同じ作り。やめるが既定） ----
+  // ---- 確認の <dialog>（mypage-submissions.js と同じ作り。［キャンセル］が既定） ----
 
   function ask({ title, lines, okText }) {
     const d = o.dialog;
@@ -176,7 +182,7 @@ export function createMyShare(o) {
         if (d.open) d.close();
         resolve(v);
       };
-      const cancel = el("button", { type: "button", className: "btn", text: "やめる", autofocus: true, onclick: () => finish(false) });
+      const cancel = el("button", { type: "button", className: "btn", text: "キャンセル", autofocus: true, onclick: () => finish(false) });
       const ok = el("button", { type: "button", className: "btn primary", text: okText, onclick: () => finish(true) });
       d.className = "my-dialog";
       d.replaceChildren(el("div", { className: "my-dialog-body" }, el("h2", { text: title }), ...lines.map((t) => el("p", { text: t })), el("div", { className: "row" }, cancel, ok)));
@@ -307,8 +313,9 @@ export function createMyShare(o) {
         el("button", { type: "button", className: "btn primary share-open", "data-action": "share-open", text: SHARE_THIS_DEVICE, onclick: () => navigate(issued.url) }),
         el("div", { className: "share-qr" }, el("img", { src: issued.dataUrl, alt: SHARE_QR_ALT, width: "220", height: "220", referrerpolicy: "no-referrer" })),
       );
-    } else if (phase !== "failed") {
-      qrPart.push(el("p", { className: "muted small", "data-testid": "share-qr-hidden", text: "QR は、出したときだけ見られます。もう一度見るには、QR を出し直してください（前の QR は使えなくなります）。" }));
+    } else if (phase === "preparing") {
+      // 準備ができたあと（ready）は状態の 1 行（SHARE_READY_NO_QR_LINE）が同じことを言うので、準備中だけ出す
+      qrPart.push(el("p", { className: "muted small", "data-testid": "share-qr-hidden", text: "QR は［スマホに保存する］で再発行できます。" }));
     }
     return el(
       "div",
@@ -319,7 +326,7 @@ export function createMyShare(o) {
         { className: "share-info" },
         el("p", { className: phase === "failed" ? "error-text" : "", "data-testid": "share-zip", role: "status", text: zipStateLine(link.zipState, link.zipBytes, issued !== null) }),
         size ? el("p", { className: "muted small", "data-testid": "share-size", text: size }) : null,
-        phase === "preparing" || !link.firstOpenedAt ? el("p", { className: "muted small", text: SHARE_CLOCK_NOTE }) : null,
+        phase === "preparing" || !link.firstOpenedAt ? el("p", { className: "muted small", text: SHARE_CLOCK_NOTE, title: SHARE_CLOCK_TIP }) : null,
         missing ? el("p", { className: "warn-text small", "data-testid": "share-missing", text: missing }) : null,
         ...stateLines.map((t) => el("p", { className: "muted small", "data-testid": "share-state", text: t })),
         el("ul", { className: "share-guide small", "data-testid": "share-guide-short" }, ...guide.short.map((t) => el("li", { text: t }))),
@@ -355,7 +362,7 @@ export function createMyShare(o) {
     const here = mode === "here";
     const ticket = await ticketFor();
     if (!ticket) return;
-    const question = here ? { title: SHARE_HERE_TITLE, lines: [SHARE_HERE_CONFIRM], okText: "開く" } : { title: SHARE_ISSUE_TITLE, lines: [SHARE_ISSUE_CONFIRM], okText: "QR を出す" };
+    const question = here ? { title: SHARE_HERE_TITLE, lines: [SHARE_HERE_CONFIRM], okText: "開く" } : { title: SHARE_ISSUE_TITLE, lines: [SHARE_ISSUE_CONFIRM], okText: "発行する" };
     if (!(await ask(question))) return;
     await guarded(ticket, async () => {
       say("");
@@ -396,7 +403,7 @@ export function createMyShare(o) {
   async function stop() {
     const ticket = await ticketFor();
     if (!ticket) return;
-    if (!(await ask({ title: SHARE_STOP_TITLE, lines: [SHARE_STOP_CONFIRM], okText: "止める" }))) return;
+    if (!(await ask({ title: SHARE_STOP_TITLE, lines: [SHARE_STOP_CONFIRM], okText: "停止する" }))) return;
     await guarded(ticket, async () => {
       const r = await call("POST", SHARE_PATHS.stop, ticket);
       if (!r) return;
