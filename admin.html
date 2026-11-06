@@ -15,18 +15,18 @@
 <!-- ログインの確かめ・RPC の接続先へ先につないでおく（supabase-js の fetch は資格情報なしなので crossorigin） -->
 <link rel="preconnect" href="https://tnzwhwitgnzoehbjrmoy.supabase.co" crossorigin>
 <link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=IBM+Plex+Sans+JP:wght@400;500;600;700&amp;display=swap">
-<link rel="stylesheet" href="/r/0692eb951f2f/studio.css">
-<link rel="stylesheet" href="/r/0692eb951f2f/gsi-button.css">
-<link rel="stylesheet" href="/r/0692eb951f2f/site-nav.css">
-<link rel="modulepreload" href="/r/0692eb951f2f/admin-lib.js">
-<link rel="modulepreload" href="/r/0692eb951f2f/auth-storage.js">
-<link rel="modulepreload" href="/r/0692eb951f2f/cohort-close-lib.js">
-<link rel="modulepreload" href="/r/0692eb951f2f/share-lib.js">
-<link rel="modulepreload" href="/r/0692eb951f2f/site-nav.js">
-<link rel="modulepreload" href="/r/0692eb951f2f/stage-lib.js">
-<link rel="modulepreload" href="/r/0692eb951f2f/stage-minutes-lib.js">
-<link rel="modulepreload" href="/r/0692eb951f2f/storage-usage-lib.js">
-<link rel="modulepreload" href="/r/0692eb951f2f/submissions-lib.js">
+<link rel="stylesheet" href="/r/ed4648207c0c/studio.css">
+<link rel="stylesheet" href="/r/ed4648207c0c/gsi-button.css">
+<link rel="stylesheet" href="/r/ed4648207c0c/site-nav.css">
+<link rel="modulepreload" href="/r/ed4648207c0c/admin-lib.js">
+<link rel="modulepreload" href="/r/ed4648207c0c/auth-storage.js">
+<link rel="modulepreload" href="/r/ed4648207c0c/cohort-close-lib.js">
+<link rel="modulepreload" href="/r/ed4648207c0c/share-lib.js">
+<link rel="modulepreload" href="/r/ed4648207c0c/site-nav.js">
+<link rel="modulepreload" href="/r/ed4648207c0c/stage-lib.js">
+<link rel="modulepreload" href="/r/ed4648207c0c/stage-minutes-lib.js">
+<link rel="modulepreload" href="/r/ed4648207c0c/storage-usage-lib.js">
+<link rel="modulepreload" href="/r/ed4648207c0c/submissions-lib.js">
 <style>
   /* 色・余白・角丸・ボタン・上部の帯の土台は共通の studio.css（マイページと同じ値。--muted・--low-text は重要な数字が明暗とも 7:1 になる値）。
      ここには管理コンソールだけが使う変数と、一覧・表・シートの形を置く（同じ名前の部品は、ここが後に読まれるので勝つ） */
@@ -490,6 +490,15 @@
   .scope-sum .sname { font-weight: 600; min-width: 7.5em; }
   .scope-sum .snum { font-weight: 700; font-variant-numeric: tabular-nums; }
   .scope-sum .spolicy { color: var(--muted); font-size: 13px; }
+  /* 既定のモデルの箱（組 14）：種類ごとの行。名前と単価は折り返してよい（359px でも崩さない） */
+  .def-list { list-style: none; margin: 0; padding: 0; }
+  .def-list > li { display: flex; flex-direction: column; align-items: flex-start; gap: 4px; padding: 8px 0; border-top: 1px solid var(--line-soft); }
+  .def-list > li:first-child { border-top: 0; }
+  .def-main { display: flex; flex-wrap: wrap; align-items: baseline; gap: 2px 12px; min-width: 0; max-width: 100%; }
+  .def-kind { font-weight: 600; min-width: 5.5em; }
+  .def-name { font-weight: 700; overflow-wrap: anywhere; }
+  .def-price { color: var(--muted); font-size: 13px; overflow-wrap: anywhere; }
+  .def-actions { display: flex; flex-wrap: wrap; justify-content: flex-end; gap: 8px; }
   .tpl-days { list-style: none; margin: 0; padding: 0; display: flex; flex-direction: column; gap: 10px; }
   .tpl-days ol { margin: 4px 0 0; padding-left: 1.4em; }
   .tpl-days li li { padding: 2px 0; }
@@ -1070,7 +1079,7 @@
 
 <dialog id="sheet" class="sheet" aria-labelledby="sheet-title"></dialog>
 <dialog id="ask" class="ask" aria-labelledby="ask-title"></dialog>
-<script type="module" src="/r/0692eb951f2f/topbar-height.js"></script>
-<script type="module" src="/r/0692eb951f2f/admin.js"></script>
+<script type="module" src="/r/ed4648207c0c/topbar-height.js"></script>
+<script type="module" src="/r/ed4648207c0c/admin.js"></script>
 </body>
 </html>

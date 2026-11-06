@@ -129,6 +129,20 @@ import {
   rebaseModelDraft,
   resetCarry,
   effectiveDrafts,
+  // 既定のモデルの箱（組 14。使う関数は下の「既定のモデルの箱」の塊。静的な import を増やさないため、ここに足す）
+  DEFAULT_KINDS,
+  defaultsChanged,
+  defaultsConfirmLines,
+  defaultsCopy,
+  defaultsInfo,
+  defaultsOffLines,
+  defaultsOptions,
+  defaultsPayload,
+  defaultsRows,
+  defaultsSaveError,
+  keyLabeler,
+  MODEL_KIND_LABELS,
+  withDefaultOffLines,
   isMissingSchemaError,
   isMissingFunctionError,
   setStageDbReady,
@@ -1120,6 +1134,7 @@ function clearAppView() {
   state.settings.storage = null;
   state.settings.edit = null;
   state.settings.drafts = null;
+  state.settings.defEdit = null; // 既定のモデルの編集（前の人の選びを残さない）
   for (const id of ["settings-summary", "settings-main", "settings-storage", "settings-models", "settings-templates", "settings-history", "settings-aside", "settings-bar", "roster-list", "roster-aside", "cohorts-main", "cohort-aside", "overview"]) $(id).replaceChildren();
   // 画面の間の移動の帯も隠す（期限切れなどで、ログインの画面を出す前に endConsoleSession の通信を待つ間も残さない。Codex TASK-0189 F189-03）
   renderSiteNav($("site-nav"), null, "admin");
@@ -5953,7 +5968,8 @@ async function closeModelEdit() {
   focusKey("models-edit");
 }
 
-function modelsSection() {
+/** 今までの「モデル」の箱（使えるモデルの一覧）。［モデル］の面に出す物は、下の既定のモデルの箱の塊にある modelsSection */
+function modelsListBox() {
   const S = state.settings;
   const count = S.modelsStatus === "ok" ? modelDraftCount() : 0;
   const side = S.modelsEditing
@@ -6368,7 +6384,7 @@ async function saveModels() {
   if (!plan.entries.length) return;
   const labelOfModel = modelLabeler(S.models.models);
   const detailTips = new Map();
-  const lines = saveConfirmLines(plan, labelOfModel, detailTips);
+  const lines = withDefaultOffLines(saveConfirmLines(plan, labelOfModel, detailTips), defaultsOffLines(S.models, plan));
   const ok = await ask({
     title: lines[0],
     lines: ["次の生成から反映されます。"],
@@ -6443,6 +6459,7 @@ function historySection() {
   let content;
   if (S.historyStatus === "ok") {
     const labelOfModel = S.models ? modelLabeler(S.models.models) : (id) => id;
+    const labelOfKey = keyLabeler(S.models?.models);
     const shown = S.history.slice(0, S.historyShown);
     const rest = S.history.length - shown.length;
     content = [
@@ -6456,7 +6473,7 @@ function historySection() {
               "li",
               {},
               el("span", { className: "hmeta num", text: `${formatDateTime(h.changed_at)} · ${h.changed_by_email ?? "変更した人は不明"}` }),
-              el("ul", {}, ...settingsDiff(h.before_values, h.after_values, labelOfModel).map((t) => el("li", { text: t }))),
+              el("ul", {}, ...settingsDiff(h.before_values, h.after_values, labelOfModel, labelOfKey).map((t) => el("li", { text: t }))),
             )
           ),
         )
@@ -8259,6 +8276,197 @@ document.addEventListener("keydown", (e) => {
     closeSelection();
   }
 });
+// ==== 既定のモデルの箱（組 14。D 設計 4.5。計画 3.3：新しい関数の塊） ====
+// ［設定］→［モデル］の上に「既定のモデル」の箱。種類ごと（動画・画像・読み上げ・音楽）に既定を 1 つ選べる。既定は全体で 1 つ（区分では分けない）。
+// 保存は RPC admin_set_default_models（列を丸ごと置き換える。競合は p_expected で DB の中で見る）。「替わる先」は画面で計算せず、
+// GET /models の defaults（サーバーと同じ関数で計算した値）をそのまま出す。画面の純粋な部分は admin-lib.js（defaults…・keyLabeler）。
+// 今ある関数に触るのは 4 か所だけ：modelsSection（下で作り直し、元の関数は modelsListBox に名前を替えた）・saveModels の確かめの行・
+// historySection の settingsDiff の呼び出し・clearAppView の 1 行。読み直しの関数（loadSettingsInfo・loadModels・loadSettingsAll）は S.defEdit に触れない。
+// 使う部品は、上の admin-lib.js の import の一覧に足した（admin.js の静的な import は増やさない決まり：scripts/admin_workshop_apply_nodetest.mjs）。
+// 編集の状態は S.defEdit = { base, values }（モデルの一覧の下書き S.drafts・S.resetNull とは別。互いの未保存の変更を消さない）。
+/** ［モデル］の面：上に「既定のモデル」の箱、下に今までの「モデル」の箱。箱が出ないとき（defaults が無い・形が違う）は今までの箱だけ（そのまま） */
+function modelsSection() {
+  const box = defaultsBox();
+  const list = modelsListBox();
+  return box ? el("div", { className: "set-col" }, box, list) : list;
+}
+
+/** ［変更］を押せるか：defaults.supported が真・S.info.settings に default_models のキーがある（値は null かオブジェクト） */
+function defaultsEditable() {
+  const S = state.settings;
+  const d = defaultsInfo(S.models);
+  const row = S.info?.settings;
+  return !!d && d.supported === true && !!row && Object.hasOwn(row, "default_models") && defaultsCopy(row.default_models) !== undefined;
+}
+
+/** 「既定のモデル」の箱。GET /models に defaults が無い・形が違うときは出さない（読み込みエラーにはしない。モデルの一覧はそのまま使える） */
+function defaultsBox() {
+  const S = state.settings;
+  if (S.modelsStatus !== "ok" || !defaultsInfo(S.models)) return null;
+  const editable = defaultsEditable();
+  const editing = !!S.defEdit && editable;
+  return partBox({
+    id: "defaults-h",
+    title: "既定のモデル",
+    status: "ok",
+    error: "",
+    at: S.modelsAt,
+    retry: retryModels,
+    side: editable && !editing
+      ? el("button", { type: "button", className: "btn", text: "変更", "data-focus-key": "def-edit", disabled: S.busy, onclick: beginDefaultsEdit })
+      : null,
+    content: () => (editing ? defaultsEditor() : defaultsReader()),
+  });
+}
+
+const DEFAULTS_HINT = "モデルを指定しないときに使います。単価は既定の解像度の目安です。";
+
+/** 普段（読むだけ）：種類ごとの行（名前・単価）と、当てはまる注意の行 */
+function defaultsReader() {
+  return [
+    el(
+      "ul",
+      { className: "def-list", "aria-label": "種類ごとの既定のモデル" },
+      ...defaultsRows(state.settings.models).map((r) =>
+        el(
+          "li",
+          {},
+          el(
+            "div",
+            { className: "def-main" },
+            el("span", { className: "def-kind", text: r.label }),
+            el("span", { className: "def-name", text: r.name }),
+            r.price ? el("span", { className: "def-price num", text: r.price }) : null,
+          ),
+          ...r.warns.map((w) => warnLine(w)),
+        )
+      ),
+    ),
+    el("p", { className: "hint", text: DEFAULTS_HINT }),
+  ];
+}
+
+/** 編集：種類ごとのセレクト（初期値・選べるモデル）と［すべて初期値に］［キャンセル］［保存］ */
+function defaultsEditor() {
+  const S = state.settings;
+  const e = S.defEdit;
+  const fields = DEFAULT_KINDS.map((kind) => {
+    const id = `def-sel-${kind}`;
+    const select = el(
+      "select",
+      { id, className: "input", "data-focus-key": `def-sel:${kind}`, disabled: S.busy, onchange: (ev) => onDefaultsSelect(kind, ev.target.value) },
+      ...defaultsOptions(S.models, kind, e.values[kind], e.base).map((o) => el("option", { value: o.value, text: o.text, selected: o.value === e.values[kind] })),
+    );
+    select.value = e.values[kind];
+    return el("div", { className: "field" }, el("label", { for: id, text: MODEL_KIND_LABELS[kind] }), select);
+  });
+  const changed = defaultsChanged(e.base, e.values);
+  const anyChosen = DEFAULT_KINDS.some((k) => e.values[k] !== "");
+  return [
+    ...fields,
+    el(
+      "div",
+      { className: "def-actions" },
+      anyChosen ? el("button", { type: "button", className: "btn", text: "すべて初期値に", disabled: S.busy, onclick: resetDefaultsValues }) : null,
+      el("button", { type: "button", className: "btn", text: "キャンセル", "data-focus-key": "def-cancel", disabled: S.busy, onclick: cancelDefaultsEdit }),
+      el("button", { type: "button", className: "btn primary", text: S.defSaving ? "保存中…" : "保存", "data-focus-key": "def-save", disabled: !changed || S.busy, onclick: saveDefaults }),
+    ),
+    el("p", { className: "hint", text: DEFAULTS_HINT }),
+  ];
+}
+
+/**
+ * ［変更］：その時点の S.info.settings.default_models の写しを base にする（admin_get_settings の生の値。S.models の saved は使わない）。
+ * 同じ base を、セレクトの最初の値・「変えたか」・p_expected の 3 つに使う（S.info と S.models は別々に読み直されるので、2 つを混ぜない）
+ */
+function beginDefaultsEdit() {
+  const S = state.settings;
+  if (S.busy || !defaultsEditable()) return;
+  const base = defaultsCopy(S.info.settings.default_models);
+  S.defEdit = { base, values: Object.fromEntries(DEFAULT_KINDS.map((k) => [k, typeof base?.[k] === "string" ? base[k] : ""])) };
+  renderModelsBox();
+  focusKey("def-sel:video", $("settings-models"));
+}
+
+function cancelDefaultsEdit() {
+  const S = state.settings;
+  if (S.busy) return;
+  S.defEdit = null;
+  renderModelsBox();
+  focusKey("def-edit", $("settings-models"));
+}
+
+/** ［すべて初期値に］：4 つを「初期値」にするだけ（保存はしない） */
+function resetDefaultsValues() {
+  const S = state.settings;
+  if (S.busy || !S.defEdit) return;
+  S.defEdit.values = Object.fromEntries(DEFAULT_KINDS.map((k) => [k, ""]));
+  renderModelsBox();
+  focusKey("def-sel:video", $("settings-models"));
+}
+
+function onDefaultsSelect(kind, value) {
+  const S = state.settings;
+  if (S.busy || !S.defEdit) return;
+  S.defEdit.values[kind] = value;
+  renderModelsBox();
+}
+
+/**
+ * ［保存］：確かめ（変えた種類だけ・単価の前と後）→ RPC。確かめの前に読み直さない（競合は p_expected で DB が見る）。
+ * 成功：編集を閉じ、resetDraft なしで読み直す（モデルの一覧の未保存の下書きを残す）。競合：編集を閉じて読み直す（選び直しは［変更］から）。
+ * ほかの失敗：選んだ値を残す（もう一度［保存］を押せる。DB で保存できていれば、RPC が今の値を返すので成功になる）。S.busy は「モデル」の箱と共有
+ */
+async function saveDefaults() {
+  clearNotice();
+  const S = state.settings;
+  const e = S.defEdit;
+  if (!e || S.busy || S.modelSaving || !defaultsChanged(e.base, e.values) || !defaultsInfo(S.models)) return;
+  const ok = await ask({
+    title: "既定のモデルを変えますか？",
+    lines: ["次の生成から反映されます。", "開いている Canvas は、再読み込みするまで前の既定です。", "研修の当日は、初期値に戻す以外は変えないでください。"],
+    detail: defaultsConfirmLines(S.models, e.base, e.values),
+    buttons: [{ label: "キャンセル", value: false }, { label: "保存する", value: true, kind: "primary" }],
+  });
+  if (!ok || appClosed || S.defEdit !== e || S.busy) return;
+  S.busy = true;
+  S.defSaving = true;
+  renderModelsBox();
+  let closed = false;
+  try {
+    for (const g of [gates.info, gates.models, gates.history]) g.invalidate();
+    const { error } = await supabase.rpc("admin_set_default_models", { p_defaults: defaultsPayload(e.values), p_expected: e.base });
+    for (const g of [gates.info, gates.models, gates.history]) g.invalidate();
+    if (appClosed) return;
+    if (error) {
+      const fail = defaultsSaveError(error);
+      notify(fail.text, "error", [], null, null, fail.code);
+      if (fail.conflict) {
+        S.defEdit = null;
+        closed = true;
+      }
+      S.busy = false;
+      S.defSaving = false;
+      await loadSettingsAll();
+      return;
+    }
+    S.defEdit = null;
+    closed = true;
+    const read = await loadSettingsAll();
+    if (appClosed) return;
+    if (!read.info || !read.models) notify("既定のモデルを保存しました。\n表示の更新に失敗しました。再度保存する必要はありません。", "warn");
+    else notify("既定のモデルを保存しました。", "ok", [], { label: "変更履歴を見る", onClick: openHistory });
+  } finally {
+    S.busy = false;
+    S.defSaving = false;
+    if (!appClosed) {
+      renderSettings();
+      focusKey(closed ? "def-edit" : "def-save", $("settings-models"));
+    }
+  }
+}
+// ==== 既定のモデルの箱：ここまで ====
+
 /**
  * 帯（site-nav）の同じタブのリンク（マイページ・講師ページ）：保存していない設定の変更があれば、ブラウザの移動を止めて、
  * タブを替えるときと同じ画面内の確かめ（confirmLeaveSettings）を通す。［破棄して移る］なら下書きを捨ててから移る。

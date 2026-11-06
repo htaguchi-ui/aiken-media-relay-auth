@@ -2173,11 +2173,270 @@ export function listText(items, max = 4) {
   return items.length > max ? `${items.slice(0, max).join("、")} ほか ${items.length - max} 件` : items.join("、");
 }
 
+// ---- 既定のモデル（組 14。D 設計 4.5・4.7・4.9。画面の箱は admin.js の「既定のモデルの箱」。ここは画面に依らない部分） ----
+// 既定は全体で 1 つ（区分では分けない）・種類ごと（動画・画像・読み上げ・音楽。口パクは対象外）。保存した既定は app_settings.default_models
+// （null か { 種類: モデルのキー }）。GET /models の defaults（supported・saved・initial・effective）が無い・形が違うときは、箱ごと出さない。
+
+/** 既定を持つ種類（箱の行の順。口パクは対象外） */
+export const DEFAULT_KINDS = ["video", "image", "speech", "music"];
+
+/** 単価の単位の語（D 設計 4.5。mcp/models.ts の PRICE_UNIT_LABELS と同じ語。1000 文字だけ数字のあとに空白を入れる） */
+const DEFAULT_PRICE_UNITS = { second: "秒", video_token: "秒", image: "枚", "1000_chars": "1000 文字", minute: "分", song: "曲" };
+
+/** 「〈credits〉 クレジット/〈単位〉」。price が無い・credits が数でないときは空の文字。price.text（全部の単価を並べた長い文）は使わない */
+export function defaultPriceText(price) {
+  const credits = price?.credits;
+  if (typeof credits !== "number" || !Number.isFinite(credits)) return "";
+  const unit = DEFAULT_PRICE_UNITS[price.unit];
+  return unit ? `${credits} クレジット/${unit}` : `${credits} クレジット`;
+}
+
+/** 箱が読める形か：defaults が { supported, saved, initial, effective.all } を持ち、models が配列。そうでなければ null（箱ごと出さない） */
+export function defaultsInfo(body) {
+  const d = body?.defaults;
+  const isObj = (x) => !!x && typeof x === "object" && !Array.isArray(x);
+  if (!isObj(d) || !Array.isArray(body?.models) || typeof d.supported !== "boolean") return null;
+  if (!isObj(d.initial) || !isObj(d.effective) || !isObj(d.effective.all)) return null;
+  if (d.saved !== null && d.saved !== undefined && !isObj(d.saved)) return null;
+  for (const kind of DEFAULT_KINDS) {
+    if (typeof d.initial[kind] !== "string") return null;
+    const e = d.effective.all[kind];
+    if (e !== undefined && (!isObj(e) || [e.shown, e.text, e.image].some((v) => v !== undefined && typeof v !== "string"))) return null;
+  }
+  return d;
+}
+
+/** 箱の編集の元（S.info.settings.default_models の写し）にできる値か：null か、オブジェクト */
+export function defaultsCopy(value) {
+  if (value === null || value === undefined) return null;
+  if (typeof value !== "object" || Array.isArray(value)) return undefined;
+  return JSON.parse(JSON.stringify(value));
+}
+
+const defaultsModelOf = (body, key) => (body?.models ?? []).find((m) => m?.key === key) ?? null;
+
+/** キー → 表示名（カタログに無いキーはそのまま）。履歴の文 settingsDiff の 4 つ目の引数に渡す */
+export function keyLabeler(models) {
+  const map = new Map((models ?? []).map((m) => [m.key, m.label]));
+  return (key) => map.get(key) ?? key;
+}
+
+/** 名前（料金があれば「名前（6 クレジット/秒）」）。カタログに無いキーはそのまま */
+function defaultsNameWithPrice(body, key) {
+  const m = defaultsModelOf(body, key);
+  if (!m) return key;
+  const price = defaultPriceText(m.price);
+  return price ? `${m.label}（${price}）` : m.label;
+}
+
+/** 全体で使えるか（どのモードも全体の一覧でオフなら、オフ） */
+const defaultsModelOff = (m) => m.console_enabled !== true;
+
+/**
+ * 箱の読むだけの表示（種類ごとの行）。名前は effective.all[種類].shown（サーバーと同じ関数で計算した値。画面で「替わる先」を計算しない）。
+ * 保存した既定が無い種類で、いま使っているのが初期値のときだけ名前のあとに「（初期値）」を付ける。warns は注意の行（4.5 の表）
+ */
+export function defaultsRows(body) {
+  const d = defaultsInfo(body);
+  if (!d) return [];
+  return DEFAULT_KINDS.map((kind) => {
+    const shown = d.effective.all[kind]?.shown;
+    const saved = typeof d.saved?.[kind] === "string" && d.saved[kind] !== "" ? d.saved[kind] : null;
+    const m = shown === undefined ? null : defaultsModelOf(body, shown);
+    const name = shown === undefined ? "なし" : m?.label ?? shown;
+    return {
+      kind,
+      label: MODEL_KIND_LABELS[kind],
+      key: shown ?? null,
+      name: saved === null && shown !== undefined && shown === d.initial[kind] ? `${name}（初期値）` : name,
+      price: m ? defaultPriceText(m.price) : "",
+      saved,
+      warns: defaultsWarns(body, kind),
+    };
+  });
+}
+
+/** 注意の行（読むだけの表示の、その種類の行の下。当てはまるものだけ） */
+export function defaultsWarns(body, kind) {
+  const d = defaultsInfo(body);
+  if (!d) return [];
+  const nameOf = (key) => defaultsModelOf(body, key)?.label ?? key;
+  const unusable = (m) => (defaultsModelOff(m) ? "はオフです。" : "は今は使えません。");
+  const e = d.effective.all[kind] ?? {};
+  const shown = e.shown;
+  const out = [];
+  // 狙った既定：保存した既定。無ければ初期値（初期値のモデルがオフのときも同じ文で知らせる）
+  const saved = typeof d.saved?.[kind] === "string" && d.saved[kind] !== "" ? d.saved[kind] : null;
+  const target = saved ?? d.initial[kind];
+  const targetModel = defaultsModelOf(body, target);
+  if (shown === undefined) {
+    if (targetModel && saved !== null) out.push(`${targetModel.label} ${unusable(targetModel)}`);
+    else if (!targetModel && saved !== null) out.push(`${target}は今のカタログにありません。`);
+    out.push("既定にできるモデルがありません。");
+  } else if (target !== shown) {
+    const now = `今は ${nameOf(shown)} を使います。`;
+    if (!targetModel) {
+      if (saved !== null) out.push(`${target}は今のカタログにありません。${now}`);
+    } else {
+      out.push(`${targetModel.label} ${unusable(targetModel)}${now}`);
+    }
+  }
+  if (e.image !== undefined && e.image !== shown) out.push(`画像からは ${nameOf(e.image)} を使います。`);
+  if (rolesSupported(body)) {
+    // 受講者・AIKENメンバーで使うモデルが違うとき（区分の一覧があるときだけ違いが出る）。同じ違いの区分は 1 行にまとめる
+    const byValue = new Map();
+    for (const sc of MODEL_SCOPES) {
+      if (sc.key === "all" || !d.effective[sc.key]) continue;
+      const v = d.effective[sc.key][kind]?.shown;
+      if (v === shown) continue;
+      byValue.set(v ?? "", [...(byValue.get(v ?? "") ?? []), sc.label]);
+    }
+    for (const [v, labels] of byValue) out.push(v === "" ? `${labels.join("・")}には既定にできるモデルがありません。` : `${labels.join("・")}には ${nameOf(v)} を使います。`);
+  }
+  return out;
+}
+
+/**
+ * セレクトの選択肢（種類ごと。上から）。
+ *   1. 「初期値（〈初期値の名前〉）」。値は空。初期値のモデルが全体でオフなら「初期値（〈名前〉・オフ）」
+ *   2. 全体の一覧で「テキストから」がオンで、default_eligible が真のモデル。初期値のモデルは除く。単価では絞らない（D-1105-151x-a）
+ *   3. いまの値（values・base）が 1・2 に無いときだけ、その値を足す：「（今は使えません）」「（カタログにありません）」「（固定）」
+ * @returns {{ value: string, text: string }[]}
+ */
+export function defaultsOptions(body, kind, current = "", base = null) {
+  const d = defaultsInfo(body);
+  if (!d) return [];
+  const initialKey = d.initial[kind];
+  const initial = defaultsModelOf(body, initialKey);
+  const initialText = initial ? `${initial.label}${defaultsModelOff(initial) ? "・オフ" : ""}` : initialKey;
+  const out = [{ value: "", text: `初期値（${initialText}）` }];
+  for (const m of body.models) {
+    if (m?.kind !== kind || m.key === initialKey || m.default_eligible !== true) continue;
+    if (!(m.modes ?? []).some((x) => x?.mode === "text" && x.console_enabled === true)) continue;
+    const price = defaultPriceText(m.price);
+    out.push({ value: m.key, text: price ? `${m.label} · ${price}` : m.label });
+  }
+  for (const v of [current, base?.[kind] ?? ""]) {
+    if (typeof v !== "string" || v === "" || out.some((o) => o.value === v)) continue;
+    const m = defaultsModelOf(body, v);
+    out.push({ value: v, text: !m ? `${v}（カタログにありません）` : v === initialKey ? `${m.label}（固定）` : `${m.label}（今は使えません）` });
+  }
+  return out;
+}
+
+/** 編集で変えたか（種類ごとに values と base を比べる。空の文字＝初期値＝保存した既定が無い） */
+export function defaultsChanged(base, values) {
+  return DEFAULT_KINDS.some((k) => (values?.[k] ?? "") !== (base?.[k] ?? ""));
+}
+
+/** 送る p_defaults：values の空でない種類だけを入れたオブジェクト。全部空なら null */
+export function defaultsPayload(values) {
+  const out = {};
+  for (const k of DEFAULT_KINDS) if (typeof values?.[k] === "string" && values[k] !== "") out[k] = values[k];
+  return Object.keys(out).length ? out : null;
+}
+
+/**
+ * 保存の確かめ（ask の内訳）。values が base と違う種類だけ。左は今の effective.all[種類].shown、右は選んだモデル（「初期値」なら初期値の名前）。
+ * どちらも料金は「〈credits〉 クレジット/〈単位〉」（price.text は使わない）
+ */
+export function defaultsConfirmLines(body, base, values) {
+  const d = defaultsInfo(body);
+  if (!d) return [];
+  const lines = [];
+  for (const kind of DEFAULT_KINDS) {
+    const next = values?.[kind] ?? "";
+    if (next === (base?.[kind] ?? "")) continue;
+    const shown = d.effective.all[kind]?.shown;
+    const left = shown === undefined ? "なし" : defaultsNameWithPrice(body, shown);
+    const initial = defaultsModelOf(body, d.initial[kind]);
+    const initialPrice = initial ? defaultPriceText(initial.price) : "";
+    const right = next === ""
+      ? `初期値（${initial ? initial.label : d.initial[kind]}${initialPrice ? `・${initialPrice}` : ""}）`
+      : defaultsNameWithPrice(body, next);
+    lines.push(`${MODEL_KIND_LABELS[kind]}：${left} → ${right}`);
+  }
+  return lines;
+}
+
+/**
+ * 使えるモデルの一覧の保存の確かめ（saveConfirmLines）に足す行（4.7）。いまの既定（使い方ごと：テキストから＝effective の text、
+ * 画像から＝image）の model_id が、保存の計画（plan.entries[].off）に入っていれば、1 行。全体のタブの保存は all・student・member の 3 つ
+ * （同じ種類・使い方・キーは 1 行）、区分のタブの保存はその区分だけを見る。defaults が無い・形が違うときは [] （今の確かめのまま）
+ */
+export function defaultsOffLines(body, plan) {
+  const d = defaultsInfo(body);
+  if (!d) return [];
+  const out = [];
+  const seen = new Set();
+  const add = (group, kind, usage, text) => {
+    const id = [group, kind, usage, text].join("|");
+    if (!seen.has(id)) {
+      seen.add(id);
+      out.push(text);
+    }
+  };
+  for (const entry of plan?.entries ?? []) {
+    const off = Array.isArray(entry.off) ? entry.off : [];
+    if (!off.length) continue;
+    const scopes = entry.key === "all" ? MODEL_SCOPES.map((s) => s.key) : [entry.key];
+    for (const scope of scopes) {
+      const eff = d.effective[scope];
+      if (!eff) continue;
+      for (const kind of DEFAULT_KINDS) {
+        const e = eff[kind];
+        if (!e) continue;
+        const lead = entry.key === "all" ? "" : `${MODEL_SCOPES.find((s) => s.key === scope)?.label ?? scope}の`;
+        const tail = entry.key === "all" ? "がオフになります。" : "が使えなくなります。";
+        const hit = (key, idKey) => {
+          const m = typeof key === "string" ? defaultsModelOf(body, key) : null;
+          return !!m && typeof m[idKey] === "string" && off.includes(m[idKey]);
+        };
+        const textHit = hit(e.text, "model_id");
+        if (textHit) {
+          add(entry.key === "all" ? "all" : scope, kind, "text", `${lead}${MODEL_KIND_LABELS[kind]}の既定（${defaultsModelOf(body, e.text).label}）${tail}既定は自動で替わります。`);
+        }
+        if (!(textHit && e.image === e.text) && hit(e.image, "image_model_id")) {
+          add(entry.key === "all" ? "all" : scope, kind, `image:${e.image}`, `${lead}画像からの${MODEL_KIND_LABELS[kind]}の既定（${defaultsModelOf(body, e.image).label}）${tail}既定は自動で替わります。`);
+        }
+      }
+    }
+  }
+  return out;
+}
+
+/** 確かめの文（saveConfirmLines の結果。最後の行は「（次の生成から、すぐに効きます）」）の最後の行の前に、extra を足す。extra が空なら lines のまま */
+export function withDefaultOffLines(lines, extra) {
+  if (!extra?.length) return lines;
+  return [...lines.slice(0, -1), ...extra.map((t) => `・${t}`), lines[lines.length - 1]];
+}
+
+/**
+ * 既定の保存の失敗の文とコード（policy 3.7・3.1。D 設計 4.5 の「文とエラーコード」）。
+ *   競合（settings_conflict）：コードなし・conflict が真（画面は編集を閉じて読み直す）／RPC が無い（256 が未適用）：E-ADM-50
+ *   管理者でない・通信の失敗：今の explainError の文のまま（前置きを付けない：policy 3.7）／ほか（形の誤りを含む）：「保存エラーが発生しました。」E-ADM-99
+ *   サーバーの文は出さない。組 13 の errorInfo("保存", error) に代わる前の形（k14-x13 ではそちらに差し替えてよい）
+ * @returns {{ text: string, code: string | null, conflict: boolean }}
+ */
+export function defaultsSaveError(error) {
+  const blob = [error?.message, error?.details, error?.detail, error?.hint].map((x) => String(x ?? "")).join("\n");
+  if (/settings_conflict/.test(blob)) {
+    return { text: "保存エラー：ほかの管理者が先に変更しました。\n最新の値を読み込みました。", code: null, conflict: true };
+  }
+  if (isMissingFunctionError(error, "admin_set_default_models") || (isMissingSchemaError(error) && /admin_set_default_models|default_models/.test(blob))) {
+    return { text: "保存エラー：サーバーの更新が未適用です。", code: "E-ADM-50", conflict: false };
+  }
+  if (/admin_only/.test(blob) || String(error?.code ?? "") === "42501" || isNetworkFailure(error)) {
+    return { text: explainError(error), code: null, conflict: false };
+  }
+  return { text: "保存エラーが発生しました。", code: "E-ADM-99", conflict: false };
+}
+
 /**
  * 設定の変更の説明（履歴の 1 件の before_values → after_values）。before が null は作成時。
- * labelOf は model_id → 表示名。変わった項目が無ければ ["変更なし（同じ値で保存）"]
+ * labelOf は model_id → 表示名。labelOfKey は既定のモデルのキー → 表示名（省くとキーのまま）。変わった項目が無ければ ["変更なし（同じ値で保存）"]
  */
-export function settingsDiff(before, after, labelOf = (id) => id) {
+export function settingsDiff(before, after, labelOf = (id) => id, labelOfKey = (key) => key) {
   const created = before === null || before === undefined;
   const lines = [];
   for (const s of SETTING_LIMITS) {
@@ -2219,6 +2478,15 @@ export function settingsDiff(before, after, labelOf = (id) => id) {
       if (off.length) parts.push(`オフ ${off.length} 件（${listText(off.map(labelOf))}）`);
       lines.push(`${name}：${parts.join("・")}`);
     }
+  }
+  // 既定のモデル（組 14。種類ごとに 1 行）。履歴の古い行には default_models の列が無い（null と同じ）
+  const defaultOf = (row, kind) => (typeof row?.default_models?.[kind] === "string" && row.default_models[kind] !== "" ? row.default_models[kind] : null);
+  for (const kind of DEFAULT_KINDS) {
+    const b = created ? null : defaultOf(before, kind);
+    const a = defaultOf(after, kind);
+    if (b === a) continue;
+    const name = (key) => (key === null ? "初期値" : labelOfKey(key));
+    lines.push(`既定のモデル（${MODEL_KIND_LABELS[kind]}）：${created ? name(a) : `${name(b)} → ${name(a)}`}`);
   }
   if (created) return [lines.length ? `初期値を設定（${lines.join("・")}）` : "初期値を設定（すべて既定）"];
   return lines.length ? lines : ["変更なし（同じ値で保存）"];
